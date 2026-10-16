@@ -1872,14 +1872,16 @@ class _ShelfPageState extends State<ShelfPage> {
       reduceMotion: state.reduceMotion,
     );
     if (!mounted || !second) return;
+    // 源文件删除失败抛错（记录保留）；返回 false 表示文件已删但记录清理未完成。
+    bool recordOk;
     try {
-      await local.deleteBookFile(id);
+      recordOk = await local.deleteBookFile(id);
     } catch (_) {
       if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
       return;
     }
-    // 源文件已删：关联数据尽力清理，失败如实提示（可重启后重试）。
-    var cleanupOk = true;
+    // 源文件已删（或早已不在）：关联数据尽力清理，失败如实提示。
+    var cleanupOk = recordOk;
     try {
       await state.setShelfMembership(id, false);
     } catch (_) {

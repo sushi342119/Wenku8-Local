@@ -640,23 +640,30 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   });
 
   /// 删除源文件并移除书籍记录（书架/标签/阅读进度由调用方清理）。
-  /// 源文件删除失败时抛错且保留记录；源文件删除成功后，
-  /// 记录清理尽力完成（即使持久化失败，内存记录也会移除，
-  /// 下次删除时文件不存在会视为成功，可重试）。
-  Future<void> deleteBookFile(int id) => _synchronized(() async {
+  /// 源文件删除失败时抛错且保留记录；返回 false 表示源文件已删，
+  /// 但记录或缓存清理未完成（调用方应如实提示，可重试）。
+  Future<bool> deleteBookFile(int id) => _synchronized(() async {
     final book = bookFor(id);
-    if (book == null) return;
+    if (book == null) return true;
     if (book.sourceId.startsWith('saf:')) {
       await LocalPlatform.deleteLocalDocument(book.fileUri);
     } else {
       final file = File(book.sourceKey);
       if (await file.exists()) await file.delete();
     }
+    var ok = true;
     try {
       await _deleteBookData(book);
-    } catch (_) {}
+    } catch (_) {
+      ok = false;
+    }
     _books.remove(book);
-    await _saveIndex();
+    try {
+      await _saveIndex();
+    } catch (_) {
+      ok = false;
+    }
+    return ok;
   });
 
   /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
@@ -744,11 +751,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _books[index] = updated;
       await _saveIndex();
     } catch (e) {
-      // 索引保存失败：尝试把文件名改回去，并恢复内存记录。
+      // 索引保存失败：尝试把文件名改回去；无论回滚成败，
+      // 内存记录都恢复到与磁盘索引一致的状态，再把错误抛给调用方。
       if (renamed && updated.fileName != book.fileName) {
         try {
-          await _renameBack(book, updated);
-        } catch (_) {}
+          _books[index] = await _renameBack(book, updated);
+        } catch (_) {
+          _books[index] = book;
+        }
+      } else {
         _books[index] = book;
       }
       rethrow;
@@ -758,14 +769,25 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   });
 
   /// 把重命名后的文件改回原名（editBookFile 回滚用）。
-  Future<void> _renameBack(LocalBook original, LocalBook current) async {
+  /// 返回回滚后的实际文件信息（SAF 回滚可能产生新 URI）。
+  Future<LocalBook> _renameBack(LocalBook original, LocalBook current) async {
     if (current.sourceId.startsWith('saf:')) {
-      await LocalPlatform.renameLocalDocument(
+      final r = await LocalPlatform.renameLocalDocument(
         current.fileUri,
         original.fileName,
       );
+      return original.copyWith(
+        fileUri: r.fileUri,
+        fileName: r.fileName,
+        sourceKey: r.sourceKey,
+      );
     } else {
-      await File(current.sourceKey).rename(original.sourceKey);
+      final f = await File(current.sourceKey).rename(original.sourceKey);
+      return original.copyWith(
+        fileUri: Uri.file(f.path).toString(),
+        fileName: original.fileName,
+        sourceKey: f.path,
+      );
     }
   }
 
