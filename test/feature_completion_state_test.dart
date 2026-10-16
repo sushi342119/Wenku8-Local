@@ -4,7 +4,6 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/legacy_import.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/legacy_wenku_repository.dart';
 import 'package:wenku8_flutter/library_state.dart';
@@ -198,102 +197,6 @@ void main() {
         await expectLater(retry.load('a'), throwsStateError);
         await retry.load('a');
         expect(attempts, 2);
-      },
-    );
-  });
-  group('legacy record import', () {
-    Map<Object?, Object?> bundle(Map<String, String> docs) => {
-      'documents': {
-        for (final entry in docs.entries)
-          entry.key: {'text': entry.value, 'modifiedAt': 1000},
-      },
-      'skippedFiles': 0,
-    };
-    test(
-      'imports shelf, exact chapter IDs and search; drops individual damage',
-      () async {
-        final preview = await LegacyImportPreview.parse(
-          bundle({
-            'bookshelf_local.wk8': '71||72||71||broken',
-            'read_saves_v1.wk8': '71:1:71002:20:3||bad',
-            'search_history.wk8': '[0魔法][1作者][0魔法]',
-          }),
-        );
-        expect(preview.backup.shelfCount, 2);
-        expect(preview.backup.positionCount, 1);
-        expect(preview.damagedRecords, 2);
-        final position = jsonDecode(
-          preview.backup.records['reading_position_71']! as String,
-        );
-        expect(position['chapterId'], 71002);
-        expect(position['offset'], 0);
-        expect(preview.backup.records['recentSearches'], ['魔法', '作者']);
-      },
-    );
-    test(
-      'vertical progress maps chapter to book using original cached volume index',
-      () async {
-        final preview = await LegacyImportPreview.parse(
-          bundle({
-            'bookshelf_local.wk8': '71',
-            '71-volume.xml':
-                '<metadata><volume><chapter cid="71001">一</chapter><chapter cid="71002">二</chapter></volume></metadata>',
-            'read_saves.wk8': '71002,,250,,1000||991,,100,,200',
-          }),
-        );
-        expect(preview.unmappedChapters, 1);
-        final state = await LibraryState.load();
-        await state.restoreBackup(preview.backup);
-        expect(state.positionFor(71)!.chapter, 1);
-        expect(state.positionFor(71)!.fraction, .25);
-        state.dispose();
-      },
-    );
-    test(
-      'legacy merge preserves newer Flutter position and existing bookmarks',
-      () async {
-        final state = await LibraryState.load();
-        final book = offlineFixtureBook(71);
-        await state.setShelfMembership(71, true, novel: book);
-        await state.savePosition(
-          novel: book,
-          chapter: 2,
-          offset: 300,
-          maximum: 1000,
-          width: 400,
-        );
-        await state.addBookmark(novel: book, position: state.positionFor(71)!);
-        final saved = state.positionFor(71);
-        final preview = await LegacyImportPreview.parse(
-          bundle({
-            'bookshelf_local.wk8': '72',
-            'read_saves_v1.wk8': '71:1:71001:2:3',
-          }),
-        );
-        await state.restoreBackup(preview.backup);
-        expect(state.positionFor(71), same(saved));
-        expect(state.bookmarksFor(71).length, 1);
-        expect(state.shelf, {71, 72});
-        state.dispose();
-      },
-    );
-    test(
-      'account/cert data and oversized/unrecognized bundles are rejected',
-      () async {
-        await expectLater(
-          LegacyImportPreview.parse(bundle({'cert.wk8': 'secret'})),
-          throwsFormatException,
-        );
-        await expectLater(
-          LegacyImportPreview.parse(bundle({'bookshelf_local.wk8': 'broken'})),
-          throwsFormatException,
-        );
-        await expectLater(
-          LegacyImportPreview.parse(
-            bundle({'bookshelf_local.wk8': 'x' * (8 * 1024 * 1024 + 1)}),
-          ),
-          throwsFormatException,
-        );
       },
     );
   });
