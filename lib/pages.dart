@@ -718,13 +718,15 @@ class _DiscoverPageState extends State<DiscoverPage> {
       );
     }
     if (_selectedTagId != null) {
+      // 分页加载中：已加载部分暂无匹配不代表最终结果。
+      final stillLoading = widget.feed?.loading == true;
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 72),
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text('该标签下暂无书籍'),
+              Text(stillLoading ? '已加载书籍中暂无匹配，正在继续加载…' : '该标签下暂无书籍'),
               const SizedBox(height: 12),
               CupertinoButton(
                 onPressed: _showAllTags,
