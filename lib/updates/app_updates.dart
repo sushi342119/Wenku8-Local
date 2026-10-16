@@ -13,13 +13,15 @@ const updateRepository = String.fromEnvironment(
   defaultValue: 'sushi342119/Wenku8-Local',
 );
 const currentAppVersion = '1.0.0';
-const currentAppBuild = 21;
+const currentAppBuild = 22;
 const currentReleaseNotes = '''
-1. 书架标签缩小，一行可显示更多标签
-2. 本地书库页仅保留文件夹与扫描选项
-3. 设置页移除“清理插图缓存”
-4. “GitHub 项目与版本”指向本项目仓库
-5. 应用内检查更新已接入本项目 Releases
+1. 书架书籍菜单新增“编辑书籍信息”（改书名会重命名源文件）
+2. 书架书籍菜单新增“删除文件”（二次确认，彻底删除源文件）
+3. 书架标签缩小，一行可显示更多标签
+4. 本地书库页仅保留文件夹与扫描选项
+5. 设置页移除“清理插图缓存”
+6. “GitHub 项目与版本”指向本项目仓库
+7. 应用内检查更新已接入本项目 Releases
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

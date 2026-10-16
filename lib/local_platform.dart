@@ -89,6 +89,29 @@ abstract final class LocalPlatform {
   /// 删除某 PDF 的全部渲染缓存。
   static Future<void> clearPdfCache(String docUri) =>
       channel.invokeMethod<bool>('clearPdfCache', {'docUri': docUri});
+
+  /// SAF：删除文档。文件已不存在视为成功；provider 拒绝时抛错。
+  static Future<void> deleteLocalDocument(String documentUri) async {
+    final res = await channel.invokeMapMethod<String, dynamic>(
+      'deleteLocalDocument',
+      {'docUri': documentUri},
+    );
+    if (res?['deleted'] != true) throw StateError('删除文件失败');
+  }
+
+  /// SAF：重命名文档。返回新 URI 与 provider 确认的实际文件名。
+  static Future<({String fileUri, String fileName, String sourceKey})>
+  renameLocalDocument(String documentUri, String newFileName) async {
+    final res = await channel.invokeMapMethod<String, dynamic>(
+      'renameLocalDocument',
+      {'docUri': documentUri, 'newFileName': newFileName},
+    );
+    final fileUri = res?['fileUri'] as String?;
+    final fileName = res?['fileName'] as String?;
+    if (fileUri == null || fileName == null) throw StateError('重命名文件失败');
+    return (fileUri: fileUri, fileName: fileName, sourceKey: fileUri);
+  }
+
   static Future<void> shareText(String text) =>
       channel.invokeMethod<void>('shareText', {'text': text});
   static final Set<Object> _awakeOwners = {};

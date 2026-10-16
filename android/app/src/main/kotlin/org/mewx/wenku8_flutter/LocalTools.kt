@@ -8,11 +8,13 @@ import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.view.WindowManager
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
@@ -97,7 +99,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
                 "pickLocalFolder", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
-                "clearPdfCache"
+                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument"
             )
         ) return false
         if (closed) {
@@ -119,12 +121,18 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
                 return true
             }
-            "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache" -> {
+            "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
+            "deleteLocalDocument", "renameLocalDocument" -> {
                 io.execute {
                     try {
                         val response: Any = when (call.method) {
                             "scanLocalFolder" -> scanLocalFolder(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "readLocalText" -> readLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "deleteLocalDocument" -> deleteLocalDocument(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "renameLocalDocument" -> renameLocalDocument(
+                                Uri.parse(call.argument<String>("docUri") ?: ""),
+                                call.argument<String>("newFileName") ?: "",
+                            )
                             "decodeLocalText" -> decodeLocalText(
                                 call.argument<ByteArray>("bytes"),
                                 call.argument<String>("encoding") ?: "auto"
@@ -429,6 +437,36 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         if (sub.isDirectory) sub.deleteRecursively()
         if (legacy.isDirectory && legacy != sub) legacy.deleteRecursively()
         return true
+    }
+
+    /** 删除 SAF 文档。文件已不存在视为删除成功；返回 false 表示 provider 拒绝。 */
+    private fun deleteLocalDocument(doc: Uri): Map<String, Any> {
+        return try {
+            val deleted = DocumentsContract.deleteDocument(activity.contentResolver, doc)
+            mapOf("deleted" to deleted)
+        } catch (e: FileNotFoundException) {
+            mapOf("deleted" to true, "notFound" to true)
+        }
+    }
+
+    /** 重命名 SAF 文档。成功返回新 URI 与 provider 确认的实际文件名。 */
+    private fun renameLocalDocument(doc: Uri, newFileName: String): Map<String, Any?> {
+        require(newFileName.isNotBlank()) { "文件名不能为空" }
+        val resolver = activity.contentResolver
+        val newUri = DocumentsContract.renameDocument(resolver, doc, newFileName)
+            ?: throw IllegalStateException("文档不支持重命名")
+        var displayName: String? = null
+        try {
+            resolver.query(newUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) displayName = cursor.getString(0)
+            }
+        } catch (_: Exception) {
+        }
+        return mapOf(
+            "fileUri" to newUri.toString(),
+            "fileName" to (displayName?.takeIf { it.isNotBlank() } ?: newFileName),
+            "sourceKey" to newUri.toString(),
+        )
     }
 
     /** Only documented record/index files from the explicitly selected tree.

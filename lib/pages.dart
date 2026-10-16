@@ -1689,15 +1689,52 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Future<void> _bookMenu(BuildContext context, int id, {Novel? book}) async {
-    final remove = await showGlassMenu<bool>(
+    final repository = widget.repository;
+    final local = repository is CompositeNovelRepository ? repository.local : null;
+    final localBook = local?.bookFor(id);
+    final action = await showGlassMenu<_ShelfBookAction>(
       context: context,
       reduceMotion: state.reduceMotion,
-      builder: (menuContext) => GlassMenuItem(
-        label: '移出书架',
-        onPressed: () => Navigator.of(menuContext).pop(true),
+      builder: (menuContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GlassMenuItem(
+            label: '移出书架',
+            onPressed: () =>
+                Navigator.of(menuContext).pop(_ShelfBookAction.removeFromShelf),
+          ),
+          if (localBook != null)
+            GlassMenuItem(
+              label: '编辑书籍信息',
+              onPressed: () =>
+                  Navigator.of(menuContext).pop(_ShelfBookAction.editInfo),
+            ),
+          if (localBook != null)
+            GlassMenuItem(
+              label: '删除文件',
+              onPressed: () =>
+                  Navigator.of(menuContext).pop(_ShelfBookAction.deleteFile),
+            ),
+        ],
       ),
     );
-    if (!mounted || remove != true || !state.contains(id)) return;
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _ShelfBookAction.removeFromShelf:
+        await _removeFromShelf(context, id, book: book);
+      case _ShelfBookAction.editInfo:
+        if (local != null) await _editShelfBookInfo(context, local, id);
+      case _ShelfBookAction.deleteFile:
+        if (local != null) await _deleteShelfBookFile(context, local, id);
+    }
+  }
+
+  Future<void> _removeFromShelf(
+    BuildContext context,
+    int id, {
+    Novel? book,
+  }) async {
+    if (!state.contains(id)) return;
     final addedAt = state.addedAt(id);
     try {
       await state.setShelfMembership(id, false);
@@ -1723,7 +1760,148 @@ class _ShelfPageState extends State<ShelfPage> {
       },
     );
   }
+
+  /// 编辑本地书籍的书名/作者；书名变化时重命名源文件（保留原扩展名）。
+  Future<void> _editShelfBookInfo(
+    BuildContext context,
+    LocalLibraryStore local,
+    int id,
+  ) async {
+    final book = local.bookFor(id);
+    if (book == null || !context.mounted) return;
+    final titleController = TextEditingController(text: book.displayTitle);
+    final authorController = TextEditingController(text: book.displayAuthor);
+    final result = await showDialog<(String, String)?>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          final preview = LocalLibraryStore.safeFileNameForTitle(
+            book.fileName,
+            titleController.text.trim(),
+          );
+          final willRename =
+              preview != null && preview != book.fileName;
+          return AlertDialog(
+            title: const Text('编辑书籍信息'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(labelText: '书名'),
+                  onChanged: (_) => setDialogState(() {}),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: authorController,
+                  decoration: const InputDecoration(labelText: '作者'),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  willRename
+                      ? '书名修改后，源文件将重命名为：\n$preview'
+                      : '修改书名会同步重命名源文件（保留原扩展名）。',
+                  style: Theme.of(dialogContext).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('取消'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(
+                  dialogContext,
+                  (titleController.text, authorController.text),
+                ),
+                child: const Text('保存'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+    titleController.dispose();
+    authorController.dispose();
+    if (result == null || !mounted) return;
+    LocalBook updated;
+    try {
+      updated = await local.editBookFile(
+        id,
+        title: result.$1,
+        author: result.$2,
+      );
+    } catch (e) {
+      if (context.mounted) {
+        showNovelFeedback(context, '保存失败：${_friendlyEditError(e)}');
+      }
+      return;
+    }
+    // 同步书架快照里的书名/作者。
+    if (state.shelf.contains(id)) {
+      try {
+        await state.rememberNovel(local.toNovel(updated));
+      } catch (_) {}
+    }
+    if (mounted) showNovelFeedback(context, '已保存');
+  }
+
+  /// 二次确认后彻底删除本地书籍的源文件，并清理书架/标签/阅读进度。
+  Future<void> _deleteShelfBookFile(
+    BuildContext context,
+    LocalLibraryStore local,
+    int id,
+  ) async {
+    final book = local.bookFor(id);
+    if (book == null || !context.mounted) return;
+    final title = book.displayTitle;
+    final first = await confirmNovelAction(
+      context,
+      title: '彻底删除文件？',
+      message: '「$title」将从手机存储中彻底删除，书架、标签和阅读进度一并清除。此操作无法撤销。',
+      confirmLabel: '继续',
+      reduceMotion: state.reduceMotion,
+    );
+    if (!mounted || !first || !context.mounted) return;
+    final second = await confirmNovelAction(
+      context,
+      title: '再次确认删除',
+      message: '这是最后一次确认。文件删除后无法恢复，确定要删除「$title」吗？',
+      confirmLabel: '确认删除',
+      reduceMotion: state.reduceMotion,
+    );
+    if (!mounted || !second) return;
+    try {
+      await local.deleteBookFile(id);
+    } catch (_) {
+      if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
+      return;
+    }
+    try {
+      await state.setShelfMembership(id, false);
+    } catch (_) {}
+    try {
+      await TagStore.shared.setTagsForBook(id, const {});
+    } catch (_) {}
+    try {
+      await state.clearBookProgress(id);
+    } catch (_) {}
+    if (!mounted) return;
+    showNovelFeedback(context, '已删除「$title」');
+  }
+
+  static String _friendlyEditError(Object e) {
+    final message = e.toString();
+    if (message.contains('书名不能为空')) return '书名不能为空';
+    if (message.contains('无法用作文件名')) return '书名无法用作文件名';
+    if (message.contains('同名文件已存在')) return '同名文件已存在';
+    if (message.contains('书籍不存在')) return '书籍已不存在';
+    return '请重试';
+  }
 }
+
+enum _ShelfBookAction { removeFromShelf, editInfo, deleteFile }
 
 class SettingsPage extends StatelessWidget {
   const SettingsPage({

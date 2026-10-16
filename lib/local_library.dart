@@ -118,13 +118,22 @@ class LocalBook {
 
   /// 注意：customTitle/customAuthor 传 null 表示清空（恢复文件名解析）；
   /// wordCount 传 null 则表示保留原值（用于字数补算）。
-  LocalBook copyWith({String? customTitle, String? customAuthor, int? wordCount}) =>
+  LocalBook copyWith({
+    String? title,
+    String? author,
+    String? fileUri,
+    String? fileName,
+    String? sourceKey,
+    String? customTitle,
+    String? customAuthor,
+    int? wordCount,
+  }) =>
       LocalBook(
         id: id,
-        title: title,
-        author: author,
-        fileUri: fileUri,
-        fileName: fileName,
+        title: title ?? this.title,
+        author: author ?? this.author,
+        fileUri: fileUri ?? this.fileUri,
+        fileName: fileName ?? this.fileName,
         kind: kind,
         size: size,
         modified: modified,
@@ -134,7 +143,7 @@ class LocalBook {
         customTitle: customTitle,
         customAuthor: customAuthor,
         sourceId: sourceId,
-        sourceKey: sourceKey,
+        sourceKey: sourceKey ?? this.sourceKey,
       );
 
   Map<String, Object?> toJson() => {
@@ -630,18 +639,102 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     await _saveIndex();
   });
 
-  /// 更新用户覆盖的书名/作者（空字符串表示恢复文件名解析结果）。
-  Future<void> updateBookInfo(int id, String title, String author) => _synchronized(() async {
+  /// 删除源文件并移除书籍记录（书架/标签/阅读进度由调用方清理）。
+  /// 源文件已不存在视为删除成功；删除失败时抛错且保留记录。
+  Future<void> deleteBookFile(int id) => _synchronized(() async {
+    final book = bookFor(id);
+    if (book == null) return;
+    if (book.sourceId.startsWith('saf:')) {
+      await LocalPlatform.deleteLocalDocument(book.fileUri);
+    } else {
+      final file = File(book.sourceKey);
+      if (await file.exists()) await file.delete();
+    }
+    await _deleteBookData(book);
+    _books.remove(book);
+    await _saveIndex();
+  });
+
+  /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
+  /// 返回 null 表示书名无法派生出合法文件名。
+  static String? safeFileNameForTitle(String fileName, String title) {
+    final dot = fileName.lastIndexOf('.');
+    final ext = dot > 0 ? fileName.substring(dot) : '';
+    var stem = title.replaceAll(RegExp(r'[<>:"/\\|?*\x00-\x1f]'), '_').trim();
+    stem = stem.replaceAll(RegExp(r'[. ]+$'), '');
+    if (stem.isEmpty || stem == '.' || stem == '..') return null;
+    if (RegExp(
+      r'^(con|prn|aux|nul|com[1-9]|lpt[1-9])$',
+      caseSensitive: false,
+    ).hasMatch(stem)) {
+      stem = '_$stem';
+    }
+    var name = '$stem$ext';
+    if (name.length > 200) {
+      final keep = 200 - ext.length;
+      if (keep <= 0) return null;
+      name = '${stem.substring(0, keep)}$ext';
+    }
+    return name;
+  }
+
+  /// 编辑书名/作者；书名变化时重命名源文件（保留原扩展名），book.id 不变。
+  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录。
+  Future<LocalBook> editBookFile(
+    int id, {
+    required String title,
+    required String author,
+  }) => _synchronized(() async {
     final index = _books.indexWhere((b) => b.id == id);
-    if (index < 0) return;
+    if (index < 0) throw StateError('书籍不存在');
+    final book = _books[index];
     final cleanTitle = title.trim();
     final cleanAuthor = author.trim();
-    _books[index] = _books[index].copyWith(
-      customTitle: cleanTitle.isEmpty ? null : cleanTitle,
+    if (cleanTitle.isEmpty) throw ArgumentError('书名不能为空');
+
+    var updated = book;
+    final targetName = safeFileNameForTitle(book.fileName, cleanTitle);
+    if (targetName == null) throw ArgumentError('书名无法用作文件名');
+    if (targetName != book.fileName) {
+      if (book.sourceId.startsWith('saf:')) {
+        final r = await LocalPlatform.renameLocalDocument(
+          book.fileUri,
+          targetName,
+        );
+        updated = updated.copyWith(
+          title: cleanTitle,
+          fileUri: r.fileUri,
+          fileName: r.fileName,
+          sourceKey: r.sourceKey,
+        );
+      } else {
+        final dir = book.sourceKey.contains('/')
+            ? book.sourceKey.substring(0, book.sourceKey.lastIndexOf('/'))
+            : '';
+        if (dir.isEmpty) throw StateError('文件路径无效');
+        final targetPath = '$dir/$targetName';
+        if (targetPath != book.sourceKey) {
+          if (await File(targetPath).exists()) {
+            throw StateError('同名文件已存在');
+          }
+          final renamed = await File(book.sourceKey).rename(targetPath);
+          updated = updated.copyWith(
+            title: cleanTitle,
+            fileUri: 'file://${renamed.path}',
+            fileName: targetName,
+            sourceKey: renamed.path,
+          );
+        }
+      }
+    }
+    updated = updated.copyWith(
+      customTitle: cleanTitle,
       customAuthor: cleanAuthor.isEmpty ? null : cleanAuthor,
     );
+    _books[index] = updated;
     await _saveIndex();
     notifyListeners();
+    return updated;
   });
 
   Future<void> _deleteBookData(LocalBook book) async {
