@@ -922,7 +922,7 @@ class LibraryState extends ChangeNotifier {
               'sourceHanSerif'
           ? appFontSourceHanSerif.id
           : appFontSystem.id;
-      unawaited(_prefs.setString('appFontId', _appFontId));
+      unawaited(_persistMigratedFontId());
     }
     _importedFonts.clear();
     final rawList = _prefs.getString('importedFonts');
@@ -951,6 +951,13 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
+  /// 后台落盘迁移后的字体 ID；异常内部消化，不污染未处理错误通道。
+  Future<void> _persistMigratedFontId() async {
+    try {
+      await _prefs.setString('appFontId', _appFontId);
+    } catch (_) {}
+  }
+
   Future<void> _persistFontState() async {
     await _prefs.setString('appFontId', _appFontId);
     await _prefs.setString(
@@ -970,12 +977,18 @@ class LibraryState extends ChangeNotifier {
     if (_loadedFontFamilies.contains(family)) return Future.value(true);
     final inflight = _fontLoadInflight[family];
     if (inflight != null) return inflight;
-    final task = _doLoadImportedFont(family, path).then((ok) {
-      _fontLoadInflight.remove(family);
+    late final Future<bool> task;
+    task = _doLoadImportedFont(family, path).then((ok) {
+      // 仅当仍是当前任务时才清理映射（防御性，避免误删更新的任务）。
+      if (identical(_fontLoadInflight[family], task)) {
+        _fontLoadInflight.remove(family);
+      }
       if (ok) _loadedFontFamilies.add(family);
       return ok;
     }, onError: (Object _) {
-      _fontLoadInflight.remove(family);
+      if (identical(_fontLoadInflight[family], task)) {
+        _fontLoadInflight.remove(family);
+      }
       return false;
     });
     _fontLoadInflight[family] = task;
