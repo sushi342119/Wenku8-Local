@@ -752,8 +752,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       _books[index] = updated;
       await _saveIndex();
     } catch (e) {
-      // 索引保存失败：尝试把文件名改回去。回滚成功后尽力持久化回滚结果；
-      // 任何一步失败都把内存恢复为原记录（磁盘索引未被修改过，与原记录一致）。
+      // 索引保存失败：尝试把文件名改回去。
+      // - 回滚失败 → 内存恢复为原记录（磁盘索引未被修改过，与原记录一致）；
+      // - 回滚成功 → 内存保留回滚后实际返回的记录，并尽力持久化；
+      //   若持久化仍失败，内存为回滚后的真实状态，磁盘索引保持修改前的原记录。
       if (renamed && updated.fileName != book.fileName) {
         try {
           final rolledBack = await _renameBack(book, updated);
