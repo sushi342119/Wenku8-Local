@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- audio_service resolves this custom icon by its string name, not by R.drawable.
+     Preserve this resource in optimized release builds without retaining all drawables. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_listening_notification" />

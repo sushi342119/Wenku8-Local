@@ -1,0 +1,117 @@
+name: Build Android APKs
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: stable
+          cache: true
+      - name: Read version and notes
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          args=()
+          if [[ -n "$RELEASE_TAG" ]]; then args+=(--tag "$RELEASE_TAG"); fi
+          python3 tools/prepare_release.py "${args[@]}" --github-output "$GITHUB_OUTPUT" --notes build/release-notes.md
+      - run: python3 tools/check_public_source.py
+      - name: Configure signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          TAG_BUILD: ${{ github.ref_type == 'tag' }}
+        run: |
+          python3 - <<'PY'
+          import base64, os
+          from pathlib import Path
+          keys = ['KEYSTORE_BASE64', 'KEY_ALIAS', 'KEY_PASSWORD', 'STORE_PASSWORD']
+          supplied = [bool(os.environ.get(key)) for key in keys]
+          if any(supplied) and not all(supplied):
+              raise SystemExit('Configure all four ANDROID signing secrets together.')
+          if not all(supplied):
+              if os.environ['TAG_BUILD'] == 'true':
+                  raise SystemExit('Tag releases require a persistent signing key. See docs/RELEASING.md.')
+              print('Manual preview: temporary runner debug signature, not an upgrade release.')
+          else:
+              store = Path(os.environ['RUNNER_TEMP']) / 'wenku8-release.jks'
+              store.write_bytes(base64.b64decode(os.environ['KEYSTORE_BASE64'], validate=True))
+              store.chmod(0o600)
+              def escape(text):
+                  return text.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r').replace('=', '\\=').replace(':', '\\:').replace(' ', '\\ ')
+              values = {'storeFile': str(store), 'storePassword': os.environ['STORE_PASSWORD'],
+                        'keyAlias': os.environ['KEY_ALIAS'], 'keyPassword': os.environ['KEY_PASSWORD']}
+              Path('android/key.properties').write_text(''.join(f'{key}={escape(value)}\n' for key, value in values.items()))
+          PY
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Build all supported Android architectures
+        env:
+          UPDATE_REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ steps.release.outputs.version }}
+        # Separate one-ABI builds keep the same versionCode on every device.
+        # Flutter split-per-abi adds ABI offsets that break build-only updates.
+        run: |
+          mkdir -p build/release-assets
+          for entry in 'android-arm armeabi-v7a' 'android-arm64 arm64-v8a' 'android-x64 x86_64'; do
+            read -r target abi <<< "$entry"
+            flutter build apk --release --target-platform "$target" --dart-define="UPDATE_REPOSITORY=$UPDATE_REPOSITORY"
+            python3 tools/verify_apk_runtime.py build/app/outputs/flutter-apk/app-release.apk --abi "$abi"
+            cp build/app/outputs/flutter-apk/app-release.apk "build/release-assets/wenku8-$VERSION-$abi.apk"
+          done
+      - name: Native tests
+        run: cd android && ./gradlew :app:testReleaseUnitTest
+      - name: Collect APKs and corresponding project source
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          python3 tools/export_public_source.py "$RUNNER_TEMP/wenku8-source"
+          (cd "$RUNNER_TEMP/wenku8-source" && zip -q -r "$GITHUB_WORKSPACE/build/release-assets/wenku8-$VERSION-source.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wenku8-${{ steps.release.outputs.version }}-android
+          path: |
+            build/release-assets/*
+            build/release-notes.md
+          if-no-files-found: error
+          retention-days: 14
+      - name: Prepare draft release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" --json isDraft > build/existing-release.json 2>/dev/null; then
+            python3 -c 'import json; assert json.load(open("build/existing-release.json"))["isDraft"], "Published assets must not be replaced; publish a new version instead."'
+            gh release upload "$RELEASE_TAG" build/release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" build/release-assets/* --verify-tag --draft --title "轻小说文库 $RELEASE_TAG" --notes-file build/release-notes.md
+          fi
+      - name: Remove runner signing material
+        if: always()
+        run: rm -f android/key.properties "$RUNNER_TEMP/wenku8-release.jks"

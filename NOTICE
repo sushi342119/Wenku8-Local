@@ -1,0 +1,36 @@
+Wenku8 Flutter
+
+Based on MewX/light-novel-library_Wenku8_Android and its contributors.
+https://github.com/MewX/light-novel-library_Wenku8_Android
+
+The upstream project's GNU GPL version 2 or (at your option) a later version
+notice is retained in LICENSE. Original notices remain applicable. This Flutter
+combined distribution uses GNU GPL version 3; see assets/licenses/GPL-3.0.txt.
+
+Flutter branch changes, September-October 2026:
+New Flutter presentation, reader, local library/cache, Android bridges and
+listening implementation. Modified on 2026-10-15 to retire vendor-specific
+speech integration, add configurable low-performance rendering, remove runtime
+diagnostic entries and keep chapter-level listening progress/media metadata.
+
+The original Android app's embedded JNI API runtime (libcpp.so) is retained
+without modification to preserve network functionality. The project maintainer
+confirmed on 2026-10-15 that unchanged redistribution is permitted. Its source
+is not present here; it is a separately authorized third-party binary, not
+covered by this project's source license. Do not modify it or infer additional
+rights from the GPL notice for the application.
+
+Source Han Serif CN Regular and Bold: Copyright Adobe, SIL Open Font License
+1.1. Official unmodified font files and notice: assets/fonts/.
+
+Edge read-aloud v2 protocol adaptation: rany2/edge-tts,
+Copyright (c) 2025- rany <rany@riseup.net>, LGPL version 3.
+Ported to Dart and modified 2026-10-15 in lib/listening/edge_protocol.dart.
+Upstream commit: bd44c1d1aaebdc1db7f47456ee12431b42ec7cac.
+Full upstream notice: assets/licenses/edge-tts.txt.
+
+See docs/THIRD_PARTY.md for component provenance and license boundaries.
+
+Liquid Glass Easy 5.0.0: Copyright (c) 2025 Ahmed Gamil, MIT License.
+Source and license: third_party/liquid_glass_easy/. Modified 2026-10-15 to
+bound unnecessary single-lens shader output; see its PATCHES.md.

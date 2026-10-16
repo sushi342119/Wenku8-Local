@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <exclude domain="file" path="wenku8-offline-v1" />
+    <exclude domain="file" path="wenku8-illustrations-v1" />
+    <exclude domain="sharedpref" path="wenku_account_session.xml" />
+</full-backup-content>
