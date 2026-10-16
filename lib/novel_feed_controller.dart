@@ -11,6 +11,7 @@ class NovelFeedController extends ChangeNotifier {
     this.repository, {
     this.search = false,
     this.initialItems = 0,
+    this.loadAll = false,
   }) : assert(initialItems >= 0);
   final NovelRepository repository;
   final bool search;
@@ -18,6 +19,9 @@ class NovelFeedController extends ChangeNotifier {
   /// Discovery can warm a useful list below the ten featured files. Service
   /// page sizes/cursors stay unchanged; search remains one page at a time.
   final int initialItems;
+
+  /// 为本地书库首页加载全部书籍，忽略 initialItems 和页数限制。
+  final bool loadAll;
   List<Novel> _items = const [];
   NovelSort sort = NovelSort.lastUpdate;
   String query = '';
@@ -170,9 +174,10 @@ class NovelFeedController extends ChangeNotifier {
         refreshing = false;
         // At most the first three ordinary API pages, sequentially. Publish
         // page one immediately, stop on duplicates/errors/end or a new sort.
+        // loadAll 为本地书库首页加载全部，忽略页数和数量限制。
         if (search ||
-            _items.length >= initialItems ||
-            page >= 3 ||
+            (!loadAll && _items.length >= initialItems) ||
+            (!loadAll && page >= 3) ||
             !hasMore ||
             result.items.isEmpty ||
             _items.length <= _resultStartIndex) {

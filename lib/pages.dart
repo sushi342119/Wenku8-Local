@@ -137,7 +137,8 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     }
     _catalog = NovelFeedController(
       homeRepository,
-      initialItems: 60,
+      // 本地书库首页加载全部书籍，用于 3D 轮播全量循环和随机抽选。
+      loadAll: true,
     );
     _searchFeed = NovelFeedController(homeRepository, search: true);
     _searchText.addListener(_searchEdited);
