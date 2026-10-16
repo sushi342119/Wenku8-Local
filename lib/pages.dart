@@ -11,6 +11,7 @@ import 'app_ui.dart';
 import 'app_typography.dart';
 import 'app_interactions.dart';
 import 'archive_carousel.dart';
+import 'archive_random_pick_card.dart';
 import 'backup_page.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
@@ -711,6 +712,21 @@ class DiscoverPage extends StatelessWidget {
                             state,
                             repository,
                             coverHeroTag: tag,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        ArchiveRandomPickCard<Novel>(
+                          books: books
+                              .take(featuredCount)
+                              .toList(growable: false),
+                          titleOf: (book) => book.title,
+                          authorOf: (book) => book.author,
+                          identityOf: (book) => book.id,
+                          onOpenDetail: (book) => openDetail(
+                            context,
+                            book,
+                            state,
+                            repository,
                           ),
                         ),
                         if (books.length > featuredCount ||
