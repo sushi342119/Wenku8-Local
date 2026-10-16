@@ -40,6 +40,66 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
   bool _hapticGesture = false;
   int? _lastDetent;
   int _lastPulse = -1000;
+  static const int _windowRadius = 20;
+
+  /// 左闭右开：[firstSlot, endSlot)。
+  int _firstSlot = 0;
+  int _endSlot = 0;
+
+  bool _windowSyncScheduled = false;
+
+  ({int firstSlot, int endSlot}) _windowForPose() {
+    final total = _pose.poolCount;
+    if (total <= 0) {
+      return (firstSlot: 0, endSlot: 0);
+    }
+
+    const windowSize = _windowRadius * 2 + 1;
+    final length = total < windowSize ? total : windowSize;
+    final maxFirst = total - length;
+
+    final first = (_pose.focus.round() - _windowRadius)
+        .clamp(0, maxFirst)
+        .toInt();
+
+    return (
+      firstSlot: first,
+      endSlot: first + length,
+    );
+  }
+
+  void _syncWindow() {
+    if (!mounted) return;
+
+    final window = _windowForPose();
+    if (window.firstSlot == _firstSlot &&
+        window.endSlot == _endSlot) {
+      return;
+    }
+
+    // ScrollPosition 可能在 layout 中校正滚动位置并触发 listener。
+    // 此时不能直接 setState；合并为帧结束后的单次更新。
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      if (_windowSyncScheduled) return;
+
+      _windowSyncScheduled = true;
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        _windowSyncScheduled = false;
+        if (!mounted) return;
+
+        // 使用回调执行时的最新 pose，而不是调度时的快照。
+        _syncWindow();
+      });
+      return;
+    }
+
+    setState(() {
+      _firstSlot = window.firstSlot;
+      _endSlot = window.endSlot;
+    });
+  }
+
   late final _entrance = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 720),
@@ -92,6 +152,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
   void _scrolled() {
     if (_scroll?.hasClients != true) return;
     _pose.move(_scroll!.offset / _pose.pitch);
+    _syncWindow();
     final lane = _pose.logicalFocus.round();
     if (_active.value != lane) {
       _active.value = lane;
@@ -185,6 +246,11 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
         final cover = _WavePose.coverFor(width);
         final height = ArchiveShelfGeometry.bodyHeight(cover);
         _pose.configure(width, pitch);
+        // 当前已处于 build，不需要 setState。
+        // 同时处理首次构建、数据数量变化和 viewport 尺寸变化。
+        final window = _windowForPose();
+        _firstSlot = window.firstSlot;
+        _endSlot = window.endSlot;
         _scroll ??= ScrollController(
           initialScrollOffset: _pose.logicalFocus * pitch,
           // This state owns the unbounded lane. Nested discovery PageStorage
@@ -226,19 +292,23 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                   viewportBuilder: (context, offset) => _ShelfRow(
                     offset: offset,
                     pose: _pose,
+                    firstSlot: _firstSlot,
                     spine: spine,
                     cover: cover,
                     height: height,
                     dark: dark,
                     children: [
-                      for (var i = 0; i < _pose.poolCount; i++)
-                        _volume(
-                          context,
-                          widget.books[_pose.bookIndex(i)],
-                          i,
-                          spine,
-                          cover,
-                          height,
+                      for (var slot = _firstSlot; slot < _endSlot; slot++)
+                        KeyedSubtree(
+                          key: ValueKey<int>(slot),
+                          child: _volume(
+                            context,
+                            widget.books[_pose.bookIndex(slot)],
+                            slot,
+                            spine,
+                            cover,
+                            height,
+                          ),
                         ),
                     ],
                   ),
@@ -721,7 +791,7 @@ class _WavePose extends ChangeNotifier {
   int count;
   double logicalFocus;
   double viewport = 340, pitch = pitchFor(340);
-  int edgeSlots = 15;
+  int edgeSlots = 20;
   bool holdLayoutFocus = false;
   double entrance = 1;
   double get focus => count < 2 ? 0 : edgeSlots + logicalFocus % count;
@@ -745,13 +815,17 @@ class _WavePose extends ChangeNotifier {
     viewport = width;
     pitch = nextPitch;
     final cover = coverFor(width);
-    edgeSlots =
+    final geometryEdgeSlots =
         ((width / 2 +
                     footprint(spineFor(width), cover) +
                     pullDistance(cover) * depthX) /
                 pitch)
             .ceil() +
         2;
+
+    // 保留原有几何覆盖需求，同时确保窗口在循环边界处
+    // 也能取得焦点前后各 20 个槽位。
+    edgeSlots = math.max(20, geometryEdgeSlots);
   }
 
   void move(double next, {bool notify = true}) {
@@ -804,24 +878,49 @@ class _ShelfRow extends MultiChildRenderObjectWidget {
   const _ShelfRow({
     required this.offset,
     required this.pose,
+    required this.firstSlot,
     required this.spine,
     required this.cover,
     required this.height,
     required this.dark,
     required super.children,
   });
+
   final ViewportOffset offset;
   final _WavePose pose;
-  final double spine, cover, height;
+  final int firstSlot;
+  final double spine;
+  final double cover;
+  final double height;
   final bool dark;
+
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      ArchiveShelfSceneRender._(offset, pose, spine, cover, height, dark);
+      ArchiveShelfSceneRender._(
+        offset,
+        pose,
+        firstSlot,
+        spine,
+        cover,
+        height,
+        dark,
+      );
+
   @override
   void updateRenderObject(
     BuildContext context,
     ArchiveShelfSceneRender renderObject,
-  ) => renderObject._update(offset, pose, spine, cover, height, dark);
+  ) {
+    renderObject._update(
+      offset,
+      pose,
+      firstSlot,
+      spine,
+      cover,
+      height,
+      dark,
+    );
+  }
 }
 
 class _ShelfParentData extends ContainerBoxParentData<RenderBox> {}
@@ -834,15 +933,21 @@ class ArchiveShelfSceneRender extends RenderBox
   ArchiveShelfSceneRender._(
     this._scrollOffset,
     this._pose,
+    this._firstSlot,
     this._spine,
     this._cover,
     this._height,
     this._dark,
   );
+
   ViewportOffset _scrollOffset;
   _WavePose _pose;
+  int _firstSlot;
+
   double _spine, _cover, _height;
   bool _dark;
+
+  int _slotForChild(int childIndex) => _firstSlot + childIndex;
   final _boxes = <RenderBox>[];
   final _x = <double>[];
   final _clipLayer = LayerHandle<ClipRectLayer>();
@@ -850,10 +955,17 @@ class ArchiveShelfSceneRender extends RenderBox
   double get debugFocus => _pose.logicalFocus;
   int get debugCentreSlot => _pose.focus.round();
   int get debugPoolCount => _pose.poolCount;
+
+  // 实际挂载数量和窗口边界，便于测试虚拟化。
+  int get debugMountedCount => childCount;
+  int get debugFirstSlot => _firstSlot;
+  int get debugEndSlot => _firstSlot + childCount;
   double get debugPitch => _pose.pitch;
   double get debugEntranceProgress => _pose.entrance;
   Offset debugAssemblyOffset(int slot) => _pose.assemblyOffset(slot);
-  List<int> get debugPaintOrder => _visible;
+  List<int> get debugPaintOrder => [
+    for (final childIndex in _visible) _slotForChild(childIndex),
+  ];
   @override
   Path? coverOcclusion(RenderBox face) {
     RenderObject? volume = face;
@@ -861,16 +973,20 @@ class ArchiveShelfSceneRender extends RenderBox
       volume = volume.parent;
     }
     if (volume is! RenderBox) return null;
-    final slot = _boxes.indexOf(volume);
-    if (slot < 0) return null;
+    final childIndex = _boxes.indexOf(volume);
+    if (childIndex < 0) return null;
+
+    final slot = _slotForChild(childIndex);
     final faceBounds = MatrixUtils.transformRect(
       face.getTransformTo(null),
       Offset.zero & face.size,
     );
     var mask = Path();
     var occluded = false;
-    for (final i in _visible.where((i) => i > slot)) {
-      final box = _boxes[i] as ArchiveBoxDepthRender;
+    for (final foregroundIndex in _visible) {
+      if (_slotForChild(foregroundIndex) <= slot) continue;
+
+      final box = _boxes[foregroundIndex] as ArchiveBoxDepthRender;
       final path = box._solidPath.transform(box.getTransformTo(null).storage);
       if (!path.getBounds().overlaps(faceBounds)) continue;
       // Top and side faces have opposite winding. A mere addPath can cancel
@@ -882,12 +998,25 @@ class ArchiveShelfSceneRender extends RenderBox
   }
 
   Rect get _viewport => Offset.zero & size;
-  Offset _offset(int i) =>
-      Offset(_x[i] - _pose.focus * _pose.pitch, _pose.railY(i)) +
-      _pose.assemblyOffset(i);
+
+  Offset _offset(int childIndex) {
+    final slot = _slotForChild(childIndex);
+
+    return Offset(
+          _x[childIndex] - _pose.focus * _pose.pitch,
+          _pose.railY(slot),
+        ) +
+        _pose.assemblyOffset(slot);
+  }
+
+  // _visible 内部始终保存 childIndex，用于访问 _boxes。
+  // 所有几何计算由 _offset 转换为 pool 槽位。
   List<int> get _visible => [
-    for (var i = 0; i < _boxes.length; i++)
-      if (_viewport.overlaps(_boxes[i].paintBounds.shift(_offset(i)))) i,
+    for (var childIndex = 0; childIndex < _boxes.length; childIndex++)
+      if (_viewport.overlaps(
+        _boxes[childIndex].paintBounds.shift(_offset(childIndex)),
+      ))
+        childIndex,
   ];
   @override
   void setupParentData(RenderBox child) {
@@ -899,22 +1028,28 @@ class ArchiveShelfSceneRender extends RenderBox
   void _update(
     ViewportOffset offset,
     _WavePose pose,
+    int firstSlot,
     double spine,
     double cover,
     double height,
     bool dark,
   ) {
     _scrollOffset = offset;
+
     if (_pose != pose) {
       if (attached) _pose.removeListener(_changed);
       _pose = pose;
       if (attached) _pose.addListener(_changed);
     }
+
+    _firstSlot = firstSlot;
     _spine = spine;
     _cover = cover;
     _height = height;
     _dark = dark;
+
     markNeedsLayout();
+    markNeedsSemanticsUpdate();
   }
 
   void _changed() {
@@ -957,9 +1092,19 @@ class ArchiveShelfSceneRender extends RenderBox
         _WavePose.pullDistance(_cover) * _WavePose.depthX;
     var child = firstChild;
     while (child != null) {
-      child.layout(BoxConstraints.tight(Size(_spine + _cover, size.height)));
-      _x.add(start + _boxes.length * _pose.pitch);
+      final childIndex = _boxes.length;
+      final slot = _slotForChild(childIndex);
+
+      child.layout(
+        BoxConstraints.tight(
+          Size(_spine + _cover, size.height),
+        ),
+      );
+
+      // 使用完整 pool 槽位定位，不能从窗口的第 0 个位置重新起算。
+      _x.add(start + slot * _pose.pitch);
       _boxes.add(child);
+
       child = childAfter(child);
     }
     debugLayoutCount++;

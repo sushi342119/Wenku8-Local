@@ -701,9 +701,7 @@ class DiscoverPage extends StatelessWidget {
                           key: ValueKey(
                             'archive-files-${feed?.sort.name ?? 'recent'}-${books.first.id}',
                           ),
-                          books: books
-                              .take(featuredCount)
-                              .toList(growable: false),
+                          books: books,
                           reduceMotion: state.reduceMotion,
                           animateEntrance: true,
                           onOpen: (book, tag) => openDetail(
@@ -716,9 +714,7 @@ class DiscoverPage extends StatelessWidget {
                         ),
                         const SizedBox(height: 16),
                         ArchiveRandomPickCard<Novel>(
-                          books: books
-                              .take(featuredCount)
-                              .toList(growable: false),
+                          books: books,
                           titleOf: (book) => book.title,
                           authorOf: (book) => book.author,
                           identityOf: (book) => book.id,
