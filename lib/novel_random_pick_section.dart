@@ -176,6 +176,20 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
     final candidates = _filterBooks();
     final hasFilter = _selectedTagIds.isNotEmpty;
 
+    Widget? emptyState;
+    if (hasFilter && candidates.isEmpty) {
+      emptyState = _buildEmptyState();
+    } else if (widget.books.isEmpty) {
+      // 书库为空时显示明确提示
+      emptyState = const Padding(
+        padding: EdgeInsets.symmetric(vertical: 24),
+        child: Text(
+          '书库暂无书籍',
+          style: TextStyle(fontSize: 15, color: _muted),
+        ),
+      );
+    }
+
     return ArchiveRandomPickCard<Novel>(
       books: candidates,
       titleOf: (book) => book.title,
@@ -183,7 +197,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
       identityOf: (book) => book.id,
       onOpenDetail: widget.onOpenDetail,
       filterHeader: _buildFilterHeader(candidates.length),
-      emptyState: hasFilter && candidates.isEmpty ? _buildEmptyState() : null,
+      emptyState: emptyState,
     );
   }
 }

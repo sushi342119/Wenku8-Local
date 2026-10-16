@@ -103,8 +103,10 @@ class TagStore extends ChangeNotifier {
     for (final tag in _tags) {
       if (tag.name == clean) return tag.id;
     }
+    // 用时间戳+随机数避免同一毫秒内创建的标签 ID 碰撞
+    final random = DateTime.now().microsecondsSinceEpoch % 1000000;
     final tag = Tag(
-      id: 'tag_${DateTime.now().millisecondsSinceEpoch}',
+      id: 'tag_${DateTime.now().millisecondsSinceEpoch}_$random',
       name: clean,
       colorIndex: _tags.length % tagPalette.length,
     );
