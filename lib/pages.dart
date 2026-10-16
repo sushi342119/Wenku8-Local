@@ -39,7 +39,6 @@ import 'recent_searches.dart';
 import 'ui_notifiers.dart';
 import 'feature_pages.dart';
 import 'legacy_import_page.dart';
-import 'legacy_transport.dart';
 import 'local_library.dart';
 import 'local_library_page.dart';
 import 'local_pdf_reader.dart';
@@ -1160,29 +1159,33 @@ class _ShelfBookTags extends StatelessWidget {
     final Color color = tagPalette.isEmpty
         ? theme.colorScheme.primary
         : tagPalette[tag.colorIndex % tagPalette.length];
+    // 不用 Chip：其最小高度受主题约束，无法保证缩小到一半。
+    // 这里用 Container 自绘：字号 9（行高约 10.8）+ 上下内边距 2 + 边框 2，
+    // 总高度约 15，仅为原来 Chip（约 36~40）的三分之一多一点。
+    // 文字样式沿用主题 labelLarge（原 Chip 默认），只改字号，保证颜色不变。
     return Tooltip(
       message: tag.name,
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Chip(
+        child: Container(
           key: ValueKey<String>(tag.id),
-          label: Text(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: .18),
+            border: Border.all(color: color.withValues(alpha: .5)),
+            borderRadius: BorderRadius.circular(7),
+          ),
+          child: Text(
             tag.name,
             maxLines: 1,
             softWrap: false,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 10, height: 1.2),
+            style: theme.textTheme.labelLarge?.copyWith(
+                  fontSize: 9,
+                  height: 1.2,
+                ) ??
+                const TextStyle(fontSize: 9, height: 1.2),
           ),
-          // 书架行内标签取小尺寸，一行能放下更多标签。
-          labelPadding: const EdgeInsets.symmetric(horizontal: 6),
-          padding: EdgeInsets.zero,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(8),
-          ),
-          backgroundColor: color.withValues(alpha: .18),
-          side: BorderSide(color: color.withValues(alpha: .5)),
-          visualDensity: VisualDensity.compact,
-          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
       ),
     );
@@ -2039,30 +2042,6 @@ class SettingsPage extends StatelessWidget {
                 LegacyImportPage(state: state),
                 reduceMotion: state.reduceMotion,
               ),
-            ),
-            const SizedBox(height: 14),
-            FeatureEntry(
-              title: '清理插图缓存',
-              icon: CupertinoIcons.photo,
-              subtitle: '不影响书架、正文缓存和阅读记录',
-              onTap: () async {
-                if (!await confirmNovelAction(
-                  context,
-                  title: '清理已下载的插图？',
-                  message: '插图下次查看时重新下载，正文和阅读记录仍保留。',
-                  confirmLabel: '清理插图',
-                  reduceMotion: state.reduceMotion,
-                )) {
-                  return;
-                }
-                try {
-                  await LegacyTransport.clearIllustrations();
-                  ReaderIllustrationCache.shared.clearMemory();
-                  if (context.mounted) showNovelFeedback(context, '插图缓存已清理');
-                } catch (_) {
-                  if (context.mounted) showNovelFeedback(context, '缓存清理失败，请重试');
-                }
-              },
             ),
           ],
           const SizedBox(height: 24),

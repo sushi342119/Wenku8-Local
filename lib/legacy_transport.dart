@@ -20,7 +20,4 @@ abstract final class LegacyTransport {
     if (bytes == null || bytes.isEmpty) throw const FormatException('插图内容为空');
     return bytes;
   }
-
-  static Future<void> clearIllustrations() =>
-      channel.invokeMethod<void>('clearIllustrations');
 }
