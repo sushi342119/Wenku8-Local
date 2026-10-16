@@ -592,7 +592,14 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
   );
 }
 
-class DiscoverPage extends StatelessWidget {
+/// showGlassMenu 的外层 null 表示关闭菜单；实例中的 tagId == null 表示选择“全部”。
+class _TagMenuChoice {
+  const _TagMenuChoice(this.tagId);
+
+  final String? tagId;
+}
+
+class DiscoverPage extends StatefulWidget {
   const DiscoverPage({
     super.key,
     required this.books,
@@ -613,43 +620,147 @@ class DiscoverPage extends StatelessWidget {
   final String? categoryTitle;
   final void Function(BuildContext context)? onChooseCategory;
 
+  /// 顶部栏由 HomeShell 通过 widget 实例直接取用，不依赖 State。
   Widget buildHeader(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: const ArchiveMasthead(
-          title: '轻小说文库',
-          code: 'WENKU8 / READING ARCHIVE',
-          brand: true,
-        ),
-      ),
-      GlassIconButton(
-        icon: CupertinoIcons.search,
-        label: '搜索',
-        onPressed: onSearch,
-      ),
-    ],
-  );
+        children: [
+          const Expanded(
+            child: ArchiveMasthead(
+              title: '轻小说文库',
+              code: 'WENKU8 / READING ARCHIVE',
+              brand: true,
+            ),
+          ),
+          GlassIconButton(
+            icon: CupertinoIcons.search,
+            label: '搜索',
+            onPressed: onSearch,
+          ),
+        ],
+      );
 
   @override
-  Widget build(BuildContext context) => feed == null
-      ? _buildContent(context, books)
-      : AnimatedBuilder(
-          animation: feed!,
-          builder: (context, _) => LoadedContentSequence(
-            generation: feed!.resultRevision,
-            firstIndex: feed!.resultStartIndex == 0
-                ? 0
-                : feed!.resultStartIndex + 2,
-            child: _buildContent(context, feed!.items),
+  State<DiscoverPage> createState() => _DiscoverPageState();
+}
+
+class _DiscoverPageState extends State<DiscoverPage> {
+  final TagStore _tagStore = TagStore.shared;
+
+  /// 当前选中的标签 id；null 表示“全部”。纯展示状态，不持久化。
+  String? _selectedTagId;
+
+  @override
+  void initState() {
+    super.initState();
+    _tagStore.addListener(_onTagsChanged);
+  }
+
+  @override
+  void dispose() {
+    _tagStore.removeListener(_onTagsChanged);
+    super.dispose();
+  }
+
+  void _onTagsChanged() {
+    if (!mounted) return;
+    // 标签改名、增删、书籍归属变化都要刷新；选中标签被删除则回退到全部。
+    setState(() {
+      final selectedTagId = _selectedTagId;
+      if (selectedTagId != null &&
+          _tagStore.tagById(selectedTagId) == null) {
+        _selectedTagId = null;
+      }
+    });
+  }
+
+  void _showAllTags() {
+    if (!mounted || _selectedTagId == null) return;
+    setState(() {
+      _selectedTagId = null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final feed = widget.feed;
+    return feed == null
+        ? _buildContent(context, widget.books)
+        : AnimatedBuilder(
+            animation: feed,
+            builder: (context, _) => LoadedContentSequence(
+              generation: feed.resultRevision,
+              firstIndex: feed.resultStartIndex == 0
+                  ? 0
+                  : feed.resultStartIndex + 2,
+              child: _buildContent(context, feed.items),
+            ),
+          );
+  }
+
+  /// 轮播区域：只在这里应用标签过滤。
+  Widget _buildCarouselArea(BuildContext context, List<Novel> carouselBooks) {
+    if (carouselBooks.isNotEmpty) {
+      return ArchiveFileCarousel(
+        // 同一标签下保持轮播 State（分页追加不重置焦点）；
+        // 切换标签或切回全部时重建，从初始位置展示。
+        key: ValueKey(
+          'archive-files-${widget.feed?.sort.name ?? 'recent'}-${_selectedTagId ?? 'all'}',
+        ),
+        books: carouselBooks,
+        reduceMotion: widget.state.reduceMotion,
+        animateEntrance: true,
+        onOpen: (book, tag) => openDetail(
+          context,
+          book,
+          widget.state,
+          widget.repository,
+          coverHeroTag: tag,
+        ),
+      );
+    }
+    if (_selectedTagId != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 72),
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('该标签下暂无书籍'),
+              const SizedBox(height: 12),
+              CupertinoButton(
+                onPressed: _showAllTags,
+                child: const Text('查看全部'),
+              ),
+            ],
           ),
-        );
+        ),
+      );
+    }
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 90),
+      child: Center(child: Text('暂无书籍')),
+    );
+  }
 
   Widget _buildContent(BuildContext context, List<Novel> books) {
-    final featuredCount = books.length.clamp(0, 10);
+    final feed = widget.feed;
+    final allBooks = books;
+    final selectedTagId = _selectedTagId;
+    // 只过滤轮播；随机抽阅与“更多书籍”始终使用全量。
+    final List<Novel> carouselBooks = selectedTagId == null
+        ? allBooks
+        : allBooks
+            .where(
+              (book) => _tagStore
+                  .tagsForBook(book.id)
+                  .any((tag) => tag.id == selectedTagId),
+            )
+            .toList(growable: false);
+
+    final featuredCount = allBooks.length.clamp(0, 10);
     Widget body;
-    if (books.isEmpty && feed?.loading == true) {
+    if (allBooks.isEmpty && feed?.loading == true) {
       body = LibrarySkeleton(header: _categoryHeader(context));
-    } else if (books.isEmpty && feed?.error != null) {
+    } else if (allBooks.isEmpty && feed?.error != null) {
       body = ContentNotice(
         icon: CupertinoIcons.wifi_exclamationmark,
         title: '书籍加载失败',
@@ -697,38 +808,19 @@ class DiscoverPage extends StatelessWidget {
                         child: _categoryHeader(context),
                       ),
                       const SizedBox(height: 14),
-                      if (books.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 90),
-                          child: Center(child: Text('暂无书籍')),
-                        )
-                      else ...[
-                        ArchiveFileCarousel(
-                          key: ValueKey(
-                            'archive-files-${feed?.sort.name ?? 'recent'}-${books.first.id}',
-                          ),
-                          books: books,
-                          reduceMotion: state.reduceMotion,
-                          animateEntrance: true,
-                          onOpen: (book, tag) => openDetail(
-                            context,
-                            book,
-                            state,
-                            repository,
-                            coverHeroTag: tag,
-                          ),
-                        ),
+                      _buildCarouselArea(context, carouselBooks),
+                      if (allBooks.isNotEmpty) ...[
                         const SizedBox(height: 16),
                         NovelRandomPickSection(
-                          books: books,
+                          books: allBooks,
                           onOpenDetail: (book) => openDetail(
                             context,
                             book,
-                            state,
-                            repository,
+                            widget.state,
+                            widget.repository,
                           ),
                         ),
-                        if (books.length > featuredCount ||
+                        if (allBooks.length > featuredCount ||
                             feed?.loading == true) ...[
                           const SizedBox(height: 32),
                           LoadedContentItem(
@@ -745,9 +837,9 @@ class DiscoverPage extends StatelessWidget {
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 sliver: SliverList.builder(
-                  itemCount: books.length - featuredCount,
+                  itemCount: allBooks.length - featuredCount,
                   itemBuilder: (context, index) {
-                    final book = books[index + featuredCount];
+                    final book = allBooks[index + featuredCount];
                     return LoadedContentItem(
                       key: ValueKey(book.id),
                       index: index + featuredCount + 2,
@@ -757,8 +849,8 @@ class DiscoverPage extends StatelessWidget {
                         onTap: () => openDetail(
                           context,
                           book,
-                          state,
-                          repository,
+                          widget.state,
+                          widget.repository,
                           coverHeroTag: CoverHeroTag(context, book.id),
                         ),
                       ),
@@ -773,7 +865,7 @@ class DiscoverPage extends StatelessWidget {
                 sliver: SliverToBoxAdapter(
                   child: feed == null
                       ? const SizedBox.shrink()
-                      : FeedFooter(feed: feed!),
+                      : FeedFooter(feed: feed),
                 ),
               ),
             ],
@@ -781,65 +873,111 @@ class DiscoverPage extends StatelessWidget {
         ),
       );
       if (feed != null) {
-        body = FeedRefresh(feed: feed!, child: body);
+        body = FeedRefresh(feed: feed, child: body);
       }
     }
     return GlassHeaderLayout(
-      showHeader: showHeader,
-      header: buildHeader(context),
+      showHeader: widget.showHeader,
+      header: widget.buildHeader(context),
       body: body,
     );
   }
 
-  Widget _categoryHeader(BuildContext context) => Row(
-    children: [
-      Expanded(
-        child: sectionHeader(
-          context,
-          categoryTitle ?? feed?.sort.label ?? '最近更新',
-          '',
+  Widget _categoryHeader(BuildContext context) {
+    final selectedTagId = _selectedTagId;
+    final selectedTag =
+        selectedTagId == null ? null : _tagStore.tagById(selectedTagId);
+    final title = selectedTag?.name ?? widget.categoryTitle ?? '全部';
+    return Row(
+      children: [
+        Expanded(
+          child: sectionHeader(
+            context,
+            title,
+            '',
+          ),
         ),
-      ),
-      if (feed != null)
-        GlassMenuAnchor(
-          child: Builder(
-            builder: (buttonContext) => GlassIconButton(
-              icon: CupertinoIcons.line_horizontal_3_decrease,
-              label: '分类与排序',
-              onPressed: () => onChooseCategory != null
-                  ? onChooseCategory!(buttonContext)
-                  : _chooseSort(buttonContext),
+        if (widget.feed != null)
+          GlassMenuAnchor(
+            child: Builder(
+              builder: (buttonContext) => GlassIconButton(
+                icon: CupertinoIcons.line_horizontal_3_decrease,
+                label: '标签筛选',
+                onPressed: () => widget.onChooseCategory != null
+                    ? widget.onChooseCategory!(buttonContext)
+                    : _chooseTag(buttonContext),
+              ),
             ),
           ),
-        ),
-    ],
-  );
+      ],
+    );
+  }
 
-  Future<void> _chooseSort(BuildContext context) async {
-    final selected = await showGlassMenu<NovelSort>(
+  Future<void> _chooseTag(BuildContext context) async {
+    final choice = await showGlassMenu<_TagMenuChoice>(
       context: context,
-      reduceMotion: state.reduceMotion,
-      builder: (menuContext) => ConstrainedBox(
-        constraints: BoxConstraints(
-          maxHeight: MediaQuery.sizeOf(menuContext).height * .62,
-        ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final sort in NovelSort.values)
-                GlassMenuItem(
-                  order: sort.index,
-                  label: sort.label,
-                  selected: feed!.sort == sort,
-                  onPressed: () => Navigator.of(menuContext).pop(sort),
-                ),
-            ],
-          ),
-        ),
+      reduceMotion: widget.state.reduceMotion,
+      builder: (menuContext) => AnimatedBuilder(
+        // 菜单打开期间标签发生增删改名时同步更新菜单内容。
+        animation: _tagStore,
+        builder: (context, _) {
+          final tags = _tagStore.tags.toList(growable: false);
+          final selectedTagId = _selectedTagId;
+          final effectiveSelectedTagId = selectedTagId != null &&
+                  _tagStore.tagById(selectedTagId) != null
+              ? selectedTagId
+              : null;
+          return ConstrainedBox(
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(menuContext).height * .62,
+            ),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GlassMenuItem(
+                    order: 0,
+                    label: '全部',
+                    selected: effectiveSelectedTagId == null,
+                    onPressed: () =>
+                        Navigator.of(menuContext).pop<_TagMenuChoice>(
+                      const _TagMenuChoice(null),
+                    ),
+                  ),
+                  for (var index = 0; index < tags.length; index++)
+                    GlassMenuItem(
+                      order: index + 1,
+                      label: tags[index].name,
+                      selected: effectiveSelectedTagId == tags[index].id,
+                      onPressed: () =>
+                          Navigator.of(menuContext).pop<_TagMenuChoice>(
+                        _TagMenuChoice(tags[index].id),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
-    if (selected != null) await feed!.selectSort(selected);
+
+    // 外层 null 是取消菜单，不清除现有选择。
+    if (!mounted || choice == null) return;
+
+    final requestedTagId = choice.tagId;
+    // 标签可能在点击与菜单 Future 返回之间被删除。
+    final String? nextTagId = requestedTagId != null &&
+            _tagStore.tagById(requestedTagId) != null
+        ? requestedTagId
+        : null;
+
+    // 重复选择不触发重建。
+    if (_selectedTagId == nextTagId) return;
+
+    setState(() {
+      _selectedTagId = nextTagId;
+    });
   }
 }
 

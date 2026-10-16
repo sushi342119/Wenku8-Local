@@ -367,11 +367,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       code: 'LOCAL / BOOK ARCHIVE',
       actions: [
         GlassIconButton(
-          icon: CupertinoIcons.shuffle,
-          label: '随机选书',
-          onPressed: (_scanning || _randomPicking) ? null : _randomPick,
-        ),
-        GlassIconButton(
           icon: CupertinoIcons.refresh,
           label: '扫描',
           onPressed: _scanning ? null : _scan,
