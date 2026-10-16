@@ -156,4 +156,62 @@ class TagStore extends ChangeNotifier {
 
   int bookCountFor(String tagId) =>
       _bookTags.values.where((ids) => ids.contains(tagId)).length;
+
+  /// 导出备份记录：标签定义 + 书籍归属，供 LibraryState 备份使用。
+  Map<String, Object> exportTagRecords() => {
+        'tag_defs': jsonEncode(_tags.map((t) => t.toJson()).toList()),
+        'tag_map': jsonEncode(
+          _bookTags.map((k, v) => MapEntry('$k', v.toList())),
+        ),
+      };
+
+  /// 从备份记录合并标签（只增不减，与书架合并语义一致）。
+  /// 新装迁移时本地为空，等同于完整恢复。
+  Future<void> importTagRecords(Map<String, Object> records) async {
+    final defsRaw = records['tag_defs'];
+    if (defsRaw is String) {
+      try {
+        final list = jsonDecode(defsRaw);
+        if (list is List) {
+          for (final entry in list.whereType<Map<String, Object?>>()) {
+            final tag = Tag.fromJson(entry);
+            if (tag.id.isEmpty || tag.name.isEmpty) continue;
+            if (tag.name.length > 64) continue;
+            if (_tags.any((t) => t.id == tag.id)) continue;
+            _tags.add(tag);
+          }
+        }
+      } catch (_) {}
+    }
+    final mapRaw = records['tag_map'];
+    if (mapRaw is String) {
+      try {
+        final map = jsonDecode(mapRaw);
+        if (map is Map<String, Object?>) {
+          map.forEach((key, value) {
+            final bookId = int.tryParse(key);
+            if (bookId == null ||
+                bookId <= 0 ||
+                bookId > 0x7fffffff ||
+                value is! List) {
+              return;
+            }
+            final ids = value
+                .whereType<String>()
+                .where((id) => id.isNotEmpty)
+                .toSet();
+            if (ids.isEmpty) return;
+            final existing = _bookTags[bookId];
+            if (existing == null) {
+              _bookTags[bookId] = ids;
+            } else {
+              existing.addAll(ids);
+            }
+          });
+        }
+      } catch (_) {}
+    }
+    await _persist();
+    notifyListeners();
+  }
 }

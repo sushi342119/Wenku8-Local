@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
 import 'library_backup.dart';
+import 'book_tags.dart';
 import 'performance_preferences.dart';
 import 'app_typography.dart';
 
@@ -1007,6 +1008,8 @@ class LibraryState extends ChangeNotifier {
       'reader_bookmarks_${entry.key}': jsonEncode(
         entry.value.map((mark) => mark.toJson()).toList(),
       ),
+    // 标签定义与归属：重装迁移时靠它恢复，平时备份也一并带上。
+    ...TagStore.shared.exportTagRecords(),
   };
 
   Future<LibraryBackup> createBackup() async {
@@ -1143,6 +1146,14 @@ class LibraryState extends ChangeNotifier {
           }
         }
         await _commitLibraryRecords(changed);
+        // 标签是独立存储，合并语义与书架一致（只增不减）。
+        final tagRecords = <String, Object>{};
+        for (final key in const ['tag_defs', 'tag_map']) {
+          if (records[key] case final String value) tagRecords[key] = value;
+        }
+        if (tagRecords.isNotEmpty) {
+          await TagStore.shared.importTagRecords(tagRecords);
+        }
         final oldShelf = {..._shelf};
         _shelf
           ..clear()

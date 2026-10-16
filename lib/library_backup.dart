@@ -22,6 +22,7 @@ final backupPreferenceKeys = <String>{
   ...PerformanceEffect.values.map((effect) => effect.preferenceKey),
 };
 const _listKeys = {'shelf', 'reading_history_hidden', 'recentSearches'};
+const _tagRecordKeys = {'tag_defs', 'tag_map'};
 const restoreJournalKey = 'library_restore_journal';
 final _recordKey = RegExp(
   r'^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks)_([1-9][0-9]{0,9})$',
@@ -30,6 +31,7 @@ final _recordKey = RegExp(
 bool isLibraryRecordKey(String key) =>
     backupPreferenceKeys.contains(key) ||
     _listKeys.contains(key) ||
+    _tagRecordKeys.contains(key) ||
     (_recordKey.hasMatch(key) &&
         int.parse(_recordKey.firstMatch(key)![2]!) <= 0x7fffffff);
 
@@ -57,6 +59,19 @@ class LibraryBackup {
       .map((key) => key.substring(key.lastIndexOf('_') + 1))
       .toSet()
       .length;
+
+  /// 有标签归属的书籍数量（用于备份预览确认）。
+  int get tagCount {
+    final raw = records['tag_map'];
+    if (raw is! String) return 0;
+    try {
+      final map = jsonDecode(raw);
+      if (map is! Map) return 0;
+      return map.length;
+    } catch (_) {
+      return 0;
+    }
+  }
 
   static Future<LibraryBackup> parse(String text) =>
       compute(_decodeBackup, text);
@@ -172,6 +187,50 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
           value < 0 ||
           value > (key.startsWith('chapter_') ? 100000 : 1000000000000000)) {
         throw const FormatException('阅读记录格式有误');
+      }
+      output[key] = value;
+    } else if (_tagRecordKeys.contains(key)) {
+      if (value is! String || value.length > 512 * 1024) {
+        throw const FormatException('标签记录格式有误');
+      }
+      final record = jsonDecode(value);
+      if (key == 'tag_defs') {
+        if (record is! List || record.length > 1000) {
+          throw const FormatException('标签定义过多或格式有误');
+        }
+        for (final entry in record) {
+          if (entry is! Map) throw const FormatException('标签定义格式有误');
+          final map = Map<String, Object?>.from(entry);
+          final id = map['id'];
+          final name = map['name'];
+          final color = map['color'];
+          if (id is! String ||
+              id.isEmpty ||
+              id.length > 128 ||
+              name is! String ||
+              name.isEmpty ||
+              name.length > 64 ||
+              color is! int ||
+              color < 0) {
+            throw const FormatException('标签定义格式有误');
+          }
+        }
+      } else {
+        if (record is! Map || record.length > 20000) {
+          throw const FormatException('标签归属过多或格式有误');
+        }
+        for (final e in (record as Map).entries) {
+          final bookId = int.tryParse('${e.key}');
+          if (bookId == null || bookId <= 0 || bookId > 0x7fffffff) {
+            throw const FormatException('标签书籍标识格式有误');
+          }
+          final ids = e.value;
+          if (ids is! List ||
+              ids.length > 1000 ||
+              ids.any((t) => t is! String || (t as String).isEmpty)) {
+            throw const FormatException('标签归属格式有误');
+          }
+        }
       }
       output[key] = value;
     } else {

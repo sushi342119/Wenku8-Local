@@ -207,7 +207,7 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                           Text('备份时间 ${_date(backup.createdAt)}'),
                           const SizedBox(height: 12),
                           Text(
-                            '${backup.shelfCount} 本书架收藏 · ${backup.positionCount} 条阅读进度\n${backup.bookmarkCount} 个书签 · ${backup.historyCount} 本阅读记录',
+                            '${backup.shelfCount} 本书架收藏 · ${backup.positionCount} 条阅读进度\n${backup.bookmarkCount} 个书签 · ${backup.historyCount} 本阅读记录 · ${backup.tagCount} 本书有标签',
                           ),
                           const SizedBox(height: 14),
                           const Text('恢复将合并到本机，不清空已有书架和书签；同一本书保留更新时间较新的进度。'),
