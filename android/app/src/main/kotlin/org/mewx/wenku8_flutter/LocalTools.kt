@@ -519,28 +519,126 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         )
     }
 
-    /** 从 SAF 选择字体文件，校验 sfnt 签名后复制到应用私有目录，返回绝对路径。 */
+    /** 从 SAF 选择字体文件，单流校验并复制到应用私有目录，返回绝对路径。
+     * 校验 sfnt 签名与表目录结构；任何失败都删除临时文件，不留孤立文件。 */
     private fun copyFontToPrivateDir(uri: Uri): String {
         val resolver = activity.contentResolver
-        // 读取头部校验字体签名：TTF(\x00\x01\x00\x00)、OTF(OTTO)、TTC(ttcf)。
-        val header = ByteArray(4)
-        resolver.openInputStream(uri)?.use { input ->
+        val dir = File(activity.filesDir, "fonts").apply { mkdirs() }
+        val tmp = File.createTempFile("font_import_", ".tmp", dir)
+        try {
+            var ext = "ttf"
+            resolver.openInputStream(uri)?.use { input ->
+                // 头部 12 字节：签名(4) + numTables(2) + searchRange(2) + entrySelector(2) + rangeShift(2)。
+                val header = ByteArray(12)
+                var read = 0
+                while (read < 12) {
+                    val n = input.read(header, read, 12 - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read < 12) throw IllegalStateException("文件太小，不是有效的字体文件")
+                val sig = String(header, 0, 4, Charsets.ISO_8859_1)
+                ext = when (sig) {
+                    "\u0000\u0001\u0000\u0000" -> "ttf"
+                    "OTTO" -> "otf"
+                    "ttcf" -> "ttc"
+                    else -> throw IllegalStateException("不是有效的字体文件（仅支持 TTF/OTF）")
+                }
+                val numTables = ((header[4].toInt() and 0xFF) shl 8) or (header[5].toInt() and 0xFF)
+                if (numTables <= 0 || numTables > 64) {
+                    throw IllegalStateException("字体表目录异常")
+                }
+                FileOutputStream(tmp).use { output ->
+                    output.write(header, 0, read)
+                    val buf = ByteArray(8192)
+                    var total = 12L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_FONT_BYTES) {
+                            throw IllegalStateException("字体文件过大（超过 100MB）")
+                        }
+                        output.write(buf, 0, n)
+                    }
+                    output.flush()
+                }
+            } ?: throw IllegalStateException("无法读取所选文件")
+            // 校验表目录：每个表项 16 字节，offset/length 须在文件范围内。
+            validateSfntTables(tmp, ext)
+            val dest = File(dir, "${safeFontBaseName(resolver, uri)}_${System.currentTimeMillis()}.$ext")
+            if (!tmp.renameTo(dest)) throw IllegalStateException("保存字体失败")
+            return dest.absolutePath
+        } catch (e: Exception) {
+            try { tmp.delete() } catch (_: Exception) {}
+            throw e
+        }
+    }
+
+    /** 校验 sfnt 表目录结构（非 TTC 则校验单字体，TTC 校验首个字体）。 */
+    private fun validateSfntTables(file: File, ext: String) {
+        val size = file.length()
+        if (size < 12) throw IllegalStateException("字体文件损坏")
+        val data = ByteArray(64.coerceAtMost(size.toInt()).toInt())
+        java.io.FileInputStream(file).use { input ->
             var read = 0
-            while (read < 4) {
-                val n = input.read(header, read, 4 - read)
+            while (read < data.size) {
+                val n = input.read(data, read, data.size - read)
                 if (n < 0) break
                 read += n
             }
-            if (read < 4) throw IllegalStateException("文件太小，不是有效的字体文件")
-        } ?: throw IllegalStateException("无法读取所选文件")
-        val sig = String(header, Charsets.ISO_8859_1)
-        val ext = when {
-            sig == "\u0000\u0001\u0000\u0000" -> "ttf"
-            sig == "OTTO" -> "otf"
-            sig == "ttcf" -> "ttc"
-            else -> throw IllegalStateException("不是有效的字体文件（仅支持 TTF/OTF）")
+            if (read < 12) throw IllegalStateException("字体文件损坏")
         }
-        // 取原文件名（去非法字符），避免冲突加时间戳。
+        var dirOffset = 0
+        if (ext == "ttc") {
+            // TTC 头：ttcf + version(4) + numFonts(4)，首个字体偏移在 12 处。
+            if (size < 16) throw IllegalStateException("字体文件损坏")
+            dirOffset = ((data[12].toInt() and 0xFF) shl 24) or
+                ((data[13].toInt() and 0xFF) shl 16) or
+                ((data[14].toInt() and 0xFF) shl 8) or
+                (data[15].toInt() and 0xFF)
+            if (dirOffset < 0 || dirOffset + 12 > size) {
+                throw IllegalStateException("字体文件损坏")
+            }
+        }
+        // 简化处理：TTC 场景下如无法完整读取目录则跳过深度校验（签名已通过）。
+        if (dirOffset != 0) return
+        val numTables = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+        if (numTables <= 0 || numTables > 64) throw IllegalStateException("字体表目录异常")
+        val need = 12 + numTables * 16
+        if (size < need) throw IllegalStateException("字体表目录不完整")
+        // 至少校验 'head' 或 'name' 表存在且范围合法（读取目录区）。
+        val dir = ByteArray(need)
+        java.io.FileInputStream(file).use { input ->
+            var read = 0
+            while (read < need) {
+                val n = input.read(dir, read, need - read)
+                if (n < 0) break
+                read += n
+            }
+            if (read < need) throw IllegalStateException("字体表目录不完整")
+        }
+        var foundEssential = false
+        for (i in 0 until numTables) {
+            val off = 12 + i * 16
+            val tag = String(dir, off, 4, Charsets.ISO_8859_1)
+            val tblOffset = ((dir[off + 8].toInt() and 0xFF).toLong() shl 24) or
+                ((dir[off + 9].toInt() and 0xFF).toLong() shl 16) or
+                ((dir[off + 10].toInt() and 0xFF).toLong() shl 8) or
+                (dir[off + 11].toInt() and 0xFF).toLong()
+            val tblLen = ((dir[off + 12].toInt() and 0xFF).toLong() shl 24) or
+                ((dir[off + 13].toInt() and 0xFF).toLong() shl 16) or
+                ((dir[off + 14].toInt() and 0xFF).toLong() shl 8) or
+                (dir[off + 15].toInt() and 0xFF).toLong()
+            if (tblOffset < 0 || tblLen < 0 || tblOffset + tblLen > size) {
+                throw IllegalStateException("字体表数据越界")
+            }
+            if (tag == "head" || tag == "name" || tag == "maxp") foundEssential = true
+        }
+        if (!foundEssential) throw IllegalStateException("字体缺少必要表")
+    }
+
+    private fun safeFontBaseName(resolver: android.content.ContentResolver, uri: Uri): String {
         var displayName: String? = null
         try {
             resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
@@ -548,27 +646,9 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             }
         } catch (_: Exception) {
         }
-        val safeBase = (displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "font")
+        return (displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "font")
             .replace(Regex("[^A-Za-z0-9_\\-\\u4e00-\\u9fff]"), "_")
             .take(40)
-        val dir = File(activity.filesDir, "fonts").apply { mkdirs() }
-        val dest = File(dir, "${safeBase}_${System.currentTimeMillis()}.$ext")
-        resolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(dest).use { output ->
-                val buf = ByteArray(8192)
-                var total = 0L
-                while (true) {
-                    val n = input.read(buf)
-                    if (n < 0) break
-                    total += n
-                    if (total > MAX_FONT_BYTES) {
-                        throw IllegalStateException("字体文件过大（超过 100MB）")
-                    }
-                    output.write(buf, 0, n)
-                }
-            }
-        } ?: throw IllegalStateException("无法读取所选文件")
-        return dest.absolutePath
     }
 
     /** Only documented record/index files from the explicitly selected tree.

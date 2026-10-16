@@ -280,6 +280,9 @@ class LibraryState extends ChangeNotifier {
   bool _reduceMotion = false;
   String _appFontId = appFontSystem.id;
   final List<AppFontEntry> _importedFonts = [];
+
+  /// 已通过 FontLoader 注册的 family，避免重复加载。
+  final Set<String> _loadedFontFamilies = {};
   PerformancePreferences _performance = const PerformancePreferences();
   double _glassBlur = 8;
   double _glassOpacity = .87;
@@ -952,22 +955,30 @@ class LibraryState extends ChangeNotifier {
 
   /// 持久化导入字体列表（不进备份日志，文件本身不在备份范围内）。
 
+  /// 用 FontLoader 注册单个导入字体；已加载过的跳过。
+  /// 返回 true 表示可用。
+  Future<bool> _loadImportedEntry(AppFontEntry entry) async {
+    final family = entry.family;
+    final path = entry.filePath;
+    if (family == null || path == null) return false;
+    if (_loadedFontFamilies.contains(family)) return true;
+    final file = File(path);
+    if (!await file.exists()) return false;
+    final bytes = await file.readAsBytes();
+    final loader = FontLoader(family);
+    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+    await loader.load();
+    _loadedFontFamilies.add(family);
+    return true;
+  }
+
   /// 确保当前选中的导入字体已通过 FontLoader 加载（启动时调用）。
   /// 加载失败时回退到系统字体。
   Future<void> ensureFontLoaded() async {
     final entry = currentFont;
-    if (entry.source != AppFontSource.imported ||
-        entry.family == null ||
-        entry.filePath == null) {
-      return;
-    }
+    if (entry.source != AppFontSource.imported) return;
     try {
-      final file = File(entry.filePath!);
-      if (!await file.exists()) throw StateError('字体文件不存在');
-      final bytes = await file.readAsBytes();
-      final loader = FontLoader(entry.family!);
-      loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-      await loader.load();
+      if (!await _loadImportedEntry(entry)) throw StateError('字体不可用');
     } catch (_) {
       _appFontId = appFontSystem.id;
       try {
@@ -978,16 +989,12 @@ class LibraryState extends ChangeNotifier {
   }
 
   /// 预加载全部已导入字体（供字体选择器预览用）；失败的跳过。
+  /// 遍历快照，避免与导入/删除并发修改冲突。
   Future<void> preloadImportedFonts() async {
-    for (final entry in _importedFonts) {
-      if (entry.family == null || entry.filePath == null) continue;
+    final snapshot = List.of(_importedFonts);
+    for (final entry in snapshot) {
       try {
-        final file = File(entry.filePath!);
-        if (!await file.exists()) continue;
-        final bytes = await file.readAsBytes();
-        final loader = FontLoader(entry.family!);
-        loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-        await loader.load();
+        await _loadImportedEntry(entry);
       } catch (_) {}
     }
   }
@@ -1036,11 +1043,13 @@ class LibraryState extends ChangeNotifier {
       source: AppFontSource.imported,
       filePath: filePath,
     );
-    // 先加载验证字体可用。
-    final bytes = await file.readAsBytes();
-    final loader = FontLoader(entry.family!);
-    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-    await loader.load();
+    // 先加载验证字体可用；失败时删除已复制的文件。
+    if (!await _loadImportedEntry(entry)) {
+      try {
+        await file.delete();
+      } catch (_) {}
+      throw StateError('字体文件无效或已损坏');
+    }
     _importedFonts.add(entry);
     await _persistFontState();
     notifyListeners();
@@ -1053,6 +1062,7 @@ class LibraryState extends ChangeNotifier {
     if (index < 0) return;
     final entry = _importedFonts[index];
     _importedFonts.removeAt(index);
+    _loadedFontFamilies.remove(entry.family);
     try {
       final path = entry.filePath;
       if (path != null) {
@@ -1062,7 +1072,13 @@ class LibraryState extends ChangeNotifier {
     } catch (_) {}
     if (_appFontId == id) _appFontId = appFontSystem.id;
     await _persistFontState();
-    notifyListeners();
+    if (!_disposed) {
+      _application.notifyListeners();
+      _appearance.notifyListeners();
+      _readerSettings.notifyListeners();
+      _settings.notifyListeners();
+      notifyListeners();
+    }
   }
 
   /// 兼容旧调用：枚举转字体 ID。
