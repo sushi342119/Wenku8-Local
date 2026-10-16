@@ -583,11 +583,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     String text;
     try {
-      text = utf8.decode(bytes, allowMalformed: false);
+      if (LocalPlatform.android) {
+        // Android 用原生解码自动识别 UTF-8/GB18030。
+        text = await LocalPlatform.decodeLocalText(bytes);
+      } else {
+        // 其他平台只支持严格 UTF-8。
+        text = utf8.decode(bytes, allowMalformed: false);
+      }
     } catch (_) {
-      // 注意：Dart 无内置 GB18030，这里用宽容模式会产生乱码。
-      // 建议用户用 SAF 导入（原生端有真正的 GB18030 解码）。
-      text = utf8.decode(bytes, allowMalformed: true);
+      return null;
     }
     if (text.isEmpty) return null;
     if (text.startsWith('﻿')) text = text.substring(1);

@@ -56,6 +56,20 @@ abstract final class LocalPlatform {
       await channel.invokeMethod<String>('readLocalText', {'docUri': docUri}) ??
       '';
 
+  /// 解码原始字节，自动识别 UTF-8 / GB18030 编码。
+  /// encoding: 'auto'（默认，先 UTF-8 后 GB18030）、'utf-8'、'gb18030'
+  static Future<String> decodeLocalText(
+    Uint8List bytes, {
+    String encoding = 'auto',
+  }) async {
+    final text = await channel.invokeMethod<String>(
+      'decodeLocalText',
+      {'bytes': bytes, 'encoding': encoding},
+    );
+    if (text == null) throw StateError('原生文本解码未返回结果');
+    return text;
+  }
+
   static Future<int> pdfPageCount(String docUri) async =>
       await channel.invokeMethod<int>('pdfPageCount', {'docUri': docUri}) ?? 0;
 

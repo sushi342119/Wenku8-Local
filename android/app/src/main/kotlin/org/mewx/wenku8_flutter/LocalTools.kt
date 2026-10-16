@@ -96,7 +96,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 本地书库：SAF 文件夹选择 / 扫描 / 文本读取 / PDF 渲染。与上方文档操作互相独立。 */
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
-                "pickLocalFolder", "scanLocalFolder", "readLocalText", "pdfPageCount", "renderPdfPage",
+                "pickLocalFolder", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
                 "clearPdfCache"
             )
         ) return false
@@ -119,13 +119,16 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
                 return true
             }
-            "scanLocalFolder", "readLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache" -> {
+            "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache" -> {
                 io.execute {
                     try {
                         val response: Any = when (call.method) {
                             "scanLocalFolder" -> scanLocalFolder(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "readLocalText" -> readLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
-                            "pdfPageCount" -> pdfPageCount(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "decodeLocalText" -> decodeLocalText(
+                                call.argument<ByteArray>("bytes"),
+                                call.argument<String>("encoding") ?: "auto"
+                            )
                             "clearPdfCache" -> clearPdfCache(Uri.parse(call.argument<String>("docUri") ?: ""))
                             else -> renderPdfPage(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
@@ -336,6 +339,32 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 .decode(ByteBuffer.wrap(bytes)).toString()
         } catch (_: Exception) { /* fall through to lenient */ }
         return bytes.toString(Charsets.UTF_8)
+    }
+
+    /** 解码 Dart 传来的原始字节，支持自动识别 UTF-8/GB18030。 */
+    private fun decodeLocalText(bytes: ByteArray?, encoding: String): String {
+        if (bytes == null) throw IllegalArgumentException("缺少 bytes 参数")
+        if (bytes.size > MAX_TEXT_BYTES) throw IllegalArgumentException("Text file exceeds 16 MB")
+        return when (encoding) {
+            "gb18030" -> {
+                // 强制 GB18030 解码（兼容 GBK）
+                charset("GB18030").newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString()
+            }
+            "utf-8" -> {
+                // 强制 UTF-8 解码
+                Charsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString()
+            }
+            else -> {
+                // auto: 先尝试 UTF-8，失败则用 GB18030
+                decodeTextBytes(bytes)
+            }
+        }
     }
 
     private fun pdfPageCount(doc: Uri): Int {
