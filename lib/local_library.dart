@@ -567,7 +567,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     const maxSize = 16 * 1024 * 1024;
     if (size > maxSize) return null;
     // 流式读取并在过程中强制大小限制，防止 stat 与读取之间的竞态（修复#6）。
-    List<int> bytes;
+    Uint8List bytes;
     try {
       final file = File(path);
       final sink = BytesBuilder();
