@@ -67,7 +67,11 @@ class LibraryBackup {
     try {
       final map = jsonDecode(raw);
       if (map is! Map) return 0;
-      return map.length;
+      var count = 0;
+      for (final value in map.values) {
+        if (value is List && value.isNotEmpty) count++;
+      }
+      return count;
     } catch (_) {
       return 0;
     }
@@ -190,7 +194,7 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
       }
       output[key] = value;
     } else if (_tagRecordKeys.contains(key)) {
-      if (value is! String || value.length > 512 * 1024) {
+      if (value is! String || utf8.encode(value).length > 512 * 1024) {
         throw const FormatException('标签记录格式有误');
       }
       final record = jsonDecode(value);

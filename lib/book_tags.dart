@@ -185,6 +185,8 @@ class TagStore extends ChangeNotifier {
     }
     final mapRaw = records['tag_map'];
     if (mapRaw is String) {
+      // 只保留有对应标签定义的归属（合并后的定义集合，含本机已有标签）。
+      final knownIds = _tags.map((t) => t.id).toSet();
       try {
         final map = jsonDecode(mapRaw);
         if (map is Map<String, Object?>) {
@@ -198,7 +200,8 @@ class TagStore extends ChangeNotifier {
             }
             final ids = value
                 .whereType<String>()
-                .where((id) => id.isNotEmpty)
+                .where(
+                    (id) => id.isNotEmpty && knownIds.contains(id))
                 .toSet();
             if (ids.isEmpty) return;
             final existing = _bookTags[bookId];
