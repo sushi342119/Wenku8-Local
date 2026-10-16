@@ -129,6 +129,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                                 call.argument<ByteArray>("bytes"),
                                 call.argument<String>("encoding") ?: "auto"
                             )
+                            "pdfPageCount" -> pdfPageCount(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "clearPdfCache" -> clearPdfCache(Uri.parse(call.argument<String>("docUri") ?: ""))
                             else -> renderPdfPage(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
