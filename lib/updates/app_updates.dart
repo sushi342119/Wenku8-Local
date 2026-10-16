@@ -12,10 +12,10 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.1.1';
-const currentAppBuild = 24;
+const currentAppVersion = '1.1.2';
+const currentAppBuild = 25;
 const currentReleaseNotes = '''
-1. 随机抽阅卡片适配深色模式
+1. 设置页移除“导入旧版文库记录”
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

@@ -38,7 +38,6 @@ import 'reading_history.dart';
 import 'recent_searches.dart';
 import 'ui_notifiers.dart';
 import 'feature_pages.dart';
-import 'legacy_import_page.dart';
 import 'local_library.dart';
 import 'local_library_page.dart';
 import 'local_pdf_reader.dart';
@@ -2216,18 +2215,6 @@ class SettingsPage extends StatelessWidget {
               onTap: () => pushNovelPage<void>(
                 context,
                 TagManagePage(state: state),
-                reduceMotion: state.reduceMotion,
-              ),
-            ),
-            const SizedBox(height: 14),
-            FeatureEntry(
-              key: const ValueKey('settings-legacy-import'),
-              title: '导入旧版文库记录',
-              icon: CupertinoIcons.folder_badge_plus,
-              subtitle: '预览后合并，保留较新的阅读进度',
-              onTap: () => pushNovelPage<void>(
-                context,
-                LegacyImportPage(state: state),
                 reduceMotion: state.reduceMotion,
               ),
             ),
