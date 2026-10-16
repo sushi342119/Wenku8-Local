@@ -231,10 +231,15 @@ String formatLocalSize(int bytes) {
   return '${(bytes / 1024 / 1024).toStringAsFixed(1)} MB';
 }
 
+/// 源文件已删除，但书籍记录保存失败（记录已恢复，可重试）。
+class BookCleanupFailed implements Exception {
+  const BookCleanupFailed(this.message);
+  final String message;
+}
+
 /// 本地图书仓库：SAF 文件夹扫描、TXT 章节切分、PDF 页数。
 /// 实现 [NovelRepository]，本地图书 id 落在 [localNovelIdBase] 段。
-class LocalLibraryStore extends NovelRepository with ChangeNotifier {
-  LocalLibraryStore._(this._prefs, this._supportDir);
+class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibraryStore._(this._prefs, this._supportDir);
 
   final SharedPreferences _prefs;
   final Directory _supportDir;
@@ -640,30 +645,26 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   });
 
   /// 删除源文件并移除书籍记录（书架/标签/阅读进度由调用方清理）。
-  /// 源文件删除失败时抛错且保留记录；返回 false 表示源文件已删，
-  /// 但记录或缓存清理未完成（调用方应如实提示，可重试）。
-  Future<bool> deleteBookFile(int id) => _synchronized(() async {
+  /// 源文件删除失败时抛错且保留记录；记录保存失败时恢复内存记录并抛
+  /// [BookCleanupFailed]（重试时文件不存在视为已删，可继续完成清理）。
+  Future<void> deleteBookFile(int id) => _synchronized(() async {
     final book = bookFor(id);
-    if (book == null) return true;
+    if (book == null) return;
     if (book.sourceId.startsWith('saf:')) {
       await LocalPlatform.deleteLocalDocument(book.fileUri);
     } else {
       final file = File(book.sourceKey);
       if (await file.exists()) await file.delete();
     }
-    var ok = true;
-    try {
-      await _deleteBookData(book);
-    } catch (_) {
-      ok = false;
-    }
-    _books.remove(book);
+    await _deleteBookData(book);
+    final index = _books.indexOf(book);
+    _books.removeAt(index);
     try {
       await _saveIndex();
-    } catch (_) {
-      ok = false;
+    } catch (e) {
+      _books.insert(index, book);
+      throw const BookCleanupFailed('书籍记录保存失败');
     }
-    return ok;
   });
 
   /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
@@ -751,11 +752,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _books[index] = updated;
       await _saveIndex();
     } catch (e) {
-      // 索引保存失败：尝试把文件名改回去；无论回滚成败，
-      // 内存记录都恢复到与磁盘索引一致的状态，再把错误抛给调用方。
+      // 索引保存失败：尝试把文件名改回去。回滚成功后尽力持久化回滚结果；
+      // 任何一步失败都把内存恢复为原记录（磁盘索引未被修改过，与原记录一致）。
       if (renamed && updated.fileName != book.fileName) {
         try {
-          _books[index] = await _renameBack(book, updated);
+          final rolledBack = await _renameBack(book, updated);
+          _books[index] = rolledBack;
+          try {
+            await _saveIndex();
+          } catch (_) {
+            // 回滚后的持久化仍失败：内存已是回滚后的真实状态，
+            // 磁盘索引保持修改前的原记录。
+          }
         } catch (_) {
           _books[index] = book;
         }
