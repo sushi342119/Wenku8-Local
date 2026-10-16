@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -30,7 +32,9 @@ class LocalLibraryPage extends StatefulWidget {
 
 class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool _scanning = false;
+  bool _randomPicking = false;
   String? _folderUri;
+  final _random = math.Random();
 
   @override
   void initState() {
@@ -241,6 +245,103 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
   }
 
+  /// 随机选书：从当前书库中随机抽一本。
+  Future<void> _randomPick() async {
+    if (_scanning || _randomPicking) return;
+
+    final pool = List<LocalBook>.of(widget.local.books);
+
+    if (pool.isEmpty) {
+      showNovelFeedback(context, '本地书库为空，请先扫描导入书籍');
+      return;
+    }
+
+    setState(() => _randomPicking = true);
+
+    try {
+      var index = _random.nextInt(pool.length);
+
+      final selected = await showDialog<LocalBook>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final book = pool[index];
+            return AlertDialog(
+              title: const Text('随机选书'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    book.displayTitle,
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    book.displayAuthor.trim().isEmpty
+                        ? '作者未知'
+                        : book.displayAuthor,
+                    style: TextStyle(
+                      color: Theme.of(
+                        dialogContext,
+                      ).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '共 ${pool.length} 本候选',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: pool.length <= 1
+                      ? null
+                      : () {
+                          // 从其他候选中抽取，避免"换一本"仍是同一本。
+                          final next = _random.nextInt(pool.length - 1);
+                          setDialogState(() {
+                            index = next >= index ? next + 1 : next;
+                          });
+                        },
+                  child: const Text('换一本'),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      Navigator.of(dialogContext).pop(pool[index]),
+                  child: const Text('开始阅读'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      if (!mounted || selected == null) return;
+
+      // 弹窗期间书籍可能被移除，按 ID 获取当前对象。
+      final current = widget.local.bookFor(selected.id);
+      if (current == null) {
+        showNovelFeedback(context, '该书已不在本地书库中，请重新选择');
+        return;
+      }
+
+      _openBook(current);
+    } finally {
+      if (mounted) {
+        setState(() => _randomPicking = false);
+      }
+    }
+  }
+
   void _openBook(LocalBook book) {
     final novel = widget.local.toNovel(book);
     if (book.kind == LocalBookKind.pdf) {
@@ -265,6 +366,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       title: '本地书库',
       code: 'LOCAL / BOOK ARCHIVE',
       actions: [
+        GlassIconButton(
+          icon: CupertinoIcons.shuffle,
+          label: '随机选书',
+          onPressed: (_scanning || _randomPicking) ? null : _randomPick,
+        ),
         GlassIconButton(
           icon: CupertinoIcons.refresh,
           label: '扫描',
