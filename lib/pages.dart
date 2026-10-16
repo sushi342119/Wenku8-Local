@@ -1117,6 +1117,71 @@ void openReadingHistory(
   ),
 );
 
+/// 书架行内的标签，只负责展示。
+///
+/// 由父级决定是否传入；为 null 时不占高度。
+class _ShelfBookTags extends StatelessWidget {
+  const _ShelfBookTags({required this.tags});
+
+  final List<Tag> tags;
+
+  static const double _maxChipWidth = 160;
+
+  @override
+  Widget build(BuildContext context) {
+    if (tags.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final theme = Theme.of(context);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 标签整体宽度最多 160；窄屏时不超过标题栏可用宽度。
+        final double maxChipWidth = constraints.hasBoundedWidth
+            ? constraints.maxWidth.clamp(0.0, _maxChipWidth).toDouble()
+            : _maxChipWidth;
+        return Wrap(
+          spacing: 6,
+          runSpacing: 4,
+          children: [
+            for (final tag in tags)
+              _buildChip(tag: tag, theme: theme, maxWidth: maxChipWidth),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildChip({
+    required Tag tag,
+    required ThemeData theme,
+    required double maxWidth,
+  }) {
+    // 沿用详情页配色；调色板为空时回退到主题色，避免取模异常。
+    final Color color = tagPalette.isEmpty
+        ? theme.colorScheme.primary
+        : tagPalette[tag.colorIndex % tagPalette.length];
+    return Tooltip(
+      message: tag.name,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Chip(
+          key: ValueKey<String>(tag.id),
+          label: Text(
+            tag.name,
+            maxLines: 1,
+            softWrap: false,
+            overflow: TextOverflow.ellipsis,
+          ),
+          backgroundColor: color.withValues(alpha: .18),
+          side: BorderSide(color: color.withValues(alpha: .5)),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+      ),
+    );
+  }
+}
+
 class NovelRow extends StatelessWidget {
   const NovelRow({
     super.key,
@@ -1124,11 +1189,15 @@ class NovelRow extends StatelessWidget {
     required this.onTap,
     this.trailing,
     this.coverHeroTag,
+    this.tagRow,
   });
   final Novel novel;
   final VoidCallback onTap;
   final Widget? trailing;
   final Object? coverHeroTag;
+
+  /// 标题下方的可选标签区域。为 null 时不占高度。
+  final Widget? tagRow;
 
   @override
   Widget build(BuildContext context) => JellyTapSurface(
@@ -1159,16 +1228,24 @@ class NovelRow extends StatelessWidget {
                     fontSize: 15,
                   ),
                 ),
-                const SizedBox(height: 7),
-                Text(
-                  novel.author,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                // 标签紧接标题；无标签时不创建间距。
+                if (tagRow != null) ...[
+                  const SizedBox(height: 6),
+                  tagRow!,
+                ],
+                // 本地书作者可能为空，不创建空作者行及其间距。
+                if (novel.author.trim().isNotEmpty) ...[
+                  const SizedBox(height: 7),
+                  Text(
+                    novel.author,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
-                ),
+                ],
               ],
             ),
           ),
@@ -1472,10 +1549,21 @@ class _ShelfPageState extends State<ShelfPage> {
     },
   );
 
+  /// 该书的标签行；无标签时返回 null，不占高度。
+  /// 书架已监听 TagStore，标签变化会自动重建行。
+  Widget? _tagRowForBook(int bookId) {
+    final List<Tag> tags = TagStore.shared.tagsForBook(bookId);
+    if (tags.isEmpty) {
+      return null;
+    }
+    return _ShelfBookTags(tags: tags);
+  }
+
   Widget _row(BuildContext context, Novel book) => NovelRow(
     key: ValueKey('shelf-book-${book.id}'),
     novel: book,
     coverHeroTag: CoverHeroTag(this, book.id),
+    tagRow: _tagRowForBook(book.id),
     onTap: () => openDetail(
       context,
       book,
