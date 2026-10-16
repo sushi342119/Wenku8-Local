@@ -10,14 +10,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
-  defaultValue: 'mikufoxxx/Wenku8_Flutter',
+  defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '0.2.3';
-const currentAppBuild = 5;
+const currentAppVersion = '1.0.0';
+const currentAppBuild = 21;
 const currentReleaseNotes = '''
-1. 优化模糊
-2. 优化液态玻璃
-3. 修复插图显示
+1. 书架标签缩小，一行可显示更多标签
+2. 本地书库页仅保留文件夹与扫描选项
+3. 设置页移除“清理插图缓存”
+4. “GitHub 项目与版本”指向本项目仓库
+5. 应用内检查更新已接入本项目 Releases
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
