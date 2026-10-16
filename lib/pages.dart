@@ -1414,11 +1414,6 @@ class _ShelfPageState extends State<ShelfPage> {
                             ),
                           ),
                         ),
-                        GlassIconButton(
-                          icon: CupertinoIcons.shuffle,
-                          label: '随机选书',
-                          onPressed: () => _randomPick(context),
-                        ),
                         GlassMenuAnchor(
                           child: Builder(
                             builder: (buttonContext) => GlassTextButton(
@@ -1678,80 +1673,6 @@ class _ShelfPageState extends State<ShelfPage> {
         selectedColor: color.withValues(alpha: .22),
         side: BorderSide(
           color: selected ? color : Theme.of(context).dividerColor,
-        ),
-      ),
-    );
-  }
-
-  /// 随机选书：在当前筛选结果里抽一本。
-  Future<void> _randomPick(BuildContext context) async {
-    final pool = state.shelf.where(_matches).toList();
-    if (pool.isEmpty) {
-      showNovelFeedback(context, '没有符合条件的书');
-      return;
-    }
-    int id = pool[math.Random().nextInt(pool.length)];
-    Novel? book = _known(id) ?? await _resolve(id);
-    if (!context.mounted) return;
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('随机选书'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                book?.title ?? '书籍 $id',
-                style: const TextStyle(
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                (book?.author ?? '').isEmpty ? '作者未知' : book!.author,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                '共 ${pool.length} 本候选',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                id = pool[math.Random().nextInt(pool.length)];
-                setDialogState(() => book = _known(id));
-                _resolve(id).then((resolved) {
-                  if (dialogContext.mounted) {
-                    setDialogState(() => book = resolved ?? book);
-                  }
-                });
-              },
-              child: const Text('换一本'),
-            ),
-            TextButton(
-              onPressed: () {
-                Navigator.of(dialogContext).pop();
-                final target = book;
-                if (target != null) {
-                  openDetail(context, target, state, widget.repository);
-                } else {
-                  showNovelFeedback(context, '书籍信息载入失败');
-                }
-              },
-              child: const Text('开始阅读'),
-            ),
-          ],
         ),
       ),
     );
