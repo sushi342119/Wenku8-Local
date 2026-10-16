@@ -69,6 +69,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     try {
       final result = await local.scan();
       if (!mounted) return;
+      // 字数静默补算后刷新首页 feed，详情页简介才能显示最新字数。
+      if (result.backfilled > 0) {
+        await _catalog.refresh();
+        if (!mounted) return;
+      }
       final changed = result.added + result.refreshed + result.removed;
       if (changed == 0) return;
       final state = widget.state;

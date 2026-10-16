@@ -116,7 +116,10 @@ class LocalBook {
   String get displayAuthor =>
       (customAuthor ?? '').trim().isEmpty ? author : customAuthor!.trim();
 
-  LocalBook copyWith({String? customTitle, String? customAuthor}) => LocalBook(
+  /// 注意：customTitle/customAuthor 传 null 表示清空（恢复文件名解析）；
+  /// wordCount 传 null 则表示保留原值（用于字数补算）。
+  LocalBook copyWith({String? customTitle, String? customAuthor, int? wordCount}) =>
+      LocalBook(
         id: id,
         title: title,
         author: author,
@@ -127,7 +130,7 @@ class LocalBook {
         modified: modified,
         chapters: chapters,
         pageCount: pageCount,
-        wordCount: wordCount,
+        wordCount: wordCount ?? this.wordCount,
         customTitle: customTitle,
         customAuthor: customAuthor,
         sourceId: sourceId,
@@ -186,12 +189,16 @@ class LocalScanResult {
     required this.removed,
     required this.total,
     required this.skipped,
+    this.backfilled = 0,
   });
   final int added;
   final int refreshed;
   final int removed;
   final int total;
   final int skipped;
+
+  /// 静默补算了字数的旧书数量（不计入 added/refreshed，不弹提示）。
+  final int backfilled;
 }
 
 /// 章节标题启发式：行首的"第X章/节/回"、Chapter N、序章/番外/后记等短行。
@@ -344,7 +351,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         if (book.sourceId.isEmpty) book.fileUri: book
     };
     final seen = <String>{};
-    var added = 0, refreshed = 0, removed = 0, skipped = 0;
+    var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
     for (final entry in entries) {
       final uri = entry['uri'] as String? ?? '';
       final name = entry['name'] as String? ?? '';
@@ -355,7 +362,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final modified = (entry['modified'] as num?)?.toInt() ?? 0;
       final existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
-        if (existing.size == size && existing.modified == modified) continue;
+        if (existing.size == size && existing.modified == modified) {
+          // 文件未变但缺字数时静默补算（v15 之前导入的书）。
+          if (await _backfillWordCount(existing)) backfilled++;
+          continue;
+        }
         // 先尝试导入，成功后再删除旧数据（修复#3：避免失败后丢失）。
         LocalBook? book;
         try {
@@ -430,6 +441,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       removed: removed,
       total: _books.length,
       skipped: skipped,
+      backfilled: backfilled,
     );
   });
 
@@ -458,7 +470,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           book.fileUri: book
     };
     final seen = <String>{};
-    var added = 0, refreshed = 0, removed = 0, skipped = 0;
+    var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
     final files = await dir.list().where((e) => e is File).cast<File>().toList();
     for (final file in files) {
       final name = file.path.split('/').last;
@@ -472,7 +484,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final modified = stat.modified.millisecondsSinceEpoch;
       final existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
-        if (existing.size == size && existing.modified == modified) continue;
+        if (existing.size == size && existing.modified == modified) {
+          // 文件未变但缺字数时静默补算（v15 之前导入的书）。
+          if (await _backfillWordCount(existing)) backfilled++;
+          continue;
+        }
         LocalBook? book;
         try {
           book = await _importDirectFile(
@@ -534,6 +550,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       removed: removed,
       total: _books.length,
       skipped: skipped,
+      backfilled: backfilled,
     );
   });
 
@@ -760,6 +777,30 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final text = await LocalPlatform.readLocalText(book.fileUri);
     await file.writeAsString(text);
     return text;
+  }
+
+  /// v15 之前导入的 TXT 没有字数：扫描时用应用内副本一次性补算。
+  /// 静默迁移，不计入 added/refreshed；单本失败不影响扫描整体。
+  /// 返回 true 表示本次补算成功了一本。
+  Future<bool> _backfillWordCount(LocalBook existing) async {
+    if (existing.kind != LocalBookKind.txt || existing.wordCount != null) {
+      return false;
+    }
+    try {
+      final text = await _readBookText(existing);
+      if (text.isEmpty) return false;
+      final index = _books.indexWhere((b) => b.id == existing.id);
+      if (index < 0) return false;
+      // 注意 copyWith 传 null 会清空 customTitle/customAuthor，这里必须透传原值。
+      _books[index] = existing.copyWith(
+        wordCount: _countWords(text),
+        customTitle: existing.customTitle,
+        customAuthor: existing.customAuthor,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Novel toNovel(LocalBook book) {
