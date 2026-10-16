@@ -1968,12 +1968,12 @@ class SettingsPage extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const Text(
-                            '内置思源宋体',
+                            '应用字体',
                             style: TextStyle(fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 5),
                           Text(
-                            '关闭后使用系统字体',
+                            state.currentFont.displayName,
                             style: TextStyle(
                               fontSize: 12,
                               color: Theme.of(
@@ -1985,18 +1985,10 @@ class SettingsPage extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    CupertinoSwitch(
-                      key: const ValueKey('settings-serif-font'),
-                      value: state.appTypeface == AppTypeface.sourceHanSerif,
-                      activeTrackColor: Theme.of(context).colorScheme.primary,
-                      onChanged: (value) => _savePreference(
-                        context,
-                        () => state.setAppTypeface(
-                          value
-                              ? AppTypeface.sourceHanSerif
-                              : AppTypeface.system,
-                        ),
-                      ),
+                    GlassTextButton(
+                      key: const ValueKey('settings-font-picker'),
+                      onPressed: () => _showFontPicker(context),
+                      child: const Text('选择'),
                     ),
                   ],
                 ),
@@ -2285,6 +2277,149 @@ class SettingsPage extends StatelessWidget {
       ),
     ),
   );
+
+  /// 应用字体选择：内置字体 + 从手机导入的字体。
+  Future<void> _showFontPicker(BuildContext context) async {
+    // 预加载已导入字体以便预览。
+    unawaited(state.preloadImportedFonts());
+    await showJellySheet<void>(
+      context: context,
+      reduceMotion: state.reduceMotion,
+      builder: (sheet) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) {
+          final fonts = state.allFonts;
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text(
+                  '应用字体',
+                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '对整个应用生效（含阅读器）。',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(
+                      sheetContext,
+                    ).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Flexible(
+                  child: ListView.builder(
+                    shrinkWrap: true,
+                    itemCount: fonts.length,
+                    itemBuilder: (listContext, index) {
+                      final font = fonts[index];
+                      final selected = state.appFontId == font.id;
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(
+                          font.displayName,
+                          style: TextStyle(
+                            fontFamily: font.family,
+                            fontFamilyFallback: const [
+                              'SourceHanSerifCN',
+                            ],
+                          ),
+                        ),
+                        subtitle: font.source == AppFontSource.imported
+                            ? const Text('从手机导入', style: TextStyle(fontSize: 12))
+                            : null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (font.source == AppFontSource.imported)
+                              IconButton(
+                                icon: const Icon(CupertinoIcons.delete, size: 20),
+                                onPressed: () async {
+                                  final confirm = await confirmNovelAction(
+                                    sheetContext,
+                                    title: '删除字体？',
+                                    message:
+                                        '「${font.displayName}」将从应用中移除。如正在使用，会切回系统字体。',
+                                    confirmLabel: '删除',
+                                    reduceMotion: state.reduceMotion,
+                                  );
+                                  if (confirm && sheetContext.mounted) {
+                                    await _savePreference(
+                                      sheetContext,
+                                      () => state.removeImportedFont(font.id),
+                                    );
+                                    setSheetState(() {});
+                                  }
+                                },
+                              ),
+                            if (selected)
+                              const Icon(CupertinoIcons.check_mark, size: 20),
+                          ],
+                        ),
+                        onTap: selected
+                            ? null
+                            : () async {
+                                await _savePreference(
+                                  sheetContext,
+                                  () => state.setAppFont(font.id),
+                                );
+                                setSheetState(() {});
+                              },
+                      );
+                    },
+                  ),
+                ),
+                const SizedBox(height: 16),
+                GlassTextButton(
+                  onPressed: () => _importFontFromPhone(sheetContext,
+                      onDone: () => setSheetState(() {})),
+                  child: const Text('从手机导入字体文件'),
+                ),
+                const SizedBox(height: 8),
+                GlassTextButton(
+                  onPressed: () => Navigator.pop(sheet),
+                  child: const Text('完成'),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+    if (mounted) setState(() {});
+  }
+
+  /// 从手机选择 TTF/OTF 字体文件并导入，成功后自动应用。
+  Future<void> _importFontFromPhone(
+    BuildContext context, {
+    VoidCallback? onDone,
+  }) async {
+    String? path;
+    try {
+      path = await LocalPlatform.pickFontFile();
+    } catch (_) {
+      if (context.mounted) showNovelFeedback(context, '无法打开文件选择器');
+      return;
+    }
+    if (path == null || path.isEmpty) return; // 用户取消
+    final fileName = path.split('/').last;
+    final displayName = fileName.replaceAll(
+      RegExp(r'\.(ttf|otf|ttc)$', caseSensitive: false),
+      '',
+    );
+    try {
+      final id = await state.registerImportedFont(path, displayName);
+      await state.setAppFont(id);
+      onDone?.call();
+      if (context.mounted) {
+        showNovelFeedback(context, '已应用「$displayName」');
+      }
+    } catch (_) {
+      if (context.mounted) showNovelFeedback(context, '字体导入失败，文件可能已损坏');
+    }
+  }
 
   Widget _appearanceSetting(BuildContext context) {
     final label = Row(
@@ -3325,7 +3460,7 @@ class _ReaderPageState extends State<ReaderPage>
   bool _followAutomatic = false;
   int _restoreTicket = 0;
   double _layoutWidth = 0;
-  AppTypeface _layoutTypeface = AppTypeface.system;
+  String _layoutFontId = 'system';
   bool _typographyPreviewing = false;
   double _layoutTextScale = 1;
   double _readingInset = 0;
@@ -3414,7 +3549,7 @@ class _ReaderPageState extends State<ReaderPage>
         media.textScaler.scale(widget.state.fontSize) / widget.state.fontSize;
     if ((media.size.width - _layoutWidth).abs() >= 1 ||
         (scale - _layoutTextScale).abs() >= .01 ||
-        _layoutTypeface != widget.state.appTypeface) {
+        _layoutFontId != widget.state.appFontId) {
       final position = _currentPosition();
       if (position != null) _prepareRestore(position);
     }
@@ -3994,7 +4129,7 @@ class _ReaderPageState extends State<ReaderPage>
             paragraphIndex: position?.paragraphIndex,
             paragraphFraction: position?.paragraphFraction ?? 0,
             textScale: _textScale,
-            typeface: position?.typeface ?? _layoutTypeface.name,
+            typeface: position?.typeface ?? _layoutFontId,
           )
           .catchError((Object _) {}),
     );
@@ -4036,7 +4171,7 @@ class _ReaderPageState extends State<ReaderPage>
           (previous.offset - offset).abs() < .5 &&
           previous.fontSize == widget.state.fontSize &&
           previous.lineHeight == widget.state.lineHeight &&
-          previous.typeface == _layoutTypeface.name &&
+          previous.typeface == _layoutFontId &&
           (previous.width - _layoutWidth).abs() < .5 &&
           (previous.textScale - _textScale).abs() < .01) {
         paragraph = (
@@ -4057,7 +4192,7 @@ class _ReaderPageState extends State<ReaderPage>
       paragraphIndex: paragraph?.index,
       paragraphFraction: paragraph?.fraction ?? 0,
       textScale: _textScale,
-      typeface: _layoutTypeface.name,
+      typeface: _layoutFontId,
     );
   }
 
@@ -4192,7 +4327,7 @@ class _ReaderPageState extends State<ReaderPage>
             (saved.lineHeight - widget.state.lineHeight).abs() < .01 &&
             (saved.width - _layoutWidth).abs() < 1 &&
             (saved.textScale - _textScale).abs() < .01 &&
-            saved.typeface == widget.state.appTypeface.name;
+            saved.typeface == widget.state.appFontId;
         var anchor =
             saved.paragraphIndex != null &&
                 saved.paragraphIndex! >= 0 &&
@@ -4292,7 +4427,7 @@ class _ReaderPageState extends State<ReaderPage>
         ? const NovelChapter('目录为空', '')
         : widget.novel.chapters[_chapter];
     _layoutWidth = MediaQuery.sizeOf(context).width;
-    _layoutTypeface = widget.state.appTypeface;
+    _layoutFontId = widget.state.appFontId;
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
       // The catalogue owns the keyboard inset; keep the obscured article and

@@ -34,6 +34,7 @@ Future<void> main() async {
   // Do not hold the first frame while Android is applying window insets.
   unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
   final state = await LibraryState.load();
+  await state.ensureFontLoaded();
   await TagStore.load();
   if (state.performance.needsRuntimeEffects) await NativeEffects.prepare();
   final brightness = switch (state.theme) {
@@ -100,23 +101,27 @@ class _NovelAppState extends State<NovelApp> {
   NovelRepository get repository => widget.repository;
   ListeningController? get listening => widget.listening;
   AppUpdates? get updates => widget.updates;
-  late AppTypeface _lastTypeface = state.appTypeface;
+  late String _lastFontId = state.appFontId;
   static final _themes =
-      <(TargetPlatform, Brightness, AppTypeface), ThemeData>{};
+      <(TargetPlatform, Brightness, String), ThemeData>{};
 
   ThemeData _theme(Brightness brightness) => _themes.putIfAbsent((
     defaultTargetPlatform,
     brightness,
-    state.appTypeface,
-  ), () => novelTheme(brightness, fontFamily: state.appTypeface.family));
+    state.appFontId,
+  ), () => novelTheme(
+        brightness,
+        fontFamily: state.currentFont.family,
+        fontFamilyFallback: state.fontFamilyFallback,
+      ));
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: state.applicationChanges,
       builder: (context, child) {
-        final typefaceChanged = _lastTypeface != state.appTypeface;
-        _lastTypeface = state.appTypeface;
+        final typefaceChanged = _lastFontId != state.appFontId;
+        _lastFontId = state.appFontId;
         return MaterialApp(
           title: '轻小说文库',
           debugShowCheckedModeBanner: false,

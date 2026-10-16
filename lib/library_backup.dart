@@ -16,6 +16,7 @@ final backupPreferenceKeys = <String>{
   'readerKeepScreenOn',
   'checkAppUpdates',
   'appTypeface',
+  'appFontId',
   'shelfSort',
   'shelfFilter',
   PerformancePreferences.modeKey,
@@ -173,6 +174,7 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
         'readerKeepScreenOn' ||
         'checkAppUpdates' => value is bool,
         'appTypeface' => value == 'system' || value == 'sourceHanSerif',
+        'appFontId' => value is String && value.isNotEmpty,
         'readerFontSize' => _number(value, 15, 27),
         'readerLineHeight' => _number(value, 1.3, 2.2),
         'glassBlur' => _number(value, 0, 24),

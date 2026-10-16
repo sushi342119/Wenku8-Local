@@ -112,6 +112,10 @@ abstract final class LocalPlatform {
     return (fileUri: fileUri, fileName: fileName, sourceKey: fileUri);
   }
 
+  /// SAF：选择字体文件（TTF/OTF），复制到应用私有目录后返回绝对路径；取消返回 null。
+  static Future<String?> pickFontFile() =>
+      channel.invokeMethod<String>('pickFontFile');
+
   static Future<void> shareText(String text) =>
       channel.invokeMethod<void>('shareText', {'text': text});
   static final Set<Object> _awakeOwners = {};

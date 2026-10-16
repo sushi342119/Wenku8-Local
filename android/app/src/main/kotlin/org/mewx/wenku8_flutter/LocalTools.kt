@@ -28,10 +28,13 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     private data class Pending(val result: MethodChannel.Result, val export: String?, val legacy: Boolean = false)
     private var pending: Pending? = null
     private var pendingFolder: MethodChannel.Result? = null
+    private var pendingFont: MethodChannel.Result? = null
     private var closed = false
     companion object {
         private const val REQUEST = 8019
         private const val REQUEST_FOLDER = 8021
+        private const val REQUEST_FONT = 8023
+        private const val MAX_FONT_BYTES = 100 * 1024 * 1024
         private const val MAX_BYTES = 4 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 16 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
@@ -99,7 +102,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
                 "pickLocalFolder", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
-                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument"
+                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
             )
         ) return false
         if (closed) {
@@ -118,6 +121,32 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 } catch (_: Exception) {
                     pendingFolder = null
                     result.error("picker", "Folder picker could not open", null)
+                }
+                return true
+            }
+            "pickFontFile" -> {
+                if (pendingFont != null) {
+                    result.error("busy", "A font picker is already active", null)
+                    return true
+                }
+                pendingFont = result
+                try {
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(
+                            Intent.EXTRA_MIME_TYPES,
+                            arrayOf(
+                                "font/ttf", "font/otf", "font/ttc",
+                                "application/font-sfnt",
+                                "application/x-font-ttf", "application/x-font-otf",
+                            ),
+                        )
+                    }
+                    activity.startActivityForResult(intent, REQUEST_FONT)
+                } catch (_: Exception) {
+                    pendingFont = null
+                    result.error("picker", "Font picker could not open", null)
                 }
                 return true
             }
@@ -159,6 +188,27 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     fun onActivityResult(request: Int, code: Int, data: Intent?): Boolean {
+        if (request == REQUEST_FONT) {
+            val result = pendingFont
+            pendingFont = null
+            if (result == null) return true
+            val uri = data?.data
+            if (code != Activity.RESULT_OK || uri == null) {
+                result.success(null)
+                return true
+            }
+            io.execute {
+                try {
+                    val path = copyFontToPrivateDir(uri)
+                    activity.runOnUiThread { if (!closed) result.success(path) }
+                } catch (e: SecurityException) {
+                    activity.runOnUiThread { if (!closed) result.error("permission", "Font permission was revoked", null) }
+                } catch (e: Exception) {
+                    activity.runOnUiThread { if (!closed) result.error("font", e.message ?: "Font import failed", null) }
+                }
+            }
+            return true
+        }
         if (request == REQUEST_FOLDER) {
             val result = pendingFolder
             pendingFolder = null
@@ -467,6 +517,58 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             "fileName" to (displayName?.takeIf { it.isNotBlank() } ?: newFileName),
             "sourceKey" to newUri.toString(),
         )
+    }
+
+    /** 从 SAF 选择字体文件，校验 sfnt 签名后复制到应用私有目录，返回绝对路径。 */
+    private fun copyFontToPrivateDir(uri: Uri): String {
+        val resolver = activity.contentResolver
+        // 读取头部校验字体签名：TTF(\x00\x01\x00\x00)、OTF(OTTO)、TTC(ttcf)。
+        val header = ByteArray(4)
+        resolver.openInputStream(uri)?.use { input ->
+            var read = 0
+            while (read < 4) {
+                val n = input.read(header, read, 4 - read)
+                if (n < 0) break
+                read += n
+            }
+            if (read < 4) throw IllegalStateException("文件太小，不是有效的字体文件")
+        } ?: throw IllegalStateException("无法读取所选文件")
+        val sig = String(header, Charsets.ISO_8859_1)
+        val ext = when {
+            sig == "\u0000\u0001\u0000\u0000" -> "ttf"
+            sig == "OTTO" -> "otf"
+            sig == "ttcf" -> "ttc"
+            else -> throw IllegalStateException("不是有效的字体文件（仅支持 TTF/OTF）")
+        }
+        // 取原文件名（去非法字符），避免冲突加时间戳。
+        var displayName: String? = null
+        try {
+            resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) displayName = c.getString(0)
+            }
+        } catch (_: Exception) {
+        }
+        val safeBase = (displayName?.substringBeforeLast('.')?.takeIf { it.isNotBlank() } ?: "font")
+            .replace(Regex("[^A-Za-z0-9_\\-\\u4e00-\\u9fff]"), "_")
+            .take(40)
+        val dir = File(activity.filesDir, "fonts").apply { mkdirs() }
+        val dest = File(dir, "${safeBase}_${System.currentTimeMillis()}.$ext")
+        resolver.openInputStream(uri)?.use { input ->
+            FileOutputStream(dest).use { output ->
+                val buf = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > MAX_FONT_BYTES) {
+                        throw IllegalStateException("字体文件过大（超过 100MB）")
+                    }
+                    output.write(buf, 0, n)
+                }
+            }
+        } ?: throw IllegalStateException("无法读取所选文件")
+        return dest.absolutePath
     }
 
     /** Only documented record/index files from the explicitly selected tree.

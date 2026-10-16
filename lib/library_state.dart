@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
@@ -208,7 +211,7 @@ class LibraryState extends ChangeNotifier {
     _fontSize = preference('readerFontSize', 19, 15, 27);
     _lineHeight = preference('readerLineHeight', 1.72, 1.3, 2.2);
     _reduceMotion = _prefs.get('reduceMotion') == true;
-    _appTypeface = AppTypeface.fromRecord(_prefs.get('appTypeface'));
+    _loadFontState();
     _performance = PerformancePreferences.fromRecords({
       for (final key in [
         PerformancePreferences.modeKey,
@@ -275,7 +278,8 @@ class LibraryState extends ChangeNotifier {
   double _fontSize = 19;
   double _lineHeight = 1.72;
   bool _reduceMotion = false;
-  AppTypeface _appTypeface = AppTypeface.system;
+  String _appFontId = appFontSystem.id;
+  final List<AppFontEntry> _importedFonts = [];
   PerformancePreferences _performance = const PerformancePreferences();
   double _glassBlur = 8;
   double _glassOpacity = .87;
@@ -308,7 +312,40 @@ class LibraryState extends ChangeNotifier {
   double get lineHeight => _lineHeight;
   int get debugMetadataEncodeCount => _metadataEncodes;
   bool get reduceMotion => _reduceMotion;
-  AppTypeface get appTypeface => _appTypeface;
+
+  /// 当前字体 ID（稳定 ID，持久化）。
+  String get appFontId => _appFontId;
+
+  /// 全部可用字体：系统、内置、已导入。
+  List<AppFontEntry> get allFonts => [
+        appFontSystem,
+        appFontSourceHanSerif,
+        ..._importedFonts,
+      ];
+
+  List<AppFontEntry> get importedFonts => List.unmodifiable(_importedFonts);
+
+  /// 当前字体条目；ID 失效时回退到系统字体。
+  AppFontEntry get currentFont {
+    for (final f in allFonts) {
+      if (f.id == _appFontId) return f;
+    }
+    return appFontSystem;
+  }
+
+  /// 缺字回退链：用户字体 → 内置思源宋体 → 系统。
+  List<String> get fontFamilyFallback {
+    final family = currentFont.family;
+    if (family == null || family == appFontSourceHanSerif.family) {
+      return const [];
+    }
+    return const ['SourceHanSerifCN'];
+  }
+
+  /// 兼容旧代码：由字体 ID 映射回枚举。
+  AppTypeface get appTypeface => _appFontId == appFontSourceHanSerif.id
+      ? AppTypeface.sourceHanSerif
+      : AppTypeface.system;
   PerformancePreferences get performance => _performance;
   bool get effectiveReduceMotion => _reduceMotion || !_performance.motion;
   double get glassBlur => _glassBlur;
@@ -821,7 +858,7 @@ class LibraryState extends ChangeNotifier {
           : null,
       paragraphFraction: paragraphFraction.clamp(0, 1),
       textScale: textScale.clamp(.5, 5),
-      typeface: AppTypeface.fromRecord(typeface ?? appTypeface.name).name,
+      typeface: typeface ?? _appFontId,
     );
     _positions[novel.id] = position;
     final chapterChanged = _chapters[novel.id] != chapter;
@@ -867,14 +904,114 @@ class LibraryState extends ChangeNotifier {
     await writeLibraryPreference(_prefs, 'theme', mode.name);
   }
 
-  Future<void> setAppTypeface(AppTypeface value) async {
+  /// 从持久化恢复字体选择与导入字体列表；兼容旧版 appTypeface。
+  void _loadFontState() {
+    final rawId = _prefs.getString('appFontId');
+    if (rawId != null && rawId.isNotEmpty) {
+      _appFontId = rawId;
+    } else {
+      // 旧版迁移：appTypeface 存的是 'system' / 'sourceHanSerif'。
+      _appFontId = AppTypeface.fromRecord(_prefs.get('appTypeface')).name == 'sourceHanSerif'
+          ? appFontSourceHanSerif.id
+          : appFontSystem.id;
+    }
+    _importedFonts.clear();
+    final rawList = _prefs.getString('importedFonts');
+    if (rawList != null && rawList.isNotEmpty) {
+      try {
+        final list = jsonDecode(rawList);
+        if (list is List) {
+          for (final item in list) {
+            if (item is Map<String, Object?>) {
+              final entry = AppFontEntry.fromJson(item);
+              if (entry.id.isNotEmpty &&
+                  entry.source == AppFontSource.imported &&
+                  entry.family != null) {
+                _importedFonts.add(entry);
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+    // 选择的导入字体若已不在列表中，回退到系统字体。
+    if (_appFontId != appFontSystem.id &&
+        _appFontId != appFontSourceHanSerif.id &&
+        !_importedFonts.any((f) => f.id == _appFontId)) {
+      _appFontId = appFontSystem.id;
+    }
+  }
+
+  Future<void> _persistFontState() async {
+    await _prefs.setString('appFontId', _appFontId);
+    await _prefs.setString(
+      'importedFonts',
+      jsonEncode(_importedFonts.map((f) => f.toJson()).toList()),
+    );
+  }
+
+  /// 持久化导入字体列表（不进备份日志，文件本身不在备份范围内）。
+
+  /// 确保当前选中的导入字体已通过 FontLoader 加载（启动时调用）。
+  /// 加载失败时回退到系统字体。
+  Future<void> ensureFontLoaded() async {
+    final entry = currentFont;
+    if (entry.source != AppFontSource.imported ||
+        entry.family == null ||
+        entry.filePath == null) {
+      return;
+    }
+    try {
+      final file = File(entry.filePath!);
+      if (!await file.exists()) throw StateError('字体文件不存在');
+      final bytes = await file.readAsBytes();
+      final loader = FontLoader(entry.family!);
+      loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+      await loader.load();
+    } catch (_) {
+      _appFontId = appFontSystem.id;
+      try {
+        await _persistFontState();
+      } catch (_) {}
+      notifyListeners();
+    }
+  }
+
+  /// 预加载全部已导入字体（供字体选择器预览用）；失败的跳过。
+  Future<void> preloadImportedFonts() async {
+    for (final entry in _importedFonts) {
+      if (entry.family == null || entry.filePath == null) continue;
+      try {
+        final file = File(entry.filePath!);
+        if (!await file.exists()) continue;
+        final bytes = await file.readAsBytes();
+        final loader = FontLoader(entry.family!);
+        loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+        await loader.load();
+      } catch (_) {}
+    }
+  }
+
+  /// 切换应用字体；导入字体会先确保加载成功。
+  Future<void> setAppFont(String id) async {
     if (_restoreBarrier case final barrier?) {
-      return barrier.future.then((_) => setAppTypeface(value));
+      return barrier.future.then((_) => setAppFont(id));
     }
     await _queuePositionWrite(() async {
-      if (_appTypeface == value) return;
-      await _commitLibraryRecords({'appTypeface': value.name});
-      _appTypeface = value;
+      if (_appFontId == id) return;
+      final previous = _appFontId;
+      _appFontId = id;
+      if (currentFont.source == AppFontSource.imported) {
+        try {
+          await ensureFontLoaded();
+        } catch (_) {
+          _appFontId = previous;
+          return;
+        }
+        // ensureFontLoaded 失败时已将 _appFontId 置为 system，
+        // 下面继续走持久化与通知，保证回退生效。
+      }
+      await _persistFontState();
       if (!_disposed) {
         _application.notifyListeners();
         _appearance.notifyListeners();
@@ -884,6 +1021,56 @@ class LibraryState extends ChangeNotifier {
       }
     });
   }
+
+  /// 注册从手机导入的字体文件（文件已由原生层复制到私有目录）。
+  /// 返回新字体的稳定 ID。
+  Future<String> registerImportedFont(String filePath, String displayName) async {
+    final file = File(filePath);
+    if (!await file.exists()) throw StateError('字体文件不存在');
+    final id =
+        'imported_${DateTime.now().millisecondsSinceEpoch}_${filePath.hashCode.abs()}';
+    final entry = AppFontEntry(
+      id: id,
+      displayName: displayName.isEmpty ? '导入字体' : displayName,
+      family: 'user_font_$id',
+      source: AppFontSource.imported,
+      filePath: filePath,
+    );
+    // 先加载验证字体可用。
+    final bytes = await file.readAsBytes();
+    final loader = FontLoader(entry.family!);
+    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+    await loader.load();
+    _importedFonts.add(entry);
+    await _persistFontState();
+    notifyListeners();
+    return id;
+  }
+
+  /// 删除导入的字体（含文件）；若正选中则回退到系统字体。
+  Future<void> removeImportedFont(String id) async {
+    final index = _importedFonts.indexWhere((f) => f.id == id);
+    if (index < 0) return;
+    final entry = _importedFonts[index];
+    _importedFonts.removeAt(index);
+    try {
+      final path = entry.filePath;
+      if (path != null) {
+        final file = File(path);
+        if (await file.exists()) await file.delete();
+      }
+    } catch (_) {}
+    if (_appFontId == id) _appFontId = appFontSystem.id;
+    await _persistFontState();
+    notifyListeners();
+  }
+
+  /// 兼容旧调用：枚举转字体 ID。
+  Future<void> setAppTypeface(AppTypeface value) => setAppFont(
+        value == AppTypeface.sourceHanSerif
+            ? appFontSourceHanSerif.id
+            : appFontSystem.id,
+      );
 
   Future<void> setFontSize(double size, {bool persist = true}) =>
       setTypography(fontSize: size, persist: persist);
@@ -1010,7 +1197,7 @@ class LibraryState extends ChangeNotifier {
     'readerFontSize': _fontSize,
     'readerLineHeight': _lineHeight,
     'reduceMotion': _reduceMotion,
-    'appTypeface': _appTypeface.name,
+    'appFontId': _appFontId,
     ..._performance.toRecords(),
     'glassBlur': _glassBlur,
     'glassOpacity': _glassOpacity,
@@ -1223,8 +1410,16 @@ class LibraryState extends ChangeNotifier {
           if (records['reduceMotion'] case final bool value) {
             _reduceMotion = value;
           }
-          if (records['appTypeface'] case final String value) {
-            _appTypeface = AppTypeface.fromRecord(value);
+          if (records['appFontId'] case final String value) {
+            if (value == appFontSystem.id ||
+                value == appFontSourceHanSerif.id) {
+              _appFontId = value;
+            }
+          } else if (records['appTypeface'] case final String value) {
+            // 旧版备份兼容。
+            _appFontId = value == 'sourceHanSerif'
+                ? appFontSourceHanSerif.id
+                : appFontSystem.id;
           }
           _performance = PerformancePreferences.fromRecords({
             ..._performance.toRecords(),

@@ -67,7 +67,11 @@ SystemUiOverlayStyle novelSystemUiStyle(Brightness brightness) {
   );
 }
 
-ThemeData novelTheme(Brightness brightness, {String? fontFamily}) {
+ThemeData novelTheme(
+  Brightness brightness, {
+  String? fontFamily,
+  List<String>? fontFamilyFallback,
+}) {
   final dark = brightness == Brightness.dark;
   final scheme = ColorScheme.fromSeed(
     seedColor: accent,
@@ -87,6 +91,7 @@ ThemeData novelTheme(Brightness brightness, {String? fontFamily}) {
     splashFactory: InkRipple.splashFactory,
     textTheme: ThemeData(brightness: brightness).textTheme.apply(
       fontFamily: fontFamily,
+      fontFamilyFallback: fontFamilyFallback,
       bodyColor: dark ? Colors.white : ink,
       displayColor: dark ? Colors.white : ink,
     ),
