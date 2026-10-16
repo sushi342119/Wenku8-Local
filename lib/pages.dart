@@ -12,6 +12,7 @@ import 'app_typography.dart';
 import 'app_interactions.dart';
 import 'archive_carousel.dart';
 import 'archive_random_pick_card.dart';
+import 'novel_random_pick_section.dart';
 import 'backup_page.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
@@ -713,11 +714,8 @@ class DiscoverPage extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(height: 16),
-                        ArchiveRandomPickCard<Novel>(
+                        NovelRandomPickSection(
                           books: books,
-                          titleOf: (book) => book.title,
-                          authorOf: (book) => book.author,
-                          identityOf: (book) => book.id,
                           onOpenDetail: (book) => openDetail(
                             context,
                             book,
