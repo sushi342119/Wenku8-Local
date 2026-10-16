@@ -2363,7 +2363,9 @@ class SettingsPage extends StatelessWidget {
                                       confirmLabel: '删除',
                                       reduceMotion: state.reduceMotion,
                                     );
-                                    if (!confirm) return;
+                                    if (!confirm || !sheetContext.mounted) {
+                                      return;
+                                    }
                                     await _savePreference(
                                       sheetContext,
                                       () => state.removeImportedFont(font.id),

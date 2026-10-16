@@ -283,6 +283,9 @@ class LibraryState extends ChangeNotifier {
 
   /// 已通过 FontLoader 注册的 family，避免重复加载。
   final Set<String> _loadedFontFamilies = {};
+
+  /// 进行中的字体加载任务（按 family），并发调用等待同一任务。
+  final Map<String, Future<bool>> _fontLoadInflight = {};
   PerformancePreferences _performance = const PerformancePreferences();
   double _glassBlur = 8;
   double _glassOpacity = .87;
@@ -914,9 +917,12 @@ class LibraryState extends ChangeNotifier {
       _appFontId = rawId;
     } else {
       // 旧版迁移：appTypeface 存的是 'system' / 'sourceHanSerif'。
-      _appFontId = AppTypeface.fromRecord(_prefs.get('appTypeface')).name == 'sourceHanSerif'
+      // 落盘迁移结果，下次不再依赖旧 key。
+      _appFontId = AppTypeface.fromRecord(_prefs.get('appTypeface')).name ==
+              'sourceHanSerif'
           ? appFontSourceHanSerif.id
           : appFontSystem.id;
+      unawaited(_prefs.setString('appFontId', _appFontId));
     }
     _importedFonts.clear();
     final rawList = _prefs.getString('importedFonts');
@@ -955,21 +961,39 @@ class LibraryState extends ChangeNotifier {
 
   /// 持久化导入字体列表（不进备份日志，文件本身不在备份范围内）。
 
-  /// 用 FontLoader 注册单个导入字体；已加载过的跳过。
+  /// 用 FontLoader 注册单个导入字体；已加载或正在加载的复用同一任务。
   /// 返回 true 表示可用。
-  Future<bool> _loadImportedEntry(AppFontEntry entry) async {
+  Future<bool> _loadImportedEntry(AppFontEntry entry) {
     final family = entry.family;
     final path = entry.filePath;
-    if (family == null || path == null) return false;
-    if (_loadedFontFamilies.contains(family)) return true;
-    final file = File(path);
-    if (!await file.exists()) return false;
-    final bytes = await file.readAsBytes();
-    final loader = FontLoader(family);
-    loader.addFont(Future.value(ByteData.view(bytes.buffer)));
-    await loader.load();
-    _loadedFontFamilies.add(family);
-    return true;
+    if (family == null || path == null) return Future.value(false);
+    if (_loadedFontFamilies.contains(family)) return Future.value(true);
+    final inflight = _fontLoadInflight[family];
+    if (inflight != null) return inflight;
+    final task = _doLoadImportedFont(family, path).then((ok) {
+      _fontLoadInflight.remove(family);
+      if (ok) _loadedFontFamilies.add(family);
+      return ok;
+    }, onError: (Object _) {
+      _fontLoadInflight.remove(family);
+      return false;
+    });
+    _fontLoadInflight[family] = task;
+    return task;
+  }
+
+  Future<bool> _doLoadImportedFont(String family, String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return false;
+      final bytes = await file.readAsBytes();
+      final loader = FontLoader(family);
+      loader.addFont(Future.value(ByteData.view(bytes.buffer)));
+      await loader.load();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// 确保当前选中的导入字体已通过 FontLoader 加载（启动时调用）。
@@ -1018,7 +1042,12 @@ class LibraryState extends ChangeNotifier {
         // ensureFontLoaded 失败时已将 _appFontId 置为 system，
         // 下面继续走持久化与通知，保证回退生效。
       }
-      await _persistFontState();
+      try {
+        await _persistFontState();
+      } catch (_) {
+        _appFontId = previous;
+        rethrow;
+      }
       if (!_disposed) {
         _application.notifyListeners();
         _appearance.notifyListeners();
@@ -1043,11 +1072,20 @@ class LibraryState extends ChangeNotifier {
       source: AppFontSource.imported,
       filePath: filePath,
     );
-    // 先加载验证字体可用；失败时删除已复制的文件。
-    if (!await _loadImportedEntry(entry)) {
+    // 先加载验证字体可用；任何失败都删除已复制的文件，不留孤立文件。
+    bool loadedOk = false;
+    try {
+      loadedOk = await _loadImportedEntry(entry);
+    } catch (_) {
+      loadedOk = false;
+    }
+    if (!loadedOk) {
       try {
         await file.delete();
       } catch (_) {}
+      // 加载失败的 family 不应留在去重集合中，允许重试。
+      _loadedFontFamilies.remove(entry.family);
+      _fontLoadInflight.remove(entry.family);
       throw StateError('字体文件无效或已损坏');
     }
     _importedFonts.add(entry);
@@ -1063,6 +1101,7 @@ class LibraryState extends ChangeNotifier {
     final entry = _importedFonts[index];
     _importedFonts.removeAt(index);
     _loadedFontFamilies.remove(entry.family);
+    _fontLoadInflight.remove(entry.family);
     try {
       final path = entry.filePath;
       if (path != null) {
@@ -1071,13 +1110,17 @@ class LibraryState extends ChangeNotifier {
       }
     } catch (_) {}
     if (_appFontId == id) _appFontId = appFontSystem.id;
-    await _persistFontState();
-    if (!_disposed) {
-      _application.notifyListeners();
-      _appearance.notifyListeners();
-      _readerSettings.notifyListeners();
-      _settings.notifyListeners();
-      notifyListeners();
+    // 持久化失败也发出通知（内存已是最新状态，调用方会提示重试）。
+    try {
+      await _persistFontState();
+    } finally {
+      if (!_disposed) {
+        _application.notifyListeners();
+        _appearance.notifyListeners();
+        _readerSettings.notifyListeners();
+        _settings.notifyListeners();
+        notifyListeners();
+      }
     }
   }
 

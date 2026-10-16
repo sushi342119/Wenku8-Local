@@ -541,7 +541,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 ext = when (sig) {
                     "\u0000\u0001\u0000\u0000" -> "ttf"
                     "OTTO" -> "otf"
-                    "ttcf" -> "ttc"
+                    // TTC 有独立的头部布局，暂不支持，明确拒绝。
                     else -> throw IllegalStateException("不是有效的字体文件（仅支持 TTF/OTF）")
                 }
                 val numTables = ((header[4].toInt() and 0xFF) shl 8) or (header[5].toInt() and 0xFF)
@@ -565,7 +565,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
             } ?: throw IllegalStateException("无法读取所选文件")
             // 校验表目录：每个表项 16 字节，offset/length 须在文件范围内。
-            validateSfntTables(tmp, ext)
+            validateSfntTables(tmp)
             val dest = File(dir, "${safeFontBaseName(resolver, uri)}_${System.currentTimeMillis()}.$ext")
             if (!tmp.renameTo(dest)) throw IllegalStateException("保存字体失败")
             return dest.absolutePath
@@ -575,42 +575,30 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         }
     }
 
-    /** 校验 sfnt 表目录结构（非 TTC 则校验单字体，TTC 校验首个字体）。 */
-    private fun validateSfntTables(file: File, ext: String) {
+    /** 校验 sfnt 表目录结构：表项数量合理，每表 offset/length 在文件范围内，
+     * 且必须同时包含 head、name、maxp 三个必要表。 */
+    private fun validateSfntTables(file: File) {
         val size = file.length()
-        if (size < 12) throw IllegalStateException("字体文件损坏")
-        val data = ByteArray(64.coerceAtMost(size.toInt()).toInt())
+        val numTables: Int
+        val dir: ByteArray
         java.io.FileInputStream(file).use { input ->
+            val header = ByteArray(12)
             var read = 0
-            while (read < data.size) {
-                val n = input.read(data, read, data.size - read)
+            while (read < 12) {
+                val n = input.read(header, read, 12 - read)
                 if (n < 0) break
                 read += n
             }
             if (read < 12) throw IllegalStateException("字体文件损坏")
-        }
-        var dirOffset = 0
-        if (ext == "ttc") {
-            // TTC 头：ttcf + version(4) + numFonts(4)，首个字体偏移在 12 处。
-            if (size < 16) throw IllegalStateException("字体文件损坏")
-            dirOffset = ((data[12].toInt() and 0xFF) shl 24) or
-                ((data[13].toInt() and 0xFF) shl 16) or
-                ((data[14].toInt() and 0xFF) shl 8) or
-                (data[15].toInt() and 0xFF)
-            if (dirOffset < 0 || dirOffset + 12 > size) {
-                throw IllegalStateException("字体文件损坏")
+            numTables = ((header[4].toInt() and 0xFF) shl 8) or (header[5].toInt() and 0xFF)
+            if (numTables <= 0 || numTables > 64) {
+                throw IllegalStateException("字体表目录异常")
             }
-        }
-        // 简化处理：TTC 场景下如无法完整读取目录则跳过深度校验（签名已通过）。
-        if (dirOffset != 0) return
-        val numTables = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
-        if (numTables <= 0 || numTables > 64) throw IllegalStateException("字体表目录异常")
-        val need = 12 + numTables * 16
-        if (size < need) throw IllegalStateException("字体表目录不完整")
-        // 至少校验 'head' 或 'name' 表存在且范围合法（读取目录区）。
-        val dir = ByteArray(need)
-        java.io.FileInputStream(file).use { input ->
-            var read = 0
+            val need = 12 + numTables * 16
+            if (size < need) throw IllegalStateException("字体表目录不完整")
+            dir = ByteArray(need)
+            System.arraycopy(header, 0, dir, 0, 12)
+            read = 12
             while (read < need) {
                 val n = input.read(dir, read, need - read)
                 if (n < 0) break
@@ -618,7 +606,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             }
             if (read < need) throw IllegalStateException("字体表目录不完整")
         }
-        var foundEssential = false
+        val tags = mutableSetOf<String>()
         for (i in 0 until numTables) {
             val off = 12 + i * 16
             val tag = String(dir, off, 4, Charsets.ISO_8859_1)
@@ -633,9 +621,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             if (tblOffset < 0 || tblLen < 0 || tblOffset + tblLen > size) {
                 throw IllegalStateException("字体表数据越界")
             }
-            if (tag == "head" || tag == "name" || tag == "maxp") foundEssential = true
+            tags.add(tag)
         }
-        if (!foundEssential) throw IllegalStateException("字体缺少必要表")
+        if (!tags.containsAll(setOf("head", "name", "maxp"))) {
+            throw IllegalStateException("字体缺少必要表")
+        }
     }
 
     private fun safeFontBaseName(resolver: android.content.ContentResolver, uri: Uri): String {
