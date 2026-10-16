@@ -35,6 +35,38 @@ class LocalChapterIndex {
       );
 }
 
+/// 是否为 Unicode 空白字符。
+bool _isUnicodeWhitespace(int rune) {
+  return (rune >= 0x0009 && rune <= 0x000D) ||
+      rune == 0x0020 ||
+      rune == 0x0085 ||
+      rune == 0x00A0 ||
+      rune == 0x1680 ||
+      (rune >= 0x2000 && rune <= 0x200A) ||
+      rune == 0x2028 ||
+      rune == 0x2029 ||
+      rune == 0x202F ||
+      rune == 0x205F ||
+      rune == 0x3000;
+}
+
+/// 统计文本的非空白 Unicode 字符数（含标点）。
+int _countWords(String text) {
+  var count = 0;
+  for (final rune in text.runes) {
+    if (!_isUnicodeWhitespace(rune)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+/// 格式化字数：小于1万显示"1234 字"，大于等于1万显示"12.3 万字"。
+String _formatWordCount(int count) {
+  if (count < 10000) return '$count 字';
+  return '${(count / 10000).toStringAsFixed(1)} 万字';
+}
+
 class LocalBook {
   const LocalBook({
     required this.id,
@@ -47,6 +79,7 @@ class LocalBook {
     required this.modified,
     required this.chapters,
     required this.pageCount,
+    this.wordCount,
     this.customTitle,
     this.customAuthor,
     // 导入来源标识：'saf:<treeUri>' 或 'appFolder:novels'，用于按来源隔离清理。
@@ -66,6 +99,10 @@ class LocalBook {
   final int modified;
   final List<LocalChapterIndex> chapters;
   final int pageCount;
+
+  /// 正文非空白 Unicode 字符数（含标点）；null 表示未统计。
+  final int? wordCount;
+
   final String sourceId;
   final String sourceKey;
 
@@ -90,6 +127,7 @@ class LocalBook {
         modified: modified,
         chapters: chapters,
         pageCount: pageCount,
+        wordCount: wordCount,
         customTitle: customTitle,
         customAuthor: customAuthor,
         sourceId: sourceId,
@@ -107,6 +145,7 @@ class LocalBook {
         'modified': modified,
         'chapters': chapters.map((c) => c.toJson()).toList(),
         'pages': pageCount,
+        'wordCount': wordCount,
         if (customTitle != null) 'customTitle': customTitle,
         if (customAuthor != null) 'customAuthor': customAuthor,
         if (sourceId.isNotEmpty) 'sourceId': sourceId,
@@ -131,6 +170,7 @@ class LocalBook {
               .toList()
           : const [],
       pageCount: (json['pages'] as num?)?.toInt() ?? 0,
+      wordCount: (json['wordCount'] as num?)?.toInt(),
       customTitle: json['customTitle'] as String?,
       customAuthor: json['customAuthor'] as String?,
       sourceId: json['sourceId'] as String? ?? '',
@@ -535,6 +575,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (text.isEmpty) return null;
     if (text.startsWith('﻿')) text = text.substring(1);
     text = text.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    // 统计字数：非空白 Unicode 字符数（含标点）
+    final wordCount = _countWords(text);
     final chapters = _splitChapters(text);
     final id = existing?.id ?? _nextId();
     final dir = _booksDir;
@@ -551,6 +593,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       modified: modified,
       chapters: chapters,
       pageCount: 0,
+      wordCount: wordCount,
       sourceId: sourceId,
       sourceKey: sourceKey,
       customTitle: existing?.customTitle,
@@ -725,12 +768,22 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ? '${book.pageCount} 页'
         : '${book.chapters.length} 章';
     final palette = _shelfPalette[book.id % _shelfPalette.length];
+    // 组装简介：本地书籍 · TXT · 123 章 · 45.6 万字 · 2.5 MB
+    // 只有 TXT 且已统计字数时才显示字数段
+    final parts = <String>[
+      '本地书籍',
+      kindLabel,
+      countLabel,
+      if (book.kind == LocalBookKind.txt && book.wordCount != null)
+        _formatWordCount(book.wordCount!),
+      formatLocalSize(book.size),
+    ];
     return Novel(
       id: book.id,
       title: book.displayTitle,
       author: book.displayAuthor,
       genre: '本地',
-      summary: '本地书籍 · $kindLabel · $countLabel · ${formatLocalSize(book.size)}',
+      summary: parts.join(' · '),
       colors: palette,
       isComplete: true,
       chapterCount: book.kind == LocalBookKind.pdf
