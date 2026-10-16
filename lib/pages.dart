@@ -1125,7 +1125,7 @@ class _ShelfBookTags extends StatelessWidget {
 
   final List<Tag> tags;
 
-  static const double _maxChipWidth = 160;
+  static const double _maxChipWidth = 120;
 
   @override
   Widget build(BuildContext context) {
@@ -1135,13 +1135,13 @@ class _ShelfBookTags extends StatelessWidget {
     final theme = Theme.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
-        // 标签整体宽度最多 160；窄屏时不超过标题栏可用宽度。
+        // 标签整体宽度最多 120；窄屏时不超过标题栏可用宽度。
         final double maxChipWidth = constraints.hasBoundedWidth
             ? constraints.maxWidth.clamp(0.0, _maxChipWidth).toDouble()
             : _maxChipWidth;
         return Wrap(
-          spacing: 6,
-          runSpacing: 4,
+          spacing: 4,
+          runSpacing: 2,
           children: [
             for (final tag in tags)
               _buildChip(tag: tag, theme: theme, maxWidth: maxChipWidth),
@@ -1171,6 +1171,13 @@ class _ShelfBookTags extends StatelessWidget {
             maxLines: 1,
             softWrap: false,
             overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 10, height: 1.2),
+          ),
+          // 书架行内标签取小尺寸，一行能放下更多标签。
+          labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+          padding: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(8),
           ),
           backgroundColor: color.withValues(alpha: .18),
           side: BorderSide(color: color.withValues(alpha: .5)),
@@ -1230,7 +1237,7 @@ class NovelRow extends StatelessWidget {
                 ),
                 // 标签紧接标题；无标签时不创建间距。
                 if (tagRow != null) ...[
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 4),
                   tagRow!,
                 ],
                 // 本地书作者可能为空，不创建空作者行及其间距。
