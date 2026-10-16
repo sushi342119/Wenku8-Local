@@ -40,7 +40,7 @@ class _ArchiveRandomPickCardState<T extends Object>
       _dark ? const Color(0xFF1E211F) : const Color(0xFFFAF7F0);
   Color get _ink => _dark ? const Color(0xFFE8E2D6) : const Color(0xFF39352F);
   Color get _muted =>
-      _dark ? const Color(0xFF9A917F) : const Color(0xFF81786B);
+      _dark ? const Color(0xFF9A917F) : const Color(0xFF6E665A);
   Color get _border =>
       _dark ? const Color(0xFF3A352C) : const Color(0xFFDCD4C6);
   Color get _accent =>
@@ -303,7 +303,7 @@ class _ArchiveRandomPickCardState<T extends Object>
           ),
           const SizedBox(height: 12),
           Divider(height: 1, thickness: 1, color: _border),
-          const Expanded(
+          Expanded(
             child: Center(
               child: Text(
                 '待抽阅',
@@ -319,7 +319,7 @@ class _ArchiveRandomPickCardState<T extends Object>
           ),
           Divider(height: 1, thickness: 1, color: _border),
           const SizedBox(height: 12),
-          const Text(
+          Text(
             '馆藏索引 · 随机抽阅',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
@@ -691,7 +691,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Expanded(
+                    Expanded(
                       child: Text(
                         '随机抽阅',
                         style: TextStyle(
