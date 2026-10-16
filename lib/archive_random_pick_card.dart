@@ -35,11 +35,18 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 class _ArchiveRandomPickCardState<T extends Object>
     extends State<ArchiveRandomPickCard<T>>
     with SingleTickerProviderStateMixin {
-  static const _paper = Color(0xFFFAF7F0);
-  static const _ink = Color(0xFF39352F);
-  static const _muted = Color(0xFF81786B);
-  static const _border = Color(0xFFDCD4C6);
-  static const _accent = Color(0xFF715B42);
+  bool get _dark => Theme.of(context).brightness == Brightness.dark;
+  Color get _paper =>
+      _dark ? const Color(0xFF1E211F) : const Color(0xFFFAF7F0);
+  Color get _ink => _dark ? const Color(0xFFE8E2D6) : const Color(0xFF39352F);
+  Color get _muted =>
+      _dark ? const Color(0xFF9A917F) : const Color(0xFF81786B);
+  Color get _border =>
+      _dark ? const Color(0xFF3A352C) : const Color(0xFFDCD4C6);
+  Color get _accent =>
+      _dark ? const Color(0xFFB89B6E) : const Color(0xFF715B42);
+  Color get _shadow =>
+      _dark ? const Color(0x40000000) : const Color(0x1439352F);
 
   static const _durationMs = 2400;
 
@@ -264,9 +271,9 @@ class _ArchiveRandomPickCardState<T extends Object>
         color: _paper,
         borderRadius: BorderRadius.circular(9),
         border: Border.all(color: _border),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x1439352F),
+            color: _shadow,
             blurRadius: 12,
             offset: Offset(0, 4),
           ),
@@ -287,7 +294,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             '馆藏编号  ${_archiveNumber(cardId)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: _muted,
               fontSize: 11,
               height: 1.4,
@@ -295,7 +302,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             ),
           ),
           const SizedBox(height: 12),
-          const Divider(height: 1, thickness: 1, color: _border),
+          Divider(height: 1, thickness: 1, color: _border),
           const Expanded(
             child: Center(
               child: Text(
@@ -310,7 +317,7 @@ class _ArchiveRandomPickCardState<T extends Object>
               ),
             ),
           ),
-          const Divider(height: 1, thickness: 1, color: _border),
+          Divider(height: 1, thickness: 1, color: _border),
           const SizedBox(height: 12),
           const Text(
             '馆藏索引 · 随机抽阅',
@@ -339,7 +346,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             '馆藏编号  ${_archiveNumber(index)}',
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: _muted,
               fontSize: 11,
               height: 1.4,
@@ -347,7 +354,7 @@ class _ArchiveRandomPickCardState<T extends Object>
             ),
           ),
           const SizedBox(height: 12),
-          const Divider(height: 1, thickness: 1, color: _border),
+          Divider(height: 1, thickness: 1, color: _border),
           const SizedBox(height: 16),
           Expanded(
             child: Align(
@@ -356,7 +363,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                 _title(book),
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
+                style: TextStyle(
                   fontFamily: 'serif',
                   color: _ink,
                   fontSize: 23,
@@ -371,14 +378,14 @@ class _ArchiveRandomPickCardState<T extends Object>
             _author(book),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
+            style: TextStyle(
               color: _muted,
               fontSize: 14,
               height: 1.5,
             ),
           ),
           const SizedBox(height: 12),
-          const Divider(height: 1, thickness: 1, color: _border),
+          Divider(height: 1, thickness: 1, color: _border),
         ],
       ),
     );
@@ -651,7 +658,7 @@ class _ArchiveRandomPickCardState<T extends Object>
 
     final buttonStyle = ElevatedButton.styleFrom(
       backgroundColor: _accent,
-      foregroundColor: Colors.white,
+      foregroundColor: _dark ? const Color(0xFF1E211F) : Colors.white,
       disabledBackgroundColor: _border,
       disabledForegroundColor: _muted,
       elevation: 0,
@@ -709,7 +716,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                       ),
                       child: Text(
                         status,
-                        style: const TextStyle(
+                        style: TextStyle(
                           color: _muted,
                           fontSize: 12,
                           height: 1.4,
@@ -721,7 +728,7 @@ class _ArchiveRandomPickCardState<T extends Object>
                 const SizedBox(height: 8),
                 Text(
                   '从当前展出的 ${widget.books.length} 本馆藏中，抽阅一本。',
-                  style: const TextStyle(
+                  style: TextStyle(
                     color: _muted,
                     fontSize: 13,
                     height: 1.6,

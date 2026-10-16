@@ -12,11 +12,10 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.1.0';
-const currentAppBuild = 23;
+const currentAppVersion = '1.1.1';
+const currentAppBuild = 24;
 const currentReleaseNotes = '''
-1. 设置页新增“应用字体”：可从手机导入 TTF/OTF 字体，对整个应用生效
-2. 缺字时自动回退到内置思源宋体
+1. 随机抽阅卡片适配深色模式
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
