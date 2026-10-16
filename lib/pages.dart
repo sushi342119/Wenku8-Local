@@ -1878,17 +1878,28 @@ class _ShelfPageState extends State<ShelfPage> {
       if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
       return;
     }
+    // 源文件已删：关联数据尽力清理，失败如实提示（可重启后重试）。
+    var cleanupOk = true;
     try {
       await state.setShelfMembership(id, false);
-    } catch (_) {}
+    } catch (_) {
+      cleanupOk = false;
+    }
     try {
       await TagStore.shared.setTagsForBook(id, const {});
-    } catch (_) {}
+    } catch (_) {
+      cleanupOk = false;
+    }
     try {
       await state.clearBookProgress(id);
-    } catch (_) {}
+    } catch (_) {
+      cleanupOk = false;
+    }
     if (!mounted) return;
-    showNovelFeedback(context, '已删除「$title」');
+    showNovelFeedback(
+      context,
+      cleanupOk ? '已删除「$title」' : '文件已删除，但部分关联数据未清干净，可重启后重试',
+    );
   }
 
   static String _friendlyEditError(Object e) {

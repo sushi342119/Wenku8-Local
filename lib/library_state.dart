@@ -490,17 +490,17 @@ class LibraryState extends ChangeNotifier {
   }
 
   /// 彻底清除某本书的阅读进度、章节与历史隐藏标记（用于源文件被删除时）。
+  /// 即使内存中没有条目，也尝试删除持久化键，保证重试能清干净。
   Future<void> clearBookProgress(int id) {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => clearBookProgress(id));
     }
     return _queuePositionWrite(() async {
       if (id <= 0) return;
-      final hadPosition = _positions.remove(id) != null;
-      final hadChapter = _chapters.remove(id) != null;
-      final hadHidden = _hiddenHistory.remove(id);
+      _positions.remove(id);
+      _chapters.remove(id);
+      _hiddenHistory.remove(id);
       _known.remove(id);
-      if (!hadPosition && !hadChapter && !hadHidden) return;
       await _prefs.remove('reading_position_$id');
       await _prefs.remove('chapter_$id');
       _historyChanged();

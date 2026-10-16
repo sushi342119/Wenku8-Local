@@ -640,7 +640,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   });
 
   /// 删除源文件并移除书籍记录（书架/标签/阅读进度由调用方清理）。
-  /// 源文件已不存在视为删除成功；删除失败时抛错且保留记录。
+  /// 源文件删除失败时抛错且保留记录；源文件删除成功后，
+  /// 记录清理尽力完成（即使持久化失败，内存记录也会移除，
+  /// 下次删除时文件不存在会视为成功，可重试）。
   Future<void> deleteBookFile(int id) => _synchronized(() async {
     final book = bookFor(id);
     if (book == null) return;
@@ -650,7 +652,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final file = File(book.sourceKey);
       if (await file.exists()) await file.delete();
     }
-    await _deleteBookData(book);
+    try {
+      await _deleteBookData(book);
+    } catch (_) {}
     _books.remove(book);
     await _saveIndex();
   });
@@ -679,7 +683,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   /// 编辑书名/作者；书名变化时重命名源文件（保留原扩展名），book.id 不变。
-  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录。
+  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录
+  /// （重命名成功但索引保存失败时会尝试把文件名改回去）。
   Future<LocalBook> editBookFile(
     int id, {
     required String title,
@@ -692,38 +697,42 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final cleanAuthor = author.trim();
     if (cleanTitle.isEmpty) throw ArgumentError('书名不能为空');
 
+    // 只有书名真正变化时才重命名文件（只改作者时不动文件）。
     var updated = book;
-    final targetName = safeFileNameForTitle(book.fileName, cleanTitle);
-    if (targetName == null) throw ArgumentError('书名无法用作文件名');
-    if (targetName != book.fileName) {
-      if (book.sourceId.startsWith('saf:')) {
-        final r = await LocalPlatform.renameLocalDocument(
-          book.fileUri,
-          targetName,
-        );
-        updated = updated.copyWith(
-          title: cleanTitle,
-          fileUri: r.fileUri,
-          fileName: r.fileName,
-          sourceKey: r.sourceKey,
-        );
-      } else {
-        final dir = book.sourceKey.contains('/')
-            ? book.sourceKey.substring(0, book.sourceKey.lastIndexOf('/'))
-            : '';
-        if (dir.isEmpty) throw StateError('文件路径无效');
-        final targetPath = '$dir/$targetName';
-        if (targetPath != book.sourceKey) {
-          if (await File(targetPath).exists()) {
-            throw StateError('同名文件已存在');
-          }
-          final renamed = await File(book.sourceKey).rename(targetPath);
+    final renamed = cleanTitle != book.displayTitle;
+    if (renamed) {
+      final targetName = safeFileNameForTitle(book.fileName, cleanTitle);
+      if (targetName == null) throw ArgumentError('书名无法用作文件名');
+      if (targetName != book.fileName) {
+        if (book.sourceId.startsWith('saf:')) {
+          final r = await LocalPlatform.renameLocalDocument(
+            book.fileUri,
+            targetName,
+          );
           updated = updated.copyWith(
             title: cleanTitle,
-            fileUri: 'file://${renamed.path}',
-            fileName: targetName,
-            sourceKey: renamed.path,
+            fileUri: r.fileUri,
+            fileName: r.fileName,
+            sourceKey: r.sourceKey,
           );
+        } else {
+          final dir = book.sourceKey.contains('/')
+              ? book.sourceKey.substring(0, book.sourceKey.lastIndexOf('/'))
+              : '';
+          if (dir.isEmpty) throw StateError('文件路径无效');
+          final targetPath = '$dir/$targetName';
+          if (targetPath != book.sourceKey) {
+            if (await File(targetPath).exists()) {
+              throw StateError('同名文件已存在');
+            }
+            final renamedFile = await File(book.sourceKey).rename(targetPath);
+            updated = updated.copyWith(
+              title: cleanTitle,
+              fileUri: Uri.file(renamedFile.path).toString(),
+              fileName: targetName,
+              sourceKey: renamedFile.path,
+            );
+          }
         }
       }
     }
@@ -731,11 +740,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       customTitle: cleanTitle,
       customAuthor: cleanAuthor.isEmpty ? null : cleanAuthor,
     );
-    _books[index] = updated;
-    await _saveIndex();
+    try {
+      _books[index] = updated;
+      await _saveIndex();
+    } catch (e) {
+      // 索引保存失败：尝试把文件名改回去，并恢复内存记录。
+      if (renamed && updated.fileName != book.fileName) {
+        try {
+          await _renameBack(book, updated);
+        } catch (_) {}
+        _books[index] = book;
+      }
+      rethrow;
+    }
     notifyListeners();
     return updated;
   });
+
+  /// 把重命名后的文件改回原名（editBookFile 回滚用）。
+  Future<void> _renameBack(LocalBook original, LocalBook current) async {
+    if (current.sourceId.startsWith('saf:')) {
+      await LocalPlatform.renameLocalDocument(
+        current.fileUri,
+        original.fileName,
+      );
+    } else {
+      await File(current.sourceKey).rename(original.sourceKey);
+    }
+  }
 
   Future<void> _deleteBookData(LocalBook book) async {
     try {
