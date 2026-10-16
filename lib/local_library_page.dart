@@ -119,49 +119,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     }
   }
 
-  /// 备用方案：扫描应用外部文件夹（无需系统文件夹选择器）。
-  Future<void> _scanAppFolder() async {
-    if (_scanning) return;
-    setState(() => _scanning = true);
-    try {
-      final folderPath = await widget.local.appFolderPath;
-      final result = await widget.local.scanAppFolder();
-      // 新书自动上架。
-      for (final book in widget.local.books) {
-        if (!widget.state.shelf.contains(book.id)) {
-          await widget.state.toggleShelf(
-            book.id,
-            novel: widget.local.toNovel(book),
-          );
-        }
-      }
-      if (!mounted) return;
-      setState(() {});
-      final parts = <String>[];
-      if (result.added > 0) parts.add('新增 ${result.added} 本');
-      if (result.refreshed > 0) parts.add('更新 ${result.refreshed} 本');
-      if (result.removed > 0) parts.add('移除 ${result.removed} 本');
-      if (result.added == 0 && result.total == 0) {
-        // 首次使用，告诉用户把文件放哪里
-        _showDebugDialog(
-          '把小说放进这个文件夹',
-          '请用文件管理器把 TXT 小说复制到：\n\n$folderPath\n\n然后再点一次扫描。',
-        );
-      } else {
-        showNovelFeedback(
-          context,
-          parts.isEmpty
-              ? '扫描完成，书库无变化（共 ${result.total} 本）'
-              : '扫描完成：${parts.join('，')}（共 ${result.total} 本）',
-        );
-      }
-    } catch (e) {
-      if (mounted) _showDebugDialog('扫描失败', e.toString());
-    } finally {
-      if (mounted) setState(() => _scanning = false);
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final books = widget.local.books;
@@ -214,14 +171,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: _scanning ? () {} : _scan,
-          ),
-          const SizedBox(height: 14),
-          FeatureEntry(
-            key: const ValueKey('local-library-app-folder'),
-            title: _scanning ? '正在扫描…' : '扫描应用文件夹',
-            subtitle: '无需选择器：把 TXT 放进应用专属文件夹后扫描',
-            icon: CupertinoIcons.tray_arrow_down,
-            onTap: _scanning ? () {} : _scanAppFolder,
           ),
         ],
       ),
