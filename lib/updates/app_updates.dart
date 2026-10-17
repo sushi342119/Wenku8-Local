@@ -12,11 +12,12 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.2.0';
-const currentAppBuild = 27;
+const currentAppVersion = '1.2.1';
+const currentAppBuild = 28;
 const currentReleaseNotes = '''
 1. 阅读器底部新增可拖动进度条：显示全书进度，拖动可跳转章节
 2. 书籍详情页新增「···」菜单：可编辑书籍信息、删除文件
+3. 修复进度条拖动无效果的问题（本地书章节字数改用索引长度计算）
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

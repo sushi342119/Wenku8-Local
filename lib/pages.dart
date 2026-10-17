@@ -4011,11 +4011,23 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 计算每章的字数权重（去空白字符数），用于全书进度。
   void _computeChapterWeights() {
-    final chapters = widget.novel.chapters;
-    _chapterWeights = [
-      for (final c in chapters)
-        c.content.replaceAll(RegExp(r'\s'), '').length,
-    ];
+    // 本地书的 NovelChapter.content 为空（正文懒加载），不能用它算字数：
+    // TXT 用章节索引的 length 做权重，PDF 按页等权；在线书才用 content 长度。
+    final local = localLibraryOf(widget.repository)?.bookFor(widget.novel.id);
+    if (local != null) {
+      if (local.kind == LocalBookKind.pdf) {
+        _chapterWeights =
+            List.filled(widget.novel.chapters.length, 1);
+      } else {
+        _chapterWeights = [for (final c in local.chapters) c.length];
+      }
+    } else {
+      final chapters = widget.novel.chapters;
+      _chapterWeights = [
+        for (final c in chapters)
+          c.content.replaceAll(RegExp(r'\s'), '').length,
+      ];
+    }
     _totalWeight = _chapterWeights.fold(0, (a, b) => a + b);
   }
 
@@ -4939,7 +4951,8 @@ class _ReaderPageState extends State<ReaderPage>
                       // 阅读进度条：显示全书进度，可拖动跳转。
                       if (_showProgressBar)
                         Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.only(
+                              left: 56, right: 56, bottom: 8),
                           child: _ReaderProgressBar(
                             value: _progressDragging ? _dragValue : _progressValue,
                             dragging: _progressDragging,
