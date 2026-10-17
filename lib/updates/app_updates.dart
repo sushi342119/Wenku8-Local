@@ -12,10 +12,11 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.1.2';
-const currentAppBuild = 25;
+const currentAppVersion = '1.1.3';
+const currentAppBuild = 26;
 const currentReleaseNotes = '''
-1. 设置页移除“导入旧版文库记录”
+1. 修复更换小说文件夹后旧书删不掉的问题
+2. 修复新文件夹扫描失败时误报"书库无变化"的问题
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

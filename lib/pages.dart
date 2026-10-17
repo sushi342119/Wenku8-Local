@@ -66,14 +66,29 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     try {
       final result = await local.scan();
       if (!mounted) return;
+      // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
+      // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
+      final state = widget.state;
+      final cleanupIds = await local.peekAssociatedCleanupIds();
+      final cleanupDone = <int>[];
+      for (final id in cleanupIds) {
+        try {
+          await state.setShelfMembership(id, false);
+          await TagStore.shared.setTagsForBook(id, const {});
+          await state.clearBookProgress(id);
+          cleanupDone.add(id);
+        } catch (_) {
+          break;
+        }
+      }
+      await local.confirmAssociatedCleanupIds(cleanupDone);
       // 字数静默补算后刷新首页 feed，详情页简介才能显示最新字数。
       if (result.backfilled > 0) {
         await _catalog.refresh();
         if (!mounted) return;
       }
       final changed = result.added + result.refreshed + result.removed;
-      if (changed == 0) return;
-      final state = widget.state;
+      if (changed == 0 && result.switchedRemovedIds.isEmpty) return;
       for (final book in local.books) {
         if (!state.shelf.contains(book.id)) {
           await state.toggleShelf(book.id, novel: local.toNovel(book));
@@ -84,6 +99,9 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       if (result.added > 0) parts.add('新增 ${result.added} 本');
       if (result.refreshed > 0) parts.add('更新 ${result.refreshed} 本');
       if (result.removed > 0) parts.add('移除 ${result.removed} 本');
+      if (result.switchedRemovedIds.isNotEmpty) {
+        parts.add('旧文件夹移除 ${result.switchedRemovedIds.length} 本');
+      }
       showNovelFeedback(context, '本地书库自动扫描：${parts.join('，')}');
     } catch (_) {
       // 静默失败：用户可在本地书库页手动扫描。

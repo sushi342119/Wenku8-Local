@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'book_tags.dart';
 import 'catalog.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
@@ -81,6 +82,21 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     setState(() => _scanning = true);
     try {
       final result = await widget.local.scan();
+      // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
+      // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
+      final cleanupIds = await widget.local.peekAssociatedCleanupIds();
+      final cleanupDone = <int>[];
+      for (final id in cleanupIds) {
+        try {
+          await widget.state.setShelfMembership(id, false);
+          await TagStore.shared.setTagsForBook(id, const {});
+          await widget.state.clearBookProgress(id);
+          cleanupDone.add(id);
+        } catch (_) {
+          break;
+        }
+      }
+      await widget.local.confirmAssociatedCleanupIds(cleanupDone);
       // 新书自动上架。
       for (final book in widget.local.books) {
         if (!widget.state.shelf.contains(book.id)) {
@@ -96,10 +112,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       if (result.added > 0) parts.add('新增 ${result.added} 本');
       if (result.refreshed > 0) parts.add('更新 ${result.refreshed} 本');
       if (result.removed > 0) parts.add('移除 ${result.removed} 本');
+      if (result.switchedRemovedIds.isNotEmpty) {
+        parts.add('旧文件夹移除 ${result.switchedRemovedIds.length} 本');
+      }
       showNovelFeedback(
         context,
         parts.isEmpty ? '扫描完成，书库无变化（共 ${result.total} 本）' : '扫描完成：${parts.join('，')}（共 ${result.total} 本）',
       );
+    } on IncompleteScanException catch (error) {
+      // 扫描不完整：书库未动，如实提示原因，不再显示误导性的"书库无变化"。
+      if (!mounted) return;
+      showNovelFeedback(context, '${error.message}。本次未更新书库。');
     } on PlatformException catch (error) {
       if (!mounted) return;
       showNovelFeedback(

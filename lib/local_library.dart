@@ -16,6 +16,24 @@ const localNovelIdBase = 0x40000000;
 bool isLocalNovelId(int id) =>
     id >= localNovelIdBase && id <= 0x7fffffff;
 
+/// 扫描不完整时抛出的异常：entries 不可信，不能用于更新书库。
+/// [reason] 为原生返回的原因：permission / enumeration_failed /
+/// depth_limit / limit / null_result / unknown。
+class IncompleteScanException implements Exception {
+  const IncompleteScanException(this.reason);
+  final String reason;
+
+  /// 给用户看的提示文案。
+  String get message => switch (reason) {
+        'permission' => '无法访问该文件夹，请重新选择文件夹以授予访问权限',
+        'enumeration_failed' => '无法完整读取该文件夹，请检查文件夹是否仍可访问后重试',
+        'depth_limit' => '子文件夹层级太深，本次扫描未完成',
+        'limit' => '文件数量超出扫描上限，本次扫描未完成',
+        'null_result' => '未收到有效的扫描结果，请重试',
+        _ => '扫描未完成，请重试',
+      };
+}
+
 enum LocalBookKind { txt, pdf }
 
 class LocalChapterIndex {
@@ -199,6 +217,7 @@ class LocalScanResult {
     required this.total,
     required this.skipped,
     this.backfilled = 0,
+    this.switchedRemovedIds = const [],
   });
   final int added;
   final int refreshed;
@@ -208,6 +227,9 @@ class LocalScanResult {
 
   /// 静默补算了字数的旧书数量（不计入 added/refreshed，不弹提示）。
   final int backfilled;
+
+  /// 文件夹切换时被清理的旧来源书籍 ID（调用方据此清理书架/标签/进度）。
+  final List<int> switchedRemovedIds;
 }
 
 /// 章节标题启发式：行首的"第X章/节/回"、Chapter N、序章/番外/后记等短行。
@@ -333,12 +355,78 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }
 
   /// 打开系统文件夹选择器；用户取消返回 null。
+  /// prefs 写入必须检查返回值：SharedPreferences 的 set 方法失败时返回 false
+  /// 而非抛异常；关键路径上返回 false 必须视为失败并中断，避免静默丢数据。
+  static Future<void> _checkedSet(
+      Future<bool> Function() write, String what) async {
+    final ok = await write();
+    if (!ok) throw StateError('写入失败: $what');
+  }
+
   Future<String?> pickFolder() async {
+    // 系统文件夹选择器（用户交互）不能在锁内；但 prefs 的读写要进 _synchronized，
+    // 与 scan() 互斥，避免切换与扫描交错导致待清理列表或 folderUri 不一致。
     final uri = await LocalPlatform.pickLocalFolder();
     if (uri != null && uri.isNotEmpty) {
-      await _prefs.setString('local_library_folder', uri);
+      await _synchronized(() async {
+        final oldUri = _prefs.getString('local_library_folder');
+        // 文件夹切换：把旧来源记入待清理列表，待新文件夹扫描成功后再清理旧书。
+        // 不能在这里直接删——新文件夹可能扫描失败，删了用户就两头空了。
+        // 用列表而非单个槽位：连续切换 A→B→C 时，A 和 B 都要保留到清理完成。
+        if (oldUri != null && oldUri.isNotEmpty && oldUri != uri) {
+          final pending =
+              _prefs.getStringList('local_library_pending_cleanups') ?? [];
+          if (!pending.contains(oldUri)) {
+            pending.add(oldUri);
+            await _checkedSet(
+              () => _prefs.setStringList(
+                  'local_library_pending_cleanups', pending),
+              'local_library_pending_cleanups',
+            );
+          }
+        }
+        await _checkedSet(
+          () => _prefs.setString('local_library_folder', uri),
+          'local_library_folder',
+        );
+      });
     }
     return uri;
+  }
+
+  /// 查看待清理关联数据（书架/标签/阅读进度）的书籍 ID 队列（不清空）。
+  /// scan() 把切换时删除的旧书 ID 记入此队列；调用方逐个做幂等清理，
+  /// 成功后用 [confirmAssociatedCleanupIds] 确认删除。
+  /// "先读→清理→按成功条目确认" 避免"取出并清空"的中断丢失窗口。
+  Future<List<int>> peekAssociatedCleanupIds() async {
+    final raw =
+        _prefs.getStringList('local_library_associated_cleanup') ?? [];
+    final ids = <int>[];
+    for (final s in raw) {
+      final id = int.tryParse(s);
+      if (id != null) ids.add(id);
+    }
+    return ids;
+  }
+
+  /// 确认已完成关联清理的 ID，从队列中移除。
+  /// 未确认的 ID 保留，下次可重试。
+  Future<void> confirmAssociatedCleanupIds(List<int> done) async {
+    if (done.isEmpty) return;
+    final raw =
+        _prefs.getStringList('local_library_associated_cleanup') ?? [];
+    if (raw.isEmpty) return;
+    final doneSet = done.map((e) => '$e').toSet();
+    final remaining = raw.where((s) => !doneSet.contains(s)).toList();
+    if (remaining.isEmpty) {
+      await _prefs.remove('local_library_associated_cleanup');
+    } else {
+      await _checkedSet(
+        () => _prefs.setStringList(
+            'local_library_associated_cleanup', remaining),
+        'local_library_associated_cleanup',
+      );
+    }
   }
 
   Future<void> forgetFolder() async {
@@ -351,8 +439,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     if (treeUri == null) throw StateError('请先选择小说文件夹');
     final sourceId = 'saf:$treeUri';
     final scanResult = await LocalPlatform.scanLocalFolder(treeUri);
+    // 扫描不完整时 entries 不可信：直接抛错，不更新书库，
+    // 也不清理旧书（调用方据此提示用户，而非显示"书库无变化"）。
+    if (!scanResult.complete) {
+      throw IncompleteScanException(scanResult.reason ?? 'unknown');
+    }
     final entries = scanResult.entries;
-    final complete = scanResult.complete;
     // 按 sourceKey 索引当前来源的书籍，避免误删其他来源（修复#1）。
     final byKey = {
       for (final book in _books)
@@ -427,28 +519,77 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       }
     }
     // 只清理当前来源的书籍，不碰其他来源（修复#1）。
-    // 只有完整扫描才执行删除，不完整时仅新增/更新（修复#2）。
-    if (complete) {
-      for (final book in _books
-          .where((b) =>
-              b.sourceId == sourceId &&
-              b.sourceKey.isNotEmpty &&
-              !seen.contains(b.sourceKey))
-          .toList()) {
-        await _deleteBookData(book);
-        _books.remove(book);
-        removed++;
+    // 能到这里扫描一定是完整的（不完整已在开头抛错）。
+    for (final book in _books
+        .where((b) =>
+            b.sourceId == sourceId &&
+            b.sourceKey.isNotEmpty &&
+            !seen.contains(b.sourceKey))
+        .toList()) {
+      await _deleteBookData(book);
+      _books.remove(book);
+      removed++;
+    }
+    // 文件夹切换：新文件夹扫描成功后，清理待清理列表中的旧来源书籍。
+    // 注意：不沿用 sourceKey.isNotEmpty 条件，避免旧来源下缺 sourceKey 的记录残留。
+    //
+    // 关键顺序（都在 _synchronized 保护内）：
+    // 1. 重读当前 folderUri（提交时刻的值，而非扫描开始时捕获的 treeUri）：
+    //    scan(B) 进行中用户切回 A 时，A 已是当前目录，不能按 u != treeUri 误删 A。
+    // 2. 收集待删除书籍及其 ID（此时不删内存）。
+    // 3. 关联清理 ID 先合并入持久化队列，成功后才继续——若入队失败，
+    //    书仍在 _books 中，下次可重新收集 ID，不丢失。
+    // 4. 删除书籍数据并移除内存记录。
+    // 5. _saveIndex() 落盘。
+    // 6. 落盘成功后，才从待清理列表中移除已处理的 URI；若 _saveIndex 失败，
+    //    待清理记录与关联队列都保留，下次扫描可重试（关联清理操作本身幂等）。
+    final pendingCleanups =
+        _prefs.getStringList('local_library_pending_cleanups') ?? [];
+    final currentUri = folderUri;
+    final toClean = pendingCleanups
+        .where((u) => u.isNotEmpty && u != currentUri)
+        .toList();
+    // 先收集，不删除。
+    final toDelete = <LocalBook>[];
+    for (final oldUri in toClean) {
+      final oldSourceId = 'saf:$oldUri';
+      toDelete.addAll(
+        _books.where((b) => b.sourceId == oldSourceId),
+      );
+    }
+    final switchedRemovedIds = toDelete.map((b) => b.id).toList();
+    // 关联清理 ID 入队（删除内存记录之前）。
+    if (switchedRemovedIds.isNotEmpty) {
+      final queued =
+          _prefs.getStringList('local_library_associated_cleanup') ?? [];
+      final merged = <String>{...queued};
+      for (final id in switchedRemovedIds) {
+        merged.add('$id');
       }
-    } else {
-      // 不完整扫描：记录原因，不删除。
-      skipped += _books
-          .where((b) =>
-              b.sourceId == sourceId &&
-              b.sourceKey.isNotEmpty &&
-              !seen.contains(b.sourceKey))
-          .length;
+      await _checkedSet(
+        () => _prefs.setStringList(
+            'local_library_associated_cleanup', merged.toList()),
+        'local_library_associated_cleanup',
+      );
+    }
+    // 入队成功后，才删除数据与内存记录。
+    for (final book in toDelete) {
+      await _deleteBookData(book);
+      _books.remove(book);
     }
     await _saveIndex();
+    // 索引落盘成功后，才确认消费待清理记录。
+    if (toClean.isNotEmpty) {
+      final remaining = pendingCleanups.where((u) => !toClean.contains(u)).toList();
+      if (remaining.isEmpty) {
+        await _prefs.remove('local_library_pending_cleanups');
+      } else {
+        await _checkedSet(
+          () => _prefs.setStringList('local_library_pending_cleanups', remaining),
+          'local_library_pending_cleanups',
+        );
+      }
+    }
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -456,6 +597,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       total: _books.length,
       skipped: skipped,
       backfilled: backfilled,
+      switchedRemovedIds: switchedRemovedIds,
     );
   });
 
