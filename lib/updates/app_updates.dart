@@ -12,11 +12,11 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.1.3';
-const currentAppBuild = 26;
+const currentAppVersion = '1.2.0';
+const currentAppBuild = 27;
 const currentReleaseNotes = '''
-1. 修复更换小说文件夹后旧书删不掉的问题
-2. 修复新文件夹扫描失败时误报"书库无变化"的问题
+1. 阅读器底部新增可拖动进度条：显示全书进度，拖动可跳转章节
+2. 书籍详情页新增「···」菜单：可编辑书籍信息、删除文件
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

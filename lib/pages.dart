@@ -2835,7 +2835,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
   bool _shelfChanging = false;
   int? _resumeChapter;
 
-  Novel get novel => widget.novel;
+  /// 当前显示的书籍（编辑后更新，刷新详情页）。
+  Novel? _novelOverride;
+
+  Novel get novel => _novelOverride ?? widget.novel;
   LibraryState get state => widget.state;
   NovelRepository get repository => widget.repository;
   Object? get coverHeroTag => widget.coverHeroTag;
@@ -3402,8 +3405,223 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           },
         ),
       ),
+      // 本地书：更多操作（编辑信息、删除文件）。
+      if (localLibraryOf(repository)?.bookFor(novel.id) != null)
+        GlassIconButton(
+          icon: CupertinoIcons.ellipsis,
+          label: '更多操作',
+          onPressed: () => _detailMenu(context),
+        ),
     ],
   );
+
+  /// 详情页的本地书操作菜单：编辑书籍信息、删除文件。
+  Future<void> _detailMenu(BuildContext context) async {
+    final local = localLibraryOf(repository);
+    if (local == null || local.bookFor(novel.id) == null) return;
+    final action = await showGlassMenu<String>(
+      context: context,
+      reduceMotion: state.reduceMotion,
+      builder: (menuContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GlassMenuItem(
+            label: '编辑书籍信息',
+            onPressed: () =>
+                Navigator.of(menuContext).pop('edit'),
+          ),
+          GlassMenuItem(
+            label: '删除文件',
+            onPressed: () =>
+                Navigator.of(menuContext).pop('delete'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'edit') {
+      await _editDetailBookInfo(context, local, novel.id);
+    } else if (action == 'delete') {
+      await _deleteDetailBookFile(context, local, novel.id);
+    }
+  }
+
+  /// 编辑书籍信息（详情页版）：复用与书架页相同的对话框逻辑，
+  /// 成功后刷新详情页显示。
+  Future<void> _editDetailBookInfo(
+    BuildContext context,
+    LocalLibraryStore local,
+    int id,
+  ) async {
+    final book = local.bookFor(id);
+    if (book == null || !context.mounted) return;
+    final titleController = TextEditingController(text: book.displayTitle);
+    final authorController = TextEditingController(text: book.displayAuthor);
+    try {
+      final result = await showDialog<(String, String)?>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            final preview = LocalLibraryStore.safeFileNameForTitle(
+              book.fileName,
+              titleController.text.trim(),
+            );
+            final willRename =
+                preview != null && preview != book.fileName;
+            return AlertDialog(
+              title: const Text('编辑书籍信息'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: titleController,
+                    decoration: const InputDecoration(labelText: '书名'),
+                    onChanged: (_) => setDialogState(() {}),
+                  ),
+                  TextField(
+                    controller: authorController,
+                    decoration: const InputDecoration(labelText: '作者'),
+                  ),
+                  if (willRename)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        '将重命名为：$preview',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(dialogContext).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('取消'),
+                ),
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(
+                    (titleController.text.trim(), authorController.text.trim()),
+                  ),
+                  child: const Text('保存'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+      if (!mounted || result == null) return;
+      final (newTitle, newAuthor) = result;
+      if (newTitle.isEmpty) {
+        if (context.mounted) showNovelFeedback(context, '书名不能为空');
+        return;
+      }
+      LocalBook updated;
+      try {
+        updated = await local.editBookFile(
+          id,
+          title: newTitle,
+          author: newAuthor,
+        );
+      } catch (e) {
+        if (context.mounted) {
+          showNovelFeedback(context, '保存失败：${e.toString()}');
+        }
+        return;
+      }
+      // 同步书架快照里的书名/作者。
+      if (state.shelf.contains(id)) {
+        try {
+          await state.rememberNovel(local.toNovel(updated));
+        } catch (_) {}
+      }
+      if (mounted) {
+        showNovelFeedback(context, '已保存');
+        // 刷新详情页显示。
+        setState(() => _novelOverride = local.toNovel(updated));
+      }
+    } catch (e) {
+      if (context.mounted) {
+        showNovelFeedback(context, '保存失败：${e.toString()}');
+      }
+    } finally {
+      titleController.dispose();
+      authorController.dispose();
+    }
+  }
+
+  /// 删除文件（详情页版）：双确认，成功后返回上一页。
+  Future<void> _deleteDetailBookFile(
+    BuildContext context,
+    LocalLibraryStore local,
+    int id,
+  ) async {
+    final book = local.bookFor(id);
+    if (book == null || !context.mounted) return;
+    final title = book.displayTitle;
+    final first = await confirmNovelAction(
+      context,
+      title: '彻底删除文件？',
+      message: '「$title」将从手机存储中彻底删除，书架、标签和阅读进度一并清除。此操作无法撤销。',
+      confirmLabel: '继续',
+      reduceMotion: state.reduceMotion,
+    );
+    if (!mounted || !first || !context.mounted) return;
+    final second = await confirmNovelAction(
+      context,
+      title: '再次确认删除',
+      message: '这是最后一次确认。文件删除后无法恢复，确定要删除「$title」吗？',
+      confirmLabel: '确认删除',
+      reduceMotion: state.reduceMotion,
+    );
+    if (!mounted || !second) return;
+    try {
+      await local.deleteBookFile(id);
+    } on BookCleanupFailed {
+      if (context.mounted) {
+        showNovelFeedback(context, '文件已删除，但书籍记录未清干净，请重试');
+      }
+      return;
+    } catch (_) {
+      if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
+      return;
+    }
+    var cleanupOk = true;
+    try {
+      await state.setShelfMembership(id, false);
+    } catch (_) {
+      cleanupOk = false;
+    }
+    try {
+      await TagStore.shared.setTagsForBook(id, const {});
+    } catch (_) {
+      cleanupOk = false;
+    }
+    try {
+      await state.clearBookProgress(id);
+    } catch (_) {
+      cleanupOk = false;
+    }
+    if (!mounted) return;
+    // 文件已删，详情页无意义，返回上一页。
+    // pop 前先取到 ScaffoldMessenger：pop 后再用 context 找 messenger，
+    // 可能拿到正在退场路由的，反馈挂上去用户看不到；
+    // 也不依赖"pop 后 context 仍 mounted"这一时序。
+    final messenger =
+        context.mounted ? ScaffoldMessenger.maybeOf(context) : null;
+    if (context.mounted) Navigator.of(context).pop();
+    messenger
+      ?..hideCurrentSnackBar()
+      ..clearSnackBars()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            cleanupOk ? '已删除「$title」' : '文件已删除，但部分关联数据未清干净',
+          ),
+        ),
+      );
+  }
 
   Future<void> _openReader(BuildContext context, int chapter) async {
     if (_readerOpening || !mounted || !context.mounted) return;
@@ -3468,6 +3686,15 @@ class _ReaderPageState extends State<ReaderPage>
   final _scroll = ScrollController(keepScrollOffset: false);
   late final _followScroll = ReaderFollowScroll(_scroll);
   final _paragraphRegistry = ReaderParagraphRegistry();
+  // 阅读进度条：章节字数权重 + 章内滚动比例。
+  List<int> _chapterWeights = const [];
+  int _totalWeight = 0;
+  double _progressValue = 0;
+  bool _progressDragging = false;
+  double _dragValue = 0;
+  // 拖拽 accepted 后底层指针取消可能走 onEnd 而非 onCancel，
+  // 用该标记区分"取消却进了 onEnd"，避免误提交跳转。
+  bool _progressPointerCancelled = false;
   ReadingPosition? _restorePending;
   bool _restoreQueued = false;
   bool _restoring = false;
@@ -3501,6 +3728,8 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void initState() {
     super.initState();
+    _computeChapterWeights();
+    _scroll.addListener(_updateProgressFromScroll);
     _chapterReveal = AnimationController(
       vsync: this,
       duration: NovelMotion.enter,
@@ -3780,6 +4009,125 @@ class _ReaderPageState extends State<ReaderPage>
     await action;
   }
 
+  /// 计算每章的字数权重（去空白字符数），用于全书进度。
+  void _computeChapterWeights() {
+    final chapters = widget.novel.chapters;
+    _chapterWeights = [
+      for (final c in chapters)
+        c.content.replaceAll(RegExp(r'\s'), '').length,
+    ];
+    _totalWeight = _chapterWeights.fold(0, (a, b) => a + b);
+  }
+
+  /// 章内滚动比例（0~1）。
+  double get _chapterScrollRatio {
+    if (!_scroll.hasClients) return 0;
+    final max = _scroll.position.maxScrollExtent;
+    if (max <= 0) return 0;
+    return (_scroll.offset / max).clamp(0.0, 1.0);
+  }
+
+  /// 全书进度（0~1）：前面章节权重 + 当前章权重 × 章内比例。
+  double _bookProgress() {
+    if (_totalWeight <= 0 || _chapterWeights.isEmpty) return 0;
+    var before = 0;
+    for (var i = 0; i < _chapter && i < _chapterWeights.length; i++) {
+      before += _chapterWeights[i];
+    }
+    final current = _chapter < _chapterWeights.length
+        ? _chapterWeights[_chapter]
+        : 0;
+    return ((before + current * _chapterScrollRatio) / _totalWeight)
+        .clamp(0.0, 1.0);
+  }
+
+  /// 滚动时更新进度条（拖动中不跟随，避免打架）。
+  void _updateProgressFromScroll() {
+    if (_progressDragging) return;
+    final v = _bookProgress();
+    if ((v - _progressValue).abs() > 0.0005) {
+      setState(() => _progressValue = v);
+    }
+  }
+
+  /// 进度条是否显示：多章，或单章可滚动时显示。
+  bool get _showProgressBar {
+    if (widget.novel.chapters.length > 1) return true;
+    return _scroll.hasClients && _scroll.position.maxScrollExtent > 0;
+  }
+
+  /// 把全书进度换算为目标章节和章内比例。
+  ({int chapter, double ratio}) _progressToTarget(double progress) {
+    if (_chapterWeights.isEmpty || _totalWeight <= 0) {
+      return (chapter: 0, ratio: 0);
+    }
+    var target = (progress * _totalWeight).clamp(0, _totalWeight.toDouble());
+    for (var i = 0; i < _chapterWeights.length; i++) {
+      final w = _chapterWeights[i];
+      if (target <= w || i == _chapterWeights.length - 1) {
+        final ratio = w > 0 ? (target / w).clamp(0.0, 1.0) : 0.0;
+        return (chapter: i, ratio: ratio);
+      }
+      target -= w;
+    }
+    return (chapter: _chapterWeights.length - 1, ratio: 1);
+  }
+
+  /// 拖动结束：跳转到目标位置。
+  Future<void> _jumpToProgress(double progress) async {
+    final target = _progressToTarget(progress);
+    if (target.chapter != _chapter) {
+      _go(target.chapter);
+      // 等新章节布局完成后再滚动：用 postFrame 回调链等待有内容尺寸。
+      // 每次重试前 scheduleFrame 确保下一帧会被调度，避免回调链 stall；
+      // 另有独立 Timer 兜底：应用暂停、无帧可调度时也能结束等待，
+      // 不依赖"回调里检查 DateTime"这条本身就需要帧的路径。
+      // Stopwatch 而非 DateTime，避免系统时间调整影响。
+      final done = Completer<void>();
+      final stopwatch = Stopwatch()..start();
+      final watchdog = Timer(const Duration(seconds: 2), () {
+        if (!done.isCompleted) done.complete();
+      });
+      void waitForLayout() {
+        if (done.isCompleted) return;
+        if (!mounted || stopwatch.elapsed >= const Duration(seconds: 2)) {
+          if (!done.isCompleted) done.complete();
+          return;
+        }
+        if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
+          done.complete();
+          return;
+        }
+        // 确保下一帧被调度，否则回调链可能停住。
+        SchedulerBinding.instance.scheduleFrame();
+        WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
+      try {
+        await done.future;
+      } finally {
+        watchdog.cancel();
+        stopwatch.stop();
+      }
+    }
+    if (!mounted) return;
+    // 超时/卸载也会结束等待，此时布局可能仍不可用，必须再检查。
+    if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
+      final max = _scroll.position.maxScrollExtent;
+      if (max > 0) {
+        _scroll.jumpTo((target.ratio * max).clamp(0.0, max));
+      }
+    }
+    _updateProgressFromScroll();
+  }
+
+  /// 拖动预览文字：第 N 章 · X%。
+  String _dragPreviewText(double progress) {
+    final target = _progressToTarget(progress);
+    final pct = (progress * 100).round();
+    return '第 ${target.chapter + 1} 章 · $pct%';
+  }
+
   void _go(
     int index, {
     ReadingPosition? position,
@@ -3818,6 +4166,10 @@ class _ReaderPageState extends State<ReaderPage>
       _content = _loadContent();
     });
     if (_scroll.hasClients) _scroll.jumpTo(0);
+    // 章节切换后刷新进度条（新章节从头开始）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _progressValue = _bookProgress());
+    });
   }
 
   Future<void> _catalogue() async {
@@ -4581,7 +4933,50 @@ class _ReaderPageState extends State<ReaderPage>
                   key: const ValueKey('reader-chrome-dock'),
                   animation: _chrome,
                   slide: const Offset(0, 8),
-                  child: GlassDock(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 阅读进度条：显示全书进度，可拖动跳转。
+                      if (_showProgressBar)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: _ReaderProgressBar(
+                            value: _progressDragging ? _dragValue : _progressValue,
+                            dragging: _progressDragging,
+                            previewText: _dragPreviewText(
+                              _progressDragging ? _dragValue : _progressValue,
+                            ),
+                            onDragStart: () =>
+                                setState(() {
+                              _progressDragging = true;
+                              _progressPointerCancelled = false;
+                              _dragValue = _progressValue;
+                            }),
+                            onDragUpdate: (v) =>
+                                setState(() => _dragValue = v),
+                            onDragEnd: () async {
+                              // 底层指针取消可能绕开 onCancel 直接进 onEnd：
+                              // 此时只重置状态，不跳转。
+                              final cancelled = _progressPointerCancelled;
+                              final target = _dragValue;
+                              setState(() {
+                                _progressDragging = false;
+                                _progressPointerCancelled = false;
+                              });
+                              if (!cancelled) {
+                                await _jumpToProgress(target);
+                              }
+                            },
+                            onPointerCancel: () =>
+                                _progressPointerCancelled = true,
+                            // 取消只重置状态，不跳转。
+                            onDragCancel: () => setState(() {
+                              _progressDragging = false;
+                              _progressPointerCancelled = false;
+                            }),
+                          ),
+                        ),
+                      GlassDock(
                     key: const ValueKey('reader-liquid-dock'),
                     selectedIndex: 1,
                     reduceMotion: widget.state.reduceMotion,
@@ -4612,6 +5007,8 @@ class _ReaderPageState extends State<ReaderPage>
                         _go(_chapter + (index == 0 ? -1 : 1));
                       }
                     },
+                  ),
+                    ],
                   ),
                 ),
               ),
@@ -5010,5 +5407,141 @@ class _ReaderPageState extends State<ReaderPage>
     } finally {
       _findOpen = false;
     }
+  }
+}
+
+/// 阅读器底部进度条：显示全书阅读进度，支持拖动跳转。
+/// 平时只显示纤细轨道；拖动时显示滑块和"第 N 章 · X%"预览。
+class _ReaderProgressBar extends StatelessWidget {
+  const _ReaderProgressBar({
+    required this.value,
+    required this.dragging,
+    required this.previewText,
+    required this.onDragStart,
+    required this.onDragUpdate,
+    required this.onDragEnd,
+    required this.onDragCancel,
+    required this.onPointerCancel,
+  });
+
+  final double value;
+  final bool dragging;
+  final String previewText;
+  final VoidCallback onDragStart;
+  final ValueChanged<double> onDragUpdate;
+  final VoidCallback onDragEnd;
+  final VoidCallback onDragCancel;
+  // 底层指针取消（PointerCancelEvent）：拖拽 accepted 后可能不走
+  // onHorizontalDragCancel 而直接进 onEnd，父级用它做提交前的检查。
+  final VoidCallback onPointerCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 拖动时显示预览文字。
+        AnimatedOpacity(
+          opacity: dragging ? 1 : 0,
+          duration: const Duration(milliseconds: 150),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: Text(
+              previewText,
+              style: TextStyle(
+                fontSize: 12,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ),
+        ),
+        // 36px 高的可触摸区域，轨道纤细居中。
+        // 用 LayoutBuilder 拿宽度：details.localPosition 是相对手势区域的，
+        // 必须与同一区域的宽度相除，不能用外层 context 的 RenderBox。
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final barWidth = constraints.maxWidth;
+            double toRatio(double dx) => (dx / barWidth).clamp(0.0, 1.0);
+            // Listener 捕获底层指针取消：拖拽 accepted 后，
+            // 指针取消不一定触发 onHorizontalDragCancel，可能直接走 onEnd。
+            return Listener(
+              onPointerCancel: (_) => onPointerCancel(),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onHorizontalDragStart: (_) => onDragStart(),
+                onHorizontalDragUpdate: (details) =>
+                    onDragUpdate(toRatio(details.localPosition.dx)),
+                onHorizontalDragEnd: (_) => onDragEnd(),
+                onHorizontalDragCancel: onDragCancel,
+                onTapDown: (details) {
+                  onDragStart();
+                  onDragUpdate(toRatio(details.localPosition.dx));
+                },
+                onTapUp: (_) => onDragEnd(),
+                onTapCancel: onDragCancel,
+                child: SizedBox(
+                  height: 36,
+                  width: barWidth,
+                  child: Center(
+                    child: SizedBox(
+                      height: 4,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          final w = constraints.maxWidth;
+                          return Stack(
+                            children: [
+                              // 轨道
+                              Container(
+                                width: w,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: scheme.onSurface.withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              // 已读部分
+                              Container(
+                                width: w * value.clamp(0.0, 1.0),
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: scheme.primary,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              // 滑块（拖动时显示）
+                              if (dragging)
+                                Positioned(
+                                  left: (w * value.clamp(0.0, 1.0) - 7)
+                                      .clamp(0.0, w - 14),
+                                  top: -5,
+                                  child: Container(
+                                    width: 14,
+                                    height: 14,
+                                    decoration: BoxDecoration(
+                                      color: scheme.primary,
+                                      shape: BoxShape.circle,
+                                      boxShadow: [
+                                        BoxShadow(
+                                          color: Colors.black.withOpacity(0.2),
+                                          blurRadius: 4,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
   }
 }
