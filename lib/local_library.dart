@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
 import 'local_platform.dart';
+import 'book_tags.dart';
 
 /// 本地图书 ID 段：避开文库在线 aid（通常远小于此），落在 int32 范围内，
 /// 因此书架、历史、进度等既有 `id > 0` 逻辑无需改动。
@@ -429,6 +430,135 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
   }
 
+  /// ---- 标签暂存（文件夹切换时保留标签）----
+  ///
+  /// 切走文件夹时，被删书籍的标签按 `jsonEncode([sourceId, fileName])` 暂存；
+  /// 切回后扫描成功时，文件名对上就恢复到新 ID 上。
+  /// 只处理标签，不动书架和阅读进度。
+  static const _tagStashKey = 'local_library_tag_stash';
+
+  /// 暂存 key：用被删书籍自己的 sourceId（不是当前 sourceId）。
+  /// jsonEncode 避免分隔符歧义。
+  static String _tagStashKeyFor(LocalBook book) =>
+      jsonEncode([book.sourceId, book.fileName]);
+
+  Map<String, List<String>> _readTagStash() {
+    try {
+      final raw = _prefs.getString(_tagStashKey);
+      if (raw == null) return {};
+      final map = jsonDecode(raw);
+      if (map is! Map<String, Object?>) return {};
+      final out = <String, List<String>>{};
+      map.forEach((k, v) {
+        if (v is List) {
+          final ids = v.whereType<String>().toList();
+          if (ids.isNotEmpty) out[k] = ids;
+        }
+      });
+      return out;
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _writeTagStash(Map<String, List<String>> stash) =>
+      _checkedSet(
+        () => _prefs.setString(_tagStashKey, jsonEncode(stash)),
+        _tagStashKey,
+      );
+
+  /// 文件夹切换删除书籍前暂存标签（_synchronized 内调用）。
+  /// 明确覆盖规则：有标签则覆盖暂存，无标签则删除已有条目，
+  /// 避免用户清空标签后旧条目复活。
+  /// TagStore 未就绪时跳过（测试环境），不阻塞删除流程。
+  Future<void> _stashTagsForRemoved(List<LocalBook> books) async {
+    final tagStore = TagStore.maybeShared;
+    if (tagStore == null || books.isEmpty) return;
+    final stash = _readTagStash();
+    var changed = false;
+    for (final book in books) {
+      final key = _tagStashKeyFor(book);
+      final ids =
+          tagStore.tagsForBook(book.id).map((t) => t.id).toList();
+      if (ids.isEmpty) {
+        if (stash.remove(key) != null) changed = true;
+      } else {
+        stash[key] = ids;
+        changed = true;
+      }
+    }
+    if (changed) await _writeTagStash(stash);
+  }
+
+  /// 清除指定书籍对应的暂存条目（文件被删 / 用户明确删除书籍时）。
+  /// 不创建新暂存，只清理，避免同名新文件误恢复旧标签。
+  Future<void> _clearTagStashKeys(Iterable<LocalBook> books) async {
+    final stash = _readTagStash();
+    if (stash.isEmpty) return;
+    var changed = false;
+    for (final book in books) {
+      if (stash.remove(_tagStashKeyFor(book)) != null) changed = true;
+    }
+    if (changed) await _writeTagStash(stash);
+  }
+
+  /// 扫描成功后恢复暂存标签并清理失效条目（_synchronized 内，_saveIndex 之后）。
+  /// - 只恢复给当前无标签的书，避免覆盖用户手动编辑；
+  ///   无论是否恢复都消费条目（已恢复 / 用户已改过 / 标签已失效）。
+  /// - 恢复前用现存标签定义过滤，过滤后为空也消费条目。
+  /// - 完整扫描成功后，清理该来源下已不存在文件对应的条目，
+  ///   避免以后新建同名文件时恢复旧标签。
+  /// TagStore 未就绪时跳过。
+  Future<void> _restoreStashedTags(String sourceId) async {
+    final tagStore = TagStore.maybeShared;
+    if (tagStore == null) return;
+    final stash = _readTagStash();
+    if (stash.isEmpty) return;
+    // 该来源现存书籍的 key→book。
+    final live = <String, LocalBook>{};
+    for (final b in _books) {
+      if (b.sourceId == sourceId) live[_tagStashKeyFor(b)] = b;
+    }
+    bool belongsToSource(String key) {
+      try {
+        final parts = jsonDecode(key);
+        return parts is List && parts.length == 2 && parts[0] == sourceId;
+      } catch (_) {
+        return false;
+      }
+    }
+    var changed = false;
+    for (final key in stash.keys.where(belongsToSource).toList()) {
+      final stashed = stash[key]!;
+      final book = live[key];
+      if (book == null) {
+        // 文件已不存在（切走期间被删）：清理条目，不恢复。
+        stash.remove(key);
+        changed = true;
+        continue;
+      }
+      final validIds = stashed
+          .where((id) => tagStore.tagById(id) != null)
+          .toList();
+      if (validIds.isEmpty) {
+        // 标签定义已全部失效：消费条目，不恢复。
+        stash.remove(key);
+        changed = true;
+        continue;
+      }
+      // 只有当前无标签才恢复，避免覆盖用户手动编辑；
+      // 有标签则视为用户已处理，直接消费条目。
+      // 恢复成功后才删条目：setTagsForBook 抛错时异常向上传播，
+      // _writeTagStash 不会执行，prefs 里的条目保留，下次扫描可重试。
+      if (tagStore.tagsForBook(book.id).isEmpty) {
+        await tagStore.setTagsForBook(book.id, validIds);
+      }
+      stash.remove(key);
+      changed = true;
+    }
+    if (changed) await _writeTagStash(stash);
+  }
+
   Future<void> forgetFolder() async {
     await _prefs.remove('local_library_folder');
   }
@@ -520,12 +650,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
     // 只清理当前来源的书籍，不碰其他来源（修复#1）。
     // 能到这里扫描一定是完整的（不完整已在开头抛错）。
-    for (final book in _books
+    final removedBooks = _books
         .where((b) =>
             b.sourceId == sourceId &&
             b.sourceKey.isNotEmpty &&
             !seen.contains(b.sourceKey))
-        .toList()) {
+        .toList();
+    // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
+    if (removedBooks.isNotEmpty) {
+      await _clearTagStashKeys(removedBooks);
+    }
+    for (final book in removedBooks) {
       await _deleteBookData(book);
       _books.remove(book);
       removed++;
@@ -558,6 +693,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       );
     }
     final switchedRemovedIds = toDelete.map((b) => b.id).toList();
+    // 先暂存被删书籍的标签（供切回时恢复），再入关联清理队列。
+    // 顺序：读旧标签→stash 落盘→关联入队→删书，任一步失败都中断，
+    // 书仍在 _books 中，下次可重试。
+    if (toDelete.isNotEmpty) {
+      await _stashTagsForRemoved(toDelete);
+    }
     // 关联清理 ID 入队（删除内存记录之前）。
     if (switchedRemovedIds.isNotEmpty) {
       final queued =
@@ -590,6 +731,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         );
       }
     }
+    // 完整扫描成功：恢复暂存标签（切回旧文件夹的场景），
+    // 并清理该来源下已不存在文件对应的暂存条目。
+    await _restoreStashedTags(sourceId);
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -689,17 +833,24 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       }
     }
     // 只清理当前来源的书籍（修复#1）。
-    for (final book in _books
+    final appRemovedBooks = _books
         .where((b) =>
             b.sourceId == sourceId &&
             b.sourceKey.isNotEmpty &&
             !seen.contains(b.sourceKey))
-        .toList()) {
+        .toList();
+    // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
+    if (appRemovedBooks.isNotEmpty) {
+      await _clearTagStashKeys(appRemovedBooks);
+    }
+    for (final book in appRemovedBooks) {
       await _deleteBookData(book);
       _books.remove(book);
       removed++;
     }
     await _saveIndex();
+    // 完整扫描成功：恢复暂存标签并清理失效条目（与 scan() 同规则）。
+    await _restoreStashedTags(sourceId);
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -801,6 +952,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     await _deleteBookData(book);
     final index = _books.indexOf(book);
     _books.removeAt(index);
+    // 用户明确删除：不暂存标签，同时清除该书的暂存条目。
+    await _clearTagStashKeys([book]);
     try {
       await _saveIndex();
     } catch (e) {

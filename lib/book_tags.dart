@@ -39,6 +39,10 @@ class TagStore extends ChangeNotifier {
   /// 全局单例，main() 中预加载。
   static TagStore get shared => _shared!;
 
+  /// 可能未初始化（测试环境）；生产环境 main() 中已预加载。
+  /// 调用方应在 TagStore 未就绪时降级跳过，避免崩溃。
+  static TagStore? get maybeShared => _shared;
+
   static Future<void> load() async {
     final store = TagStore._(await SharedPreferences.getInstance());
     store._read();
