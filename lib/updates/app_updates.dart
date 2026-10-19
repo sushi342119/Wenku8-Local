@@ -106,15 +106,18 @@ class AppRelease {
     if (!RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(repository)) {
       throw const FormatException('更新仓库格式错误');
     }
-    if (json['draft'] == true || json['prerelease'] == true) return null;
+    if (json['draft'] == true) return null;
+    // 试验 release 发布为 prerelease，避免占用 /releases/latest 影响正式版；
+    // 试验通道接受 prerelease，正式通道不接受。
+    if (!trial && json['prerelease'] == true) return null;
     final tag = json['tag_name'];
-    // 试验通道的 tag 形如 source-v1.2.2+1001，解析版本时去掉 source- 前缀；
-    // 正式通道不传 trial，source- 开头的 tag 解析失败，自动被忽略。
-    final versionTag =
-        (trial && tag is String && tag.startsWith('source-'))
-        ? tag.substring('source-'.length)
-        : tag;
-    final version = versionTag is String ? ReleaseVersion.parse(versionTag) : null;
+    if (tag is! String) return null;
+    // 严格通道隔离：试验 tag 必须带 source- 前缀，正式 tag 不带；
+    // 不匹配直接拒绝，不依赖调用方过滤。
+    final isTrialTag = tag.startsWith('source-');
+    if (isTrialTag != trial) return null;
+    final versionTag = isTrialTag ? tag.substring('source-'.length) : tag;
+    final version = ReleaseVersion.parse(versionTag);
     if (version == null) return null;
     final assets = <UpdateAsset>[];
     for (final raw in (json['assets'] as List? ?? const [])) {
