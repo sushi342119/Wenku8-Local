@@ -66,12 +66,12 @@ class _CloudflareVerifyPageState extends State<CloudflareVerifyPage> {
     final manager = CookieManager.instance();
     // 取目标 URL 的全部 Cookie（含 HttpOnly，如 cf_clearance）。
     try {
-      final list = await manager.getCookies(url: url);
+      final list = await manager.getCookies(url: WebUri.uri(url));
       if (list.isNotEmpty) {
         final host = url.host.toLowerCase();
         result[host] = {
           for (final c in list)
-            if (c.name != null): c.name!: c.value ?? '',
+            if (c.name != null) c.name!: c.value ?? '',
         };
       }
     } catch (_) {}
