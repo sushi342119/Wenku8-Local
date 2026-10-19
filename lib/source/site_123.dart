@@ -273,15 +273,14 @@ final h1 = doc.querySelector('h1');
 final title = h1?.text.trim()?? chapter.title;
 final paragraphs = _extractParagraphs(doc, h1);
 // 章内分页：【1】【2】…，href 如 12443_2.html，需合并。
+// 子页失败则整章按失败处理（可重试），不静默缺页。
 final extraPages = _findChapterSubPages(doc, firstUri);
-for (final pageUri in extraPages) {
-try {
-final subDoc = await _fetchDocument(client, pageUri);
+for (final sub in extraPages) {
+final subDoc = await _fetchDocument(client, sub.uri);
 final subH1 = subDoc.querySelector('h1');
-paragraphs.addAll(_extractParagraphs(subDoc, subH1));
-} catch (_) {
-// 子页失败不中断：已取到的正文保留，避免整章丢失。
-}
+final subParagraphs = _extractParagraphs(subDoc, subH1);
+if (subParagraphs.isEmpty) throw const SourceEmptyContent();
+paragraphs.addAll(subParagraphs);
 }
 if (paragraphs.isEmpty) throw const SourceEmptyContent();
 return SourceChapterContent(
@@ -291,27 +290,37 @@ paragraphs: paragraphs,
 );
 }
 
+/// 章内子页：页码 + URI。
+class _ChapterSubPage {
+final int pageNumber;
+final Uri uri;
+_ChapterSubPage(this.pageNumber, this.uri);
+}
+
 /// 查找章内分页面链接（文本形如【2】【3】，href 如 12443_2.html）。
-List<Uri> _findChapterSubPages(Document doc, Uri current) {
-final pages = <Uri>[];
+/// 按整数页码排序；去 fragment 后去重；校验本站且非当前页。
+List<_ChapterSubPage> _findChapterSubPages(Document doc, Uri current) {
+final candidates = <_ChapterSubPage>[];
 final seen = <String>{};
 final pagePattern = RegExp(r'^【(\d+)】$');
+final currentNoFrag = current.removeFragment().toString();
 for (final a in doc.querySelectorAll('a')) {
 final t = a.text.trim();
 final m = pagePattern.firstMatch(t);
 if (m == null) continue;
-final num = int.tryParse(m.group(1)?? '')?? 0;
-if (num <= 1) continue; // 【1】是当前页
+final num = int.tryParse(m.group(1)?? '');
+if (num == null || num <= 1) continue; // 【1】是当前页
 final href = a.attributes['href']?.trim();
 if (href == null || href.isEmpty) continue;
 final resolved = current.resolve(href);
-final key = resolved.toString();
-if (resolved.toString() == current.toString()) continue;
-if (seen.add(key)) pages.add(resolved);
+if (!_isSameSite(resolved)) continue;
+final key = resolved.removeFragment().toString();
+if (key == currentNoFrag) continue;
+if (seen.add(key)) candidates.add(_ChapterSubPage(num, resolved));
 }
-// 按页码排序后返回，最多跟 20 个子页防循环。
-pages.sort((a, b) => a.toString().compareTo(b.toString()));
-return pages.take(20).toList();
+// 按整数页码排序（字符串排序会把 10 排在 2 前面）。
+candidates.sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+return candidates.take(20).toList();
 }
 
 /// 提取正文段落：h1 之后的连续文本块，按空行分段，过滤噪音行。
