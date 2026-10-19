@@ -290,13 +290,6 @@ paragraphs: paragraphs,
 );
 }
 
-/// 章内子页：页码 + URI。
-class _ChapterSubPage {
-final int pageNumber;
-final Uri uri;
-_ChapterSubPage(this.pageNumber, this.uri);
-}
-
 /// 查找章内分页面链接（文本形如【2】【3】，href 如 12443_2.html）。
 /// 按整数页码排序；去 fragment 后去重；校验本站且非当前页。
 List<_ChapterSubPage> _findChapterSubPages(Document doc, Uri current) {
@@ -402,4 +395,11 @@ return buf.toString();
 
 extension _IfEmpty on String {
 String ifEmpty(String fallback) => isEmpty? fallback: this;
+}
+
+/// 章内子页：页码 + URI。
+class _ChapterSubPage {
+final int pageNumber;
+final Uri uri;
+_ChapterSubPage(this.pageNumber, this.uri);
 }
