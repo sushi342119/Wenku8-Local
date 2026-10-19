@@ -43,7 +43,7 @@ dependencies:
   crypto: ^3.0.6
   # 书源试验版（source-trial 分支）：HTML 解析与 Cloudflare 验证 WebView
   html: ^0.15.4
-  webview_flutter: ^4.10.0
+  flutter_inappwebview: ^6.1.5
   liquid_glass_easy:
     path: third_party/liquid_glass_easy
 

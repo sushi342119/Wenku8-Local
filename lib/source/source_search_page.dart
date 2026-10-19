@@ -82,6 +82,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     final result = await pushNovelPage<VerifyResult>(
       context,
       CloudflareVerifyPage(targetUrl: Uri.parse(base)),
+      reduceMotion: MediaQuery.disableAnimationsOf(context),
     );
     if (result == null || result.isEmpty) {
       if (mounted) showNovelFeedback(context, '已取消验证');
@@ -113,6 +114,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         onVerify: _verifyThenRetry,
         local: widget.local,
       ),
+      reduceMotion: MediaQuery.disableAnimationsOf(context),
     );
   }
 
