@@ -9,6 +9,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'gbk_codec.dart';
+
 /// 统一请求 UA：桌面 Chrome。WebView 验证页使用相同 UA，
 /// 避免 Cloudflare 因客户端特征不一致拒绝复用会话。
 const String sourceUserAgent =
@@ -144,15 +146,18 @@ class SourceClient {
   }
 
   static String _decodeBytes(List<int> bytes, String? charset) {
-    if (charset == null || charset == 'utf-8' || charset == 'utf8') {
+    final cs = (charset ?? '').toLowerCase();
+    if (cs.contains('gbk') || cs.contains('gb2312') || cs.contains('gb18030')) {
+      return gbkDecode(bytes);
+    }
+    if (cs.isEmpty || cs == 'utf-8' || cs == 'utf8') {
       try {
         return utf8.decode(bytes, allowMalformed: false);
       } catch (_) {
-        // 回退 GBK
+        // 严格 UTF-8 失败时回退 GBK（中文小说站常见）。
+        return gbkDecode(bytes);
       }
     }
-    // GBK/GB2312/GB18030：Dart 无内置解码，按字节映射常用区手动处理。
-    // 首版只处理 UTF-8；GBK 站点在解析器确认后另行扩展。
     return utf8.decode(bytes, allowMalformed: true);
   }
 
