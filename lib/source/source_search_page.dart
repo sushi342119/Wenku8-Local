@@ -7,15 +7,17 @@ library;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'package:flutter_inappwebview/flutter_inappwebview.dart';
+
 import '../local_library.dart';
 import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
-import 'cloudflare_page.dart';
 import 'site_123.dart';
 import 'site_adapter.dart';
 import 'source_client.dart';
 import 'source_config.dart';
 import 'source_detail_page.dart';
 import 'source_models.dart';
+import 'webview_fetcher.dart';
 
 class SourceSearchPage extends StatefulWidget {
   const SourceSearchPage({super.key, required this.local});
@@ -30,15 +32,19 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   final TextEditingController _keyword = TextEditingController();
   final SourceClient _client = SourceClient();
   final SiteAdapter _adapter = Site123Adapter();
+  final WebViewSession _webViewSession = WebViewSession();
 
   bool _searching = false;
   String? _error;
   List<SourceBook> _results = [];
+  bool _verifying = false; // WebView 验证中（显示内嵌 WebView）
 
   @override
   void initState() {
     super.initState();
     SourceConfig.instance.load();
+    // 全程走 WebView 会话取页，绕过 Cloudflare 对 HttpClient 的 TLS 指纹拦截。
+    _client.webViewSession = _webViewSession;
   }
 
   @override
@@ -67,6 +73,10 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
       if (!mounted) return;
       setState(() => _searching = false);
       await _verifyThenRetry(() => _search());
+    } on WebViewNeedVerify {
+      if (!mounted) return;
+      setState(() => _searching = false);
+      await _verifyThenRetry(() => _search());
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '搜索失败：$e');
@@ -75,29 +85,52 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     }
   }
 
-  /// 打开 WebView 验证，成功后导入 Cookie 并重试原操作。
+  /// 内嵌 WebView 验证：显示 WebView 供用户完成验证，完成后重试原操作。
   /// 返回 true 表示验证成功（调用方重试），false 表示用户取消。
   Future<bool> _verifyThenRetry(Future<void> Function() retry) async {
-    final base = SourceConfig.instance.baseUrl;
-    final result = await pushNovelPage<VerifyResult>(
-      context,
-      CloudflareVerifyPage(targetUrl: Uri.parse(base)),
-      reduceMotion: MediaQuery.disableAnimationsOf(context),
+    if (!mounted) return false;
+    setState(() => _verifying = true);
+    // 等待用户完成验证：轮询检查挑战是否解除，或用户点"已完成验证"。
+    // 这里简单处理：显示 WebView，用户完成后点按钮。
+    final completed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('需要验证'),
+        content: const Text('请在下方 WebView 中完成人机验证，完成后点击"已完成验证"。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('已完成验证'),
+          ),
+        ],
+      ),
     );
-    if (result == null || result.isEmpty) {
-      if (mounted) showNovelFeedback(context, '已取消验证');
+    if (!mounted) return false;
+    setState(() => _verifying = false);
+    if (completed != true) {
+      showNovelFeedback(context, '已取消验证');
       return false;
     }
-    result.forEach(_client.importCookies);
-    // 验证后试读：确认会话可被下载层复用（第一道验收门槛）。
+    // 验证后试读：确认 WebView 会话可用（第一道验收门槛）。
     try {
-      final probe = await _client.get(Uri.parse(base));
+      final probe = await _client.get(Uri.parse(SourceConfig.instance.baseUrl));
       if (probe.challenged) {
         if (mounted) showNovelFeedback(context, '验证后仍被拦截，请重试');
         return false;
       }
     } catch (e) {
-      if (mounted) showNovelFeedback(context, '验证后试读失败：$e');
+      if (mounted) {
+        if (e is WebViewNeedVerify) {
+          showNovelFeedback(context, '验证未完成，请重试');
+        } else {
+          showNovelFeedback(context, '验证后试读失败：$e');
+        }
+      }
       return false;
     }
     await retry();
@@ -131,36 +164,60 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
           ),
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _keyword,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (_) => _search(),
-                    decoration: const InputDecoration(
-                      hintText: '输入书名或作者搜索',
-                      prefixIcon: Icon(CupertinoIcons.search),
-                      border: OutlineInputBorder(),
-                      isDense: true,
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _keyword,
+                        textInputAction: TextInputAction.search,
+                        onSubmitted: (_) => _search(),
+                        decoration: const InputDecoration(
+                          hintText: '输入书名或作者搜索',
+                          prefixIcon: Icon(CupertinoIcons.search),
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
                     ),
-                  ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _searching ? null : _search,
+                      child: const Text('搜索'),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _searching ? null : _search,
-                  child: const Text('搜索'),
-                ),
-              ],
-            ),
+              ),
+              if (_searching) const LinearProgressIndicator(),
+              Expanded(
+                child: _buildBody(),
+              ),
+            ],
           ),
-          if (_searching) const LinearProgressIndicator(),
-          Expanded(
-            child: _buildBody(),
+          // 内嵌 WebView：平时 1px 隐藏，验证时展开显示。
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: _verifying ? 400 : 1,
+            child: Offstage(
+              offstage: !_verifying,
+              child: InAppWebView(
+                initialSettings: InAppWebViewSettings(
+                  javaScriptEnabled: true,
+                  userAgent: sourceUserAgent,
+                ),
+                initialUrlRequest: URLRequest(
+                  url: WebUri.uri(Uri.parse(SourceConfig.instance.baseUrl)),
+                ),
+                onWebViewCreated: _webViewSession.attach,
+              ),
+            ),
           ),
         ],
       ),

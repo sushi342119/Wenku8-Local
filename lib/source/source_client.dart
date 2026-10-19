@@ -34,11 +34,24 @@ class SourcePage {
   final bool challenged;
 }
 
+/// WebView 取页器接口（避免 source_client 与 webview_fetcher 循环导入）。
+abstract class WebViewFetcher {
+  Future<({Uri url, String html})> fetchHtml(
+    Uri uri, {
+    Duration timeout,
+  });
+}
+
 class SourceClient {
   SourceClient({HttpClient Function()? clientFactory})
     : _clientFactory = clientFactory ?? HttpClient.new;
 
   final HttpClient Function() _clientFactory;
+
+  /// WebView 会话（可选）。设置后，[get] 改走 WebView 取页，
+  /// 用于绕过 Cloudflare 对 Dart HttpClient 的 TLS 指纹拦截。
+  /// 由 UI 层创建并管理生命周期。
+  WebViewFetcher? webViewSession;
 
   /// domain -> {name: value}
   final Map<String, Map<String, String>> _cookies = {};
@@ -71,10 +84,25 @@ class SourceClient {
 
   /// 拉取页面。遇到 Cloudflare 挑战时返回 challenged=true，由调用方
   /// 打开 WebView 请用户完成验证（不自动重试、不静默跳过）。
+  ///
+  /// 若 [webViewSession] 已设置，则改走 WebView 会话取页（绕过 TLS 指纹拦截）。
   Future<SourcePage> get(
     Uri uri, {
     Duration timeout = const Duration(seconds: 20),
   }) async {
+    final session = webViewSession;
+    if (session != null) {
+      final result = await session.fetchHtml(uri, timeout: timeout);
+      // WebView 已处理跳转；挑战由 fetchHtml 内部抛 WebViewNeedVerify。
+      // 这里再做一次保险检查。
+      final challenged = _looksLikeChallenge(result.html);
+      return SourcePage(
+        url: result.url,
+        statusCode: 200,
+        html: result.html,
+        challenged: challenged,
+      );
+    }
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 12);
     // 手动跟随重定向，以便在每一跳检查挑战页（per-request 设置 followRedirects）。

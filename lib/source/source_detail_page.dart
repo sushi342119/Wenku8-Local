@@ -10,6 +10,7 @@ import '../local_library.dart';
 import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
 import 'site_adapter.dart';
 import 'source_client.dart';
+import 'webview_fetcher.dart';
 import 'source_download.dart';
 import 'source_models.dart';
 
@@ -68,6 +69,10 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
       if (!mounted) return;
       setState(() => _loading = false);
       await widget.onVerify(() => _load());
+    } on WebViewNeedVerify {
+      if (!mounted) return;
+      setState(() => _loading = false);
+      await widget.onVerify(() => _load());
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '加载失败：$e');
@@ -90,6 +95,8 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
         try {
           return await widget.adapter.content(client, chapter);
         } on SiteNeedVerify {
+          throw const SourceNeedVerify();
+        } on WebViewNeedVerify {
           throw const SourceNeedVerify();
         }
       },
