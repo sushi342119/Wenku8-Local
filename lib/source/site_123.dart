@@ -267,16 +267,51 @@ Future<SourceChapterContent> content(
 SourceClient client,
 SourceChapter chapter,
 ) async {
-final doc = await _fetchDocument(client, Uri.parse(chapter.url));
+final firstUri = Uri.parse(chapter.url);
+final doc = await _fetchDocument(client, firstUri);
 final h1 = doc.querySelector('h1');
 final title = h1?.text.trim()?? chapter.title;
 final paragraphs = _extractParagraphs(doc, h1);
+// 章内分页：【1】【2】…，href 如 12443_2.html，需合并。
+final extraPages = _findChapterSubPages(doc, firstUri);
+for (final pageUri in extraPages) {
+try {
+final subDoc = await _fetchDocument(client, pageUri);
+final subH1 = subDoc.querySelector('h1');
+paragraphs.addAll(_extractParagraphs(subDoc, subH1));
+} catch (_) {
+// 子页失败不中断：已取到的正文保留，避免整章丢失。
+}
+}
 if (paragraphs.isEmpty) throw const SourceEmptyContent();
 return SourceChapterContent(
 chapter: chapter,
 title: title,
 paragraphs: paragraphs,
 );
+}
+
+/// 查找章内分页面链接（文本形如【2】【3】，href 如 12443_2.html）。
+List<Uri> _findChapterSubPages(Document doc, Uri current) {
+final pages = <Uri>[];
+final seen = <String>{};
+final pagePattern = RegExp(r'^【(\d+)】$');
+for (final a in doc.querySelectorAll('a')) {
+final t = a.text.trim();
+final m = pagePattern.firstMatch(t);
+if (m == null) continue;
+final num = int.tryParse(m.group(1)?? '')?? 0;
+if (num <= 1) continue; // 【1】是当前页
+final href = a.attributes['href']?.trim();
+if (href == null || href.isEmpty) continue;
+final resolved = current.resolve(href);
+final key = resolved.toString();
+if (resolved.toString() == current.toString()) continue;
+if (seen.add(key)) pages.add(resolved);
+}
+// 按页码排序后返回，最多跟 20 个子页防循环。
+pages.sort((a, b) => a.toString().compareTo(b.toString()));
+return pages.take(20).toList();
 }
 
 /// 提取正文段落：h1 之后的连续文本块，按空行分段，过滤噪音行。
