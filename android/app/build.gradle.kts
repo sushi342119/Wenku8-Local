@@ -39,12 +39,9 @@ android {
     }
 
     // source-trial 分支的书源试验版：独立 flavor，与正式版共存安装。
-    // 正式版走 main flavor（无后缀），试验版走 source flavor（包名 + .source）。
+    // 正式版（main 分支）无 flavor；试验版走 source flavor（包名 + .source）。
     flavorDimensions.add("edition")
     productFlavors {
-        create("main") {
-            dimension = "edition"
-        }
         create("source") {
             dimension = "edition"
             applicationIdSuffix = ".source"
