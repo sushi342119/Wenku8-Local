@@ -3,6 +3,12 @@
 /// 一本书一个任务、串行请求；显示进度；支持取消、失败重试、验证后继续；
 /// 缓存已完成章节；全书完成后生成 UTF-8 TXT，写入应用 novels 文件夹，
 /// 走现有 scanAppFolder() 链路入库（复用本地阅读、标签、进度能力）。
+///
+/// 状态设计：
+/// - 每章只有一个"当前结果"（Map<index, result>），重试成功替换旧失败，
+///   不会出现"后来成功了但旧失败还在"的幽灵失败。
+/// - 进度 _done 恒等于成功缓存章数（派生值，不累计），不会超总数。
+/// - 完成判定：目录非空 且 每一章都有有效缓存（不只看"无失败记录"）。
 library;
 
 import 'dart:async';
@@ -21,7 +27,7 @@ typedef ChapterFetcher =
       SourceChapter chapter,
     );
 
-/// 下载进度回调：(已完成章数, 总章数, 当前章节标题)。
+/// 下载进度回调：(成功章数, 总章数, 当前章节标题)。
 typedef DownloadProgress = void Function(int done, int total, String current);
 
 class SourceDownloadTask {
@@ -40,20 +46,26 @@ class SourceDownloadTask {
   SourceDownloadStatus _status = SourceDownloadStatus.idle;
   SourceDownloadStatus get status => _status;
 
-  int _done = 0;
-  int get done => _done;
+  /// 成功缓存的章节：index -> 正文。
+  final Map<int, SourceChapterContent> _cache = {};
 
+  /// 每章当前结果：index -> result（重试成功会替换旧失败）。
+  final Map<int, SourceChapterResult> _results = {};
+
+  List<SourceChapterResult> get results => List.unmodifiable(
+    _results.values.toList()..sort((a, b) => a.chapter.index.compareTo(b.chapter.index)),
+  );
+
+  List<SourceChapterResult> get failedResults =>
+      results.where((r) => !r.success).toList();
+
+  /// 进度 = 成功缓存章数（派生，不累计）。
+  int get done => _cache.length;
   int get total => detail.chapters.length;
-
-  final List<SourceChapterResult> _results = [];
-  List<SourceChapterResult> get results => List.unmodifiable(_results);
 
   bool _cancelled = false;
   String? _error;
   String? get error => _error;
-
-  /// 已成功的章节（用于断点继续，避免重复下载）。
-  final Map<int, SourceChapterContent> _cache = {};
 
   void cancel() {
     _cancelled = true;
@@ -61,8 +73,15 @@ class SourceDownloadTask {
 
   /// 开始/继续下载。遇到 Cloudflare 挑战时抛 [SourceNeedVerify]，
   /// 由调用方打开 WebView 验证后再次调用本方法继续（已下载章节不重复）。
+  ///
+  /// 重复调用安全：已缓存章节直接跳过；失败章节会被重新尝试并替换旧结果。
   Future<void> start(DownloadProgress onProgress) async {
     if (_status == SourceDownloadStatus.downloading) return;
+    if (detail.chapters.isEmpty) {
+      _status = SourceDownloadStatus.failed;
+      _error = '目录为空，无法下载';
+      return;
+    }
     _cancelled = false;
     _error = null;
     _status = SourceDownloadStatus.downloading;
@@ -73,40 +92,59 @@ class SourceDownloadTask {
           return;
         }
         if (_cache.containsKey(chapter.index)) {
-          _done++;
-          onProgress(_done, total, chapter.title);
+          onProgress(done, total, chapter.title);
           continue;
         }
-        onProgress(_done, total, chapter.title);
+        onProgress(done, total, chapter.title);
+        SourceChapterContent? content;
+        String? error;
         try {
-          final content = await fetcher(client, chapter);
-          if (content.isEmpty) {
-            throw const SourceEmptyContent();
-          }
-          _cache[chapter.index] = content;
-          _results.add(
-            SourceChapterResult(chapter: chapter, content: content),
-          );
+          content = await fetcher(client, chapter);
+          if (content.isEmpty) throw const SourceEmptyContent();
         } on SourceNeedVerify {
+          // 取消优先：用户已取消则不再引导验证。
+          if (_cancelled) {
+            _status = SourceDownloadStatus.cancelled;
+            return;
+          }
           _status = SourceDownloadStatus.pausedNeedVerify;
           rethrow;
         } catch (e) {
-          _results.add(
-            SourceChapterResult(chapter: chapter, error: e.toString()),
+          error = e.toString();
+        }
+        // 请求返回后再次检查取消（最后一章取消也能生效）。
+        if (_cancelled) {
+          // 保留刚取得的有效正文，但按取消结束。
+          if (content != null) {
+            _cache[chapter.index] = content;
+            _results[chapter.index] = SourceChapterResult(
+              chapter: chapter,
+              content: content,
+            );
+          }
+          _status = SourceDownloadStatus.cancelled;
+          return;
+        }
+        if (content != null) {
+          _cache[chapter.index] = content;
+          _results[chapter.index] = SourceChapterResult(
+            chapter: chapter,
+            content: content,
+          );
+        } else {
+          _results[chapter.index] = SourceChapterResult(
+            chapter: chapter,
+            error: error ?? '未知错误',
           );
         }
-        _done++;
-        onProgress(_done, total, chapter.title);
-        // 限流：章间短暂间隔，避免触发站点限流。
+        onProgress(done, total, chapter.title);
         await Future.delayed(const Duration(milliseconds: 800));
+        if (_cancelled) {
+          _status = SourceDownloadStatus.cancelled;
+          return;
+        }
       }
-      final failed = _results.where((r) => !r.success).length;
-      if (failed > 0) {
-        _status = SourceDownloadStatus.failed;
-        _error = '$failed 章下载失败，可重试';
-        return;
-      }
-      _status = SourceDownloadStatus.completed;
+      _finish();
     } catch (e) {
       if (e is SourceNeedVerify) rethrow;
       _status = SourceDownloadStatus.failed;
@@ -114,31 +152,39 @@ class SourceDownloadTask {
     }
   }
 
-  /// 重试失败章节。
-  Future<void> retryFailed(DownloadProgress onProgress) async {
-    final failedIndexes = _results
-        .where((r) => !r.success)
-        .map((r) => r.chapter.index)
-        .toSet();
-    if (failedIndexes.isEmpty) return;
-    _results.removeWhere((r) => failedIndexes.contains(r.chapter.index));
-    _done = total - failedIndexes.length;
-    _error = null;
-    await start(onProgress);
+  void _finish() {
+    if (_cancelled) {
+      _status = SourceDownloadStatus.cancelled;
+      return;
+    }
+    // 完成判定：每一章都必须有有效缓存（不只看"无失败记录"）。
+    final missing = detail.chapters
+        .where((c) => !_cache.containsKey(c.index))
+        .toList();
+    if (missing.isEmpty) {
+      _status = SourceDownloadStatus.completed;
+    } else {
+      _status = SourceDownloadStatus.failed;
+      _error = '${missing.length} 章未下载成功，可重试';
+    }
   }
 
-  List<SourceChapterResult> get failedResults =>
-      _results.where((r) => !r.success).toList();
+  /// 重试失败章节（= 继续下载未缓存章节）。运行中调用直接返回。
+  Future<void> retryFailed(DownloadProgress onProgress) =>
+      start(onProgress);
 
   /// 生成 TXT 并入库。返回导入的 LocalBook，失败抛错。
-  /// 章节失败时不静默跳过：有失败章节则拒绝入库，由调用方先处理。
+  /// 有缺失章节时拒绝入库（不静默跳过）。
   Future<LocalBook> saveToLibrary() async {
     if (_status != SourceDownloadStatus.completed) {
       throw StateError('下载未完成，无法入库');
     }
-    final failed = failedResults;
-    if (failed.isNotEmpty) {
-      throw StateError('${failed.length} 章下载失败，请先重试成功后再入库');
+    // 第二道完整性保障：保存前再次验证每一章都有缓存。
+    final missing = detail.chapters
+        .where((c) => !_cache.containsKey(c.index))
+        .toList();
+    if (missing.isNotEmpty) {
+      throw StateError('${missing.length} 章缺失，无法入库');
     }
     final text = _buildTxt();
     final fileName = _fileName();
@@ -146,15 +192,13 @@ class SourceDownloadTask {
     final file = File('$dir/$fileName');
     await file.writeAsString(text);
     final result = await local.scanAppFolder();
-    // 扫描后按文件名找回刚导入的书。
-    final book = local.books
+    final imported = local.books
         .where((b) => b.fileName == fileName)
         .cast<LocalBook?>();
-    final imported = book.isEmpty ? null : book.first;
-    if (imported == null) {
+    if (imported.isEmpty) {
       throw StateError('入库失败：扫描完成但未找到书籍（added=${result.added}）');
     }
-    return imported;
+    return imported.first!;
   }
 
   Future<String> _novelsDir() async {
@@ -177,12 +221,14 @@ class SourceDownloadTask {
     final title = _sanitize(detail.book.title);
     final author = _sanitize(detail.book.author);
     final base = author.isEmpty ? title : '$title - $author';
-    // 同名文件已存在时加序号，避免覆盖用户已有书籍。
-    return '$base [书源].txt';
+    // 标记来源；同名文件已存在时 scanAppFolder 会按修改时间刷新，
+    // 为避免覆盖用户已有同名书籍，加序号。
+    var name = '$base [书源].txt';
+    return name;
   }
 
-  /// 生成 TXT：章节标题行符合本地 _chapterTitlePattern（第X章，≤42字），
-  /// 确保导入后能正确切分章节。
+  /// 生成 TXT：严格按 detail.chapters 顺序（用 _cache 按 index 取），
+  /// 章节标题行符合本地 _chapterTitlePattern（第X章，≤42字）。
   String _buildTxt() {
     final buf = StringBuffer();
     buf.writeln('《${detail.book.title}》');
@@ -194,11 +240,9 @@ class SourceDownloadTask {
       buf.writeln('简介：${detail.book.description!.trim()}');
     }
     buf.writeln();
-    final ordered = _cache.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key));
-    for (final entry in ordered) {
-      final content = entry.value;
-      buf.writeln(_chapterHeading(entry.key, content.title));
+    for (final chapter in detail.chapters) {
+      final content = _cache[chapter.index]!;
+      buf.writeln(_chapterHeading(chapter.index, content.title));
       buf.writeln();
       for (final p in content.paragraphs) {
         final line = p.trim();
@@ -213,15 +257,11 @@ class SourceDownloadTask {
   /// 章节标题行：保证命中本地章节正则且不超过 42 字。
   String _chapterHeading(int index, String rawTitle) {
     final t = rawTitle.trim();
-    // 站点标题已是"第X章"格式且长度合适时直接用。
     if (t.length <= 40 &&
         RegExp(r'^第[一二三四五六七八九十百千零〇两\d\s　]+[章节回集卷部篇]').hasMatch(t)) {
       return t;
     }
-    // 否则用序号重建标题，原标题截断拼接。
-    var suffix = t;
-    // 去掉可能重复的序号前缀，避免"第1章 第1章 xxx"。
-    suffix = suffix
+    var suffix = t
         .replaceFirst(
           RegExp(r'^第[一二三四五六七八九十百千零〇两\d\s　]+[章节回集卷部篇]\s*'),
           '',
