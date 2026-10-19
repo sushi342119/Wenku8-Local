@@ -40,6 +40,7 @@ import 'ui_notifiers.dart';
 import 'feature_pages.dart';
 import 'local_library.dart';
 import 'local_library_page.dart';
+import 'source/source_search_page.dart';
 import 'local_pdf_reader.dart';
 import 'tag_pages.dart';
 import 'updates/update_page.dart';
@@ -2224,6 +2225,23 @@ class SettingsPage extends StatelessWidget {
                 reduceMotion: state.reduceMotion,
               ),
             ),
+            // 书源试验版（source-trial 分支）：书源搜索/下载入口。
+            if (trialChannel &&
+                LocalPlatform.android &&
+                localLibraryOf(repository) != null) ...[
+              const SizedBox(height: 14),
+              FeatureEntry(
+                key: const ValueKey('settings-source-trial'),
+                title: '书源试验 · 123小说网',
+                icon: CupertinoIcons.cloud_download,
+                subtitle: '搜索站内书籍，下载后转本地 TXT 阅读',
+                onTap: () => pushNovelPage<void>(
+                  context,
+                  SourceSearchPage(local: localLibraryOf(repository)!),
+                  reduceMotion: state.reduceMotion,
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             FeatureEntry(
               key: const ValueKey('settings-tag-manage'),
