@@ -16,7 +16,6 @@ import 'gbk_codec.dart';
 import 'site_adapter.dart';
 import 'source_client.dart';
 import 'source_config.dart';
-import 'source_download.dart';
 import 'source_models.dart';
 
 class Site123Adapter implements SiteAdapter {

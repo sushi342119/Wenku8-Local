@@ -7,7 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../local_library.dart';
-import '../pages.dart' show pushNovelPage, showNovelFeedback;
+import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
 import 'site_adapter.dart';
 import 'source_client.dart';
 import 'source_download.dart';

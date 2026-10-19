@@ -8,7 +8,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import '../local_library.dart';
-import '../pages.dart' show pushNovelPage, showNovelFeedback;
+import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
 import 'cloudflare_page.dart';
 import 'site_123.dart';
 import 'site_adapter.dart';

@@ -77,8 +77,7 @@ class SourceClient {
   }) async {
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 12);
-    // 手动跟随重定向，以便在每一跳检查挑战页。
-    client.maxRedirects = 0;
+    // 手动跟随重定向，以便在每一跳检查挑战页（per-request 设置 followRedirects）。
     try {
       var current = uri;
       for (var hop = 0; hop < 6; hop++) {

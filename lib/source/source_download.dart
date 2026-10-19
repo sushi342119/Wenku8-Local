@@ -11,9 +11,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../local_library.dart';
-import 'site_adapter.dart';
 import 'source_client.dart';
-import 'source_config.dart';
 import 'source_models.dart';
 
 /// 章节正文拉取函数（由站点适配器提供）。
