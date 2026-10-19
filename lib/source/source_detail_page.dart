@@ -72,7 +72,9 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
     } on WebViewNeedVerify {
       if (!mounted) return;
       setState(() => _loading = false);
-      await widget.onVerify(() => _load());
+      // 详情页在栈顶，验证 UI 在搜索页：先弹回搜索页，用户重新搜索时触发验证。
+      showNovelFeedback(context, '需要重新验证，已返回搜索页');
+      if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = '加载失败：$e');
@@ -120,8 +122,9 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
     } on SourceNeedVerify {
       if (!mounted) return;
       setState(() => _downloading = false);
-      final ok = await widget.onVerify(() => _download());
-      if (!ok && mounted) setState(() => _task = null);
+      // 下载中遇到验证：弹回搜索页（验证 UI 在搜索页）
+      showNovelFeedback(context, '下载需要重新验证，已返回搜索页');
+      if (mounted) Navigator.of(context).pop();
       return;
     }
     if (!mounted) return;
@@ -196,7 +199,8 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
     } on SourceNeedVerify {
       if (!mounted) return;
       setState(() => _downloading = false);
-      await widget.onVerify(() => _retry(task));
+      showNovelFeedback(context, '下载需要重新验证，已返回搜索页');
+      if (mounted) Navigator.of(context).pop();
       return;
     }
     if (!mounted) return;

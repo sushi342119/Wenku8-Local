@@ -85,56 +85,52 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     }
   }
 
-  /// 内嵌 WebView 验证：显示 WebView 供用户完成验证，完成后重试原操作。
+  /// 待重试的操作（验证完成后执行）。
+  Future<void> Function()? _pendingRetry;
+
+  /// 内嵌 WebView 验证：切换到 WebView 页面供用户完成验证。
   /// 返回 true 表示验证成功（调用方重试），false 表示用户取消。
   Future<bool> _verifyThenRetry(Future<void> Function() retry) async {
     if (!mounted) return false;
+    // 防重入：已在验证中则不再重复触发。
+    if (_verifying) return false;
+    _pendingRetry = retry;
     setState(() => _verifying = true);
-    // 等待用户完成验证：轮询检查挑战是否解除，或用户点"已完成验证"。
-    // 这里简单处理：显示 WebView，用户完成后点按钮。
-    final completed = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('需要验证'),
-        content: const Text('请在下方 WebView 中完成人机验证，完成后点击"已完成验证"。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('已完成验证'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return false;
+    return false; // 实际重试由 _onVerifyDone 触发
+  }
+
+  /// 用户点击"已完成验证"：试读确认后执行待重试操作。
+  Future<void> _onVerifyDone() async {
+    if (!mounted) return;
     setState(() => _verifying = false);
-    if (completed != true) {
-      showNovelFeedback(context, '已取消验证');
-      return false;
-    }
+    final retry = _pendingRetry;
+    _pendingRetry = null;
+    if (retry == null) return;
     // 验证后试读：确认 WebView 会话可用（第一道验收门槛）。
     try {
       final probe = await _client.get(Uri.parse(SourceConfig.instance.baseUrl));
       if (probe.challenged) {
-        if (mounted) showNovelFeedback(context, '验证后仍被拦截，请重试');
-        return false;
+        if (mounted) {
+          showNovelFeedback(context, '验证尚未通过，请重新验证');
+          // 保留在验证流程：重新显示 WebView
+          _pendingRetry = retry;
+          setState(() => _verifying = true);
+        }
+        return;
       }
     } catch (e) {
       if (mounted) {
         if (e is WebViewNeedVerify) {
-          showNovelFeedback(context, '验证未完成，请重试');
+          showNovelFeedback(context, '验证未完成，请继续验证');
+          _pendingRetry = retry;
+          setState(() => _verifying = true);
         } else {
           showNovelFeedback(context, '验证后试读失败：$e');
         }
       }
-      return false;
+      return;
     }
     await retry();
-    return true;
   }
 
   void _openDetail(SourceBook book) {
@@ -164,7 +160,8 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
           ),
         ],
       ),
-      body: Stack(
+      body: IndexedStack(
+        index: _verifying ? 1 : 0,
         children: [
           Column(
             children: [
@@ -199,25 +196,53 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
               ),
             ],
           ),
-          // 内嵌 WebView：平时 1px 隐藏，验证时展开显示。
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            height: _verifying ? 400 : 1,
-            child: Offstage(
-              offstage: !_verifying,
-              child: InAppWebView(
-                initialSettings: InAppWebViewSettings(
-                  javaScriptEnabled: true,
-                  userAgent: sourceUserAgent,
+          // 内嵌 WebView：正常尺寸，平时在主内容下方（IndexedStack index 0），
+          // 验证时切换到前台。避免 1px 隐藏被识别为无头浏览器。
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '请在下方完成网站验证',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        // 用户取消验证
+                        setState(() => _verifying = false);
+                      },
+                      child: const Text('取消'),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      onPressed: _onVerifyDone,
+                      child: const Text('已完成验证'),
+                    ),
+                  ],
                 ),
-                initialUrlRequest: URLRequest(
-                  url: WebUri.uri(Uri.parse(SourceConfig.instance.baseUrl)),
-                ),
-                onWebViewCreated: _webViewSession.attach,
               ),
-            ),
+              Expanded(
+                child: InAppWebView(
+                  initialSettings: InAppWebViewSettings(
+                    javaScriptEnabled: true,
+                    userAgent: sourceUserAgent,
+                  ),
+                  initialUrlRequest: URLRequest(
+                    url: WebUri.uri(Uri.parse(SourceConfig.instance.baseUrl)),
+                  ),
+                  onWebViewCreated: _webViewSession.attach,
+                  onLoadStop: (controller, url) {
+                    _webViewSession.onLoadStop(
+                      url == null ? null : Uri.tryParse(url.toString()),
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ],
       ),
