@@ -13,11 +13,18 @@ const updateRepository = String.fromEnvironment(
   defaultValue: 'sushi342119/Wenku8-Local',
 );
 const currentAppVersion = '1.2.2';
-const currentAppBuild = 29;
+const currentAppBuild = 1001;
+// 试验版（source-trial 分支）走独立更新通道：只认 source- 前缀的 tag。
+// 构建时通过 --dart-define=TRIAL_CHANNEL=true 开启。
+const trialChannel = bool.fromEnvironment(
+  'TRIAL_CHANNEL',
+  defaultValue: false,
+);
 const currentReleaseNotes = '''
-1. 阅读器底部新增可拖动进度条：显示全书进度，拖动可跳转章节
-2. 书籍详情页新增「···」菜单：可编辑书籍信息、删除文件
-3. 更换小说文件夹后切回，书籍标签自动保留恢复
+【书源试验版】
+1. 新增书源试验入口：123小说网（单站点接入试验）
+2. 支持搜索、目录解析、正文下载转本地 TXT 入库
+3. 站点基址可在设置中手动修改
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
@@ -91,13 +98,23 @@ class AppRelease {
   final ReleaseVersion version;
   final Uri page;
   final List<UpdateAsset> assets;
-  static AppRelease? fromGithub(Map<String, dynamic> json, String repository) {
+  static AppRelease? fromGithub(
+    Map<String, dynamic> json,
+    String repository, {
+    bool trial = false,
+  }) {
     if (!RegExp(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$').hasMatch(repository)) {
       throw const FormatException('更新仓库格式错误');
     }
     if (json['draft'] == true || json['prerelease'] == true) return null;
     final tag = json['tag_name'];
-    final version = tag is String ? ReleaseVersion.parse(tag) : null;
+    // 试验通道的 tag 形如 source-v1.2.2+1001，解析版本时去掉 source- 前缀；
+    // 正式通道不传 trial，source- 开头的 tag 解析失败，自动被忽略。
+    final versionTag =
+        (trial && tag is String && tag.startsWith('source-'))
+        ? tag.substring('source-'.length)
+        : tag;
+    final version = versionTag is String ? ReleaseVersion.parse(versionTag) : null;
     if (version == null) return null;
     final assets = <UpdateAsset>[];
     for (final raw in (json['assets'] as List? ?? const [])) {
@@ -248,15 +265,13 @@ class GithubUpdateSource implements UpdateSource {
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 12);
     try {
+      // 试验通道：列出 releases，取最新的 source- 前缀正式版；
+      // 与正式通道隔离，互不串包。
+      if (trialChannel) return await _latestTrial(client);
       final request = await client.getUrl(
         Uri.https('api.github.com', '/repos/$repository/releases/latest'),
       );
-      request.headers.set(
-        HttpHeaders.acceptHeader,
-        'application/vnd.github+json',
-      );
-      request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8-Flutter');
-      request.headers.set('X-GitHub-Api-Version', '2022-11-28');
+      _setGithubHeaders(request);
       final response = await request.close().timeout(
         const Duration(seconds: 20),
       );
@@ -264,11 +279,7 @@ class GithubUpdateSource implements UpdateSource {
       if (response.statusCode != 200) {
         throw HttpException('GitHub ${response.statusCode}');
       }
-      final data = <int>[];
-      await for (final chunk in response.timeout(const Duration(seconds: 20))) {
-        data.addAll(chunk);
-        if (data.length > 1024 * 1024) throw const FormatException('版本说明过大');
-      }
+      final data = await _readBody(response);
       return AppRelease.fromGithub(
         jsonDecode(utf8.decode(data)) as Map<String, dynamic>,
         repository,
@@ -276,6 +287,50 @@ class GithubUpdateSource implements UpdateSource {
     } finally {
       client.close(force: true);
     }
+  }
+
+  /// 试验通道：取最新的 source- 前缀 Release。
+  Future<AppRelease?> _latestTrial(HttpClient client) async {
+    final request = await client.getUrl(
+      Uri.https('api.github.com', '/repos/$repository/releases', {
+        'per_page': '20',
+      }),
+    );
+    _setGithubHeaders(request);
+    final response = await request.close().timeout(const Duration(seconds: 20));
+    if (response.statusCode == 404) return null;
+    if (response.statusCode != 200) {
+      throw HttpException('GitHub ${response.statusCode}');
+    }
+    final data = await _readBody(response);
+    final list = jsonDecode(utf8.decode(data));
+    if (list is! List) return null;
+    for (final item in list) {
+      if (item is! Map<String, dynamic>) continue;
+      final tag = item['tag_name'];
+      if (tag is! String || !tag.startsWith('source-')) continue;
+      final release = AppRelease.fromGithub(item, repository, trial: true);
+      if (release != null) return release;
+    }
+    return null;
+  }
+
+  static void _setGithubHeaders(HttpClientRequest request) {
+    request.headers.set(
+      HttpHeaders.acceptHeader,
+      'application/vnd.github+json',
+    );
+    request.headers.set(HttpHeaders.userAgentHeader, 'Wenku8-Flutter');
+    request.headers.set('X-GitHub-Api-Version', '2022-11-28');
+  }
+
+  static Future<List<int>> _readBody(HttpClientResponse response) async {
+    final data = <int>[];
+    await for (final chunk in response.timeout(const Duration(seconds: 20))) {
+      data.addAll(chunk);
+      if (data.length > 1024 * 1024) throw const FormatException('版本说明过大');
+    }
+    return data;
   }
 
   @override
