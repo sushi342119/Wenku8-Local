@@ -191,6 +191,9 @@ class SourceClient {
   /// Cloudflare 挑战页检测：标题或特征标记。
   /// 注意：403 不一定是验证，空正文也不一定是会话过期，调用方需结合
   /// 页面内容区分"拒绝访问 / 限流 / 改版 / 网络失败"。
+  /// 公开的挑战检测（供 WebView 取页器使用）。
+  static bool looksLikeChallenge(String html) => _looksLikeChallenge(html);
+
   static bool _looksLikeChallenge(String html) {
     final head = html.length > 8192 ? html.substring(0, 8192) : html;
     final lower = head.toLowerCase();
