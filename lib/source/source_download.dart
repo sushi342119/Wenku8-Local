@@ -216,11 +216,19 @@ class SourceDownloadTask extends ChangeNotifier {
       await file.writeAsString(text);
       await local.scanAppFolder();
     }
-    final imported = local.books
+    var imported = local.books
         .where((b) => b.fileName == actualFileName)
         .cast<LocalBook?>();
+    if (imported.isEmpty && safFolder != null && safFolder.isNotEmpty) {
+      // SAF provider 可能有短暂同步延迟：重试一次扫描。
+      await Future.delayed(const Duration(milliseconds: 600));
+      await local.scan();
+      imported = local.books
+          .where((b) => b.fileName == actualFileName)
+          .cast<LocalBook?>();
+    }
     if (imported.isEmpty) {
-      throw StateError('入库失败：扫描完成但未找到书籍');
+      throw StateError('文件已保存（$actualFileName），但扫描暂未识别，请在本地书库点扫描');
     }
     return imported.first!;
   }
