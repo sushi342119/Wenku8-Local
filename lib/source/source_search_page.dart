@@ -324,27 +324,47 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                 ),
               ),
               Expanded(
-                child: InAppWebView(
-                  initialSettings: InAppWebViewSettings(
-                    javaScriptEnabled: true,
-                    userAgent: sourceUserAgent,
-                  ),
-                  initialUrlRequest: URLRequest(
-                    url: WebUri.uri(Uri.parse(SourceConfig.instance.baseUrl)),
-                  ),
-                  onWebViewCreated: _webViewSession.attach,
-                  onLoadStop: (controller, url) {
-                    _webViewSession.onLoadStop(
-                      url == null ? null : Uri.tryParse(url.toString()),
+                // session 作废旧实例（超时隔离）后重建 WebView
+                child: ValueListenableBuilder<int>(
+                  valueListenable: _webViewSession.instanceNotifier,
+                  builder: (context, instance, _) {
+                    return InAppWebView(
+                      key: ValueKey(instance),
+                      initialSettings: InAppWebViewSettings(
+                        javaScriptEnabled: true,
+                        userAgent: sourceUserAgent,
+                      ),
+                      initialUrlRequest: URLRequest(
+                        url: WebUri.uri(
+                            Uri.parse(SourceConfig.instance.baseUrl)),
+                      ),
+                      onWebViewCreated: (controller) =>
+                          _webViewSession.attach(controller, instance),
+                      onLoadStart: (controller, url) {
+                        _webViewSession.onLoadStart(
+                          url == null ? null : Uri.tryParse(url.toString()),
+                          instance,
+                        );
+                      },
+                      onLoadStop: (controller, url) {
+                        _webViewSession.onLoadStop(
+                          url == null ? null : Uri.tryParse(url.toString()),
+                          instance,
+                        );
+                      },
+                      onReceivedError: (controller, request, error) {
+                        // 仅主框架错误有效（isForMainFrame），带 URL 归属
+                        if (request.isForMainFrame == true) {
+                          _webViewSession.onReceivedError(
+                            error.description,
+                            request.url == null
+                                ? null
+                                : Uri.tryParse(request.url.toString()),
+                            instance,
+                          );
+                        }
+                      },
                     );
-                  },
-                  onReceivedError: (controller, request, error) {
-                    // 仅主框架错误有效（isForMainFrame）
-                    if (request.isForMainFrame == true) {
-                      _webViewSession.onReceivedError(
-                        error.description,
-                      );
-                    }
                   },
                 ),
               ),

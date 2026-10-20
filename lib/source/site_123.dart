@@ -296,19 +296,32 @@ List<_ChapterSubPage> _findChapterSubPages(Document doc, Uri current) {
 final candidates = <_ChapterSubPage>[];
 final seen = <String>{};
 final pagePattern = RegExp(r'^【(\d+)】$');
+// 子页 URL 规律：当前页 /书名号.html → 子页 /书名号_N.html
+final currentPath = current.path;
+final subUrlPattern = RegExp(
+  '^' +
+      RegExp.escape(currentPath.replaceAll(RegExp(r'\.html$'), '')) +
+      r'_(\d+)\.html$',
+);
 final currentNoFrag = current.removeFragment().toString();
 for (final a in doc.querySelectorAll('a')) {
-final t = a.text.trim();
-final m = pagePattern.firstMatch(t);
-if (m == null) continue;
-final num = int.tryParse(m.group(1)?? '');
-if (num == null || num <= 1) continue; // 【1】是当前页
 final href = a.attributes['href']?.trim();
 if (href == null || href.isEmpty) continue;
 final resolved = current.resolve(href);
 if (!_isSameSite(resolved)) continue;
 final key = resolved.removeFragment().toString();
 if (key == currentNoFrag) continue;
+int? num;
+final t = a.text.trim();
+final m = pagePattern.firstMatch(t);
+if (m != null) {
+  num = int.tryParse(m.group(1) ?? '');
+} else {
+  // 文字不是【N】时，按 URL 规律兜底识别（如"下一页"链接指向 _2.html）
+  final um = subUrlPattern.firstMatch(resolved.path);
+  if (um != null) num = int.tryParse(um.group(1) ?? '');
+}
+if (num == null || num <= 1) continue; // 第 1 页是当前页
 if (seen.add(key)) candidates.add(_ChapterSubPage(num, resolved));
 }
 // 按整数页码排序（字符串排序会把 10 排在 2 前面）。

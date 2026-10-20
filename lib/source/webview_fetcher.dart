@@ -7,6 +7,8 @@ library;
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
 import 'source_client.dart';
@@ -18,7 +20,13 @@ import 'source_client.dart';
 ///  （避免读到旧页面）。
 class WebViewSession implements WebViewFetcher {
   InAppWebViewController? _controller;
-  final Completer<void> _ready = Completer<void>();
+  Completer<void> _ready = Completer<void>();
+
+  /// WebView 实例号。导航超时后作废旧实例并自增，页面监听到变化会
+  /// 重建 WebView；旧实例的一切回调（带旧实例号）都会被拒绝，
+  /// 从根本上隔离迟到回调。
+  final ValueNotifier<int> instanceNotifier = ValueNotifier<int>(0);
+  int get instance => instanceNotifier.value;
 
   /// 串行锁：上一个取页任务的 Future。
   Future<void> _lock = Future.value();
@@ -32,32 +40,93 @@ class WebViewSession implements WebViewFetcher {
   Completer<Uri>? _loadCompleter;
   Uri? _expectUrl;
 
-  /// 主框架加载错误（由 onReceivedError 记录）。
-  /// 键为导航批次（每次 fetchHtml 自增），避免旧错误污染新任务。
-  int _navSeq = 0;
-  int _errorNavSeq = -1;
+  /// 主框架加载错误（由 onReceivedError 记录，带请求 URL 与时间做归属）。
+  /// 消费后清空，避免旧错误污染新任务。
+  String? _lastErrorUrl;
   String? _lastErrorDescription;
+  DateTime? _lastErrorTime;
+  DateTime? _navStartTime;
 
-  void attach(InAppWebViewController controller) {
+  /// 本次取页的导航是否已被确认启动（由与目标 URL 相符的 onLoadStart 武装）。
+  /// 初始页加载等与本次无关的 onLoadStop 不会提前完成等待器。
+  bool _navArmed = false;
+
+  void attach(InAppWebViewController controller, int instance) {
+    if (instance != this.instance) return; // 旧实例，忽略
     _controller = controller;
     if (!_ready.isCompleted) _ready.complete();
   }
 
   /// WebView 的 onReceivedError 回调应转发到此（仅主框架错误有效）。
-  void onReceivedError(String? description) {
-    _errorNavSeq = _navSeq;
+  /// 传入触发错误的请求 URL，用于把错误归属到正确的导航。
+  void onReceivedError(String? description, Uri? requestUrl, int instance) {
+    if (instance != this.instance) return; // 旧实例的迟到回调，拒绝
+    _lastErrorUrl = requestUrl?.removeFragment().toString();
     _lastErrorDescription = description ?? '页面加载失败';
+    _lastErrorTime = DateTime.now();
+  }
+
+  /// 当前导航是否命中了记录的主框架错误。
+  /// 须同时满足：URL 归属（请求 URL 或重定向后最终 URL）+ 错误发生在
+  /// 本次导航窗口内（早于导航开始的迟到回调不认）。
+  bool _hitMainFrameError(Set<String> navUrls) {
+    final errUrl = _lastErrorUrl;
+    final errTime = _lastErrorTime;
+    final navStart = _navStartTime;
+    _lastErrorUrl = null; // 消费：无论是否命中都清空
+    _lastErrorTime = null;
+    if (errUrl == null || errUrl.isEmpty) return false;
+    if (!navUrls.contains(errUrl)) return false;
+    if (navStart != null && errTime != null && errTime.isBefore(navStart)) {
+      return false; // 上一导航迟到的回调
+    }
+    return true;
   }
 
   Future<void> get ready => _ready.future;
 
   /// WebView 的 onLoadStop 回调应转发到此。
-  void onLoadStop(Uri? url) {
+  /// WebView 的 onLoadStart 回调应转发到此。
+  /// 只有 URL 与本次取页目标相符时才武装（重定向链保持武装直到 onLoadStop）。
+  void onLoadStart(Uri? url, int instance) {
+    if (instance != this.instance) return; // 旧实例，忽略
+    final expect = _expectUrl;
+    if (expect != null && url != null &&
+        url.removeFragment().toString() ==
+            expect.removeFragment().toString()) {
+      _navArmed = true;
+    }
+  }
+
+  void onLoadStop(Uri? url, int instance) {
+    if (instance != this.instance) return; // 旧实例，忽略
     final c = _loadCompleter;
-    if (c != null && !c.isCompleted && url != null) {
-      // 只要有页面加载完成就通知；fetchHtml 会再校验 URL 是否匹配。
+    if (c != null && !c.isCompleted && url != null && _navArmed) {
+      _navArmed = false;
       c.complete(url);
     }
+  }
+
+  /// 以 fire-and-forget 方式停止旧控制器（带 2 秒上限，超时/异常都吞掉）。
+  static Future<void> _stopOldLoading(
+      InAppWebViewController controller) async {
+    try {
+      await controller.stopLoading().timeout(const Duration(seconds: 2));
+    } catch (_) {}
+  }
+
+  /// 作废当前 WebView 实例：清控制器/完成器/错误记录，实例号自增，
+  /// 页面会据此重建 WebView。Cookie 由平台 CookieManager 持有，不受影响。
+  void _invalidateInstance() {
+    _controller = null;
+    _loadCompleter = null;
+    _lastErrorUrl = null;
+    _lastErrorDescription = null;
+    _lastErrorTime = null;
+    _navArmed = false;
+    _expectUrl = null;
+    _ready = Completer<void>();
+    instanceNotifier.value++;
   }
 
   /// 加载 [uri]，等待加载完成后经 JS 取 outerHTML。
@@ -96,8 +165,12 @@ class WebViewSession implements WebViewFetcher {
     final loadCompleter = Completer<Uri>();
     _loadCompleter = loadCompleter;
     _expectUrl = uri;
-    _navSeq++;
-    final mySeq = _navSeq;
+    // 本次导航开始：清掉上一导航遗留的错误记录并记录开始时间。
+    _lastErrorUrl = null;
+    _lastErrorDescription = null;
+    _lastErrorTime = null;
+    _navStartTime = DateTime.now();
+    _navArmed = false;
 
     try {
       await controller.loadUrl(urlRequest: URLRequest(url: WebUri.uri(uri)));
@@ -108,12 +181,24 @@ class WebViewSession implements WebViewFetcher {
           timeout,
           onTimeout: () => throw TimeoutException('页面加载超时', timeout),
         );
+      } on TimeoutException {
+        // 超时时旧导航的回调可能仍会迟到：先作废整个 WebView 实例
+        // （页面将重建），旧实例回调一律拒绝，避免污染下一次同 URL 取页；
+        // 旧控制器的 stopLoading 以 fire-and-forget 方式执行，
+        // 恢复与锁释放不依赖它返回。
+        _invalidateInstance();
+        unawaited(_stopOldLoading(controller));
+        rethrow;
       } finally {
         if (_loadCompleter == loadCompleter) _loadCompleter = null;
       }
 
       // 主框架加载出错（如 DNS 失败）：绝不能把错误页当正文。
-      if (_errorNavSeq == mySeq) {
+      final navUrls = <String>{
+        uri.removeFragment().toString(),
+        loadedUrl.removeFragment().toString(),
+      };
+      if (_hitMainFrameError(navUrls)) {
         throw WebViewPageError(_lastErrorDescription ?? '页面加载失败');
       }
       // 加载完成后取 HTML（此时文档已就绪）。
@@ -132,6 +217,10 @@ class WebViewSession implements WebViewFetcher {
       if (html.length < 100) {
         throw const WebViewFetchEmpty('页面内容为空');
       }
+      // 返回 HTML 前再次检查：取 HTML 期间到达的错误。
+      if (_hitMainFrameError(navUrls)) {
+        throw WebViewPageError(_lastErrorDescription ?? '页面加载失败');
+      }
       // 兜底：错误页 HTML 特征检测（Chrome 错误页）。
       if (_looksLikeErrorPage(html)) {
         throw const WebViewPageError('页面加载失败（错误页）');
@@ -146,6 +235,8 @@ class WebViewSession implements WebViewFetcher {
       );
     } finally {
       if (_loadCompleter == loadCompleter) _loadCompleter = null;
+      _expectUrl = null;
+      _navArmed = false;
     }
   }
 }
@@ -173,11 +264,17 @@ class WebViewPageError implements Exception {
 }
 
 /// Chrome 错误页特征（兜底检测）。
+/// 须同时满足：全文含错误码 + 正文有错误页的典型结构
+/// （"网页无法打开"标题与"因为："说明），避免正文偶然提到
+/// 错误码（如讨论网络问题）时误伤正常章节。
 bool _looksLikeErrorPage(String html) {
   final lower = html.toLowerCase();
-  return lower.contains('err_name_not_resolved') ||
-      lower.contains('err_internet_disconnected') ||
-      lower.contains('err_connection_') ||
-      lower.contains('net::err_') ||
-      (lower.contains('网页无法打开') && lower.contains('因为：'));
+  const errorCodes = [
+    'err_name_not_resolved',
+    'err_internet_disconnected',
+    'err_connection_',
+    'net::err_',
+  ];
+  if (!errorCodes.any(lower.contains)) return false;
+  return lower.contains('网页无法打开') && lower.contains('因为：');
 }
