@@ -99,6 +99,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     // 防重入：已在验证中则不再重复触发。
     if (_verifying) return false;
     _pendingRetry = retry;
+    _webViewSession.setVerifying(true);
     setState(() => _verifying = true);
     return false; // 实际重试由 _onVerifyDone 触发
   }
@@ -106,6 +107,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   /// 用户点击"已完成验证"：试读确认后执行待重试操作。
   Future<void> _onVerifyDone() async {
     if (!mounted) return;
+    _webViewSession.setVerifying(false);
     setState(() => _verifying = false);
     final retry = _pendingRetry;
     _pendingRetry = null;
@@ -146,6 +148,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   /// 后台下载因验证暂停时，用户点击横幅触发验证。
   void _verifyForDownloads() {
     if (_verifying) return;
+    _webViewSession.setVerifying(true);
     setState(() => _verifying = true);
   }
 
@@ -292,6 +295,8 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                     TextButton(
                       onPressed: () {
                         // 用户取消验证
+                        _webViewSession.setVerifying(false);
+                        _pendingRetry = null;
                         setState(() => _verifying = false);
                       },
                       child: const Text('取消'),

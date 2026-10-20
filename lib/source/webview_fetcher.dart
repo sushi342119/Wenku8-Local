@@ -23,6 +23,11 @@ class WebViewSession implements WebViewFetcher {
   /// 串行锁：上一个取页任务的 Future。
   Future<void> _lock = Future.value();
 
+  /// UI 正在显示 WebView 供用户验证时为 true；此时取页等待验证完成，
+  /// 避免下载/搜索的导航把验证页面覆盖掉。
+  bool _verifying = false;
+  void setVerifying(bool v) => _verifying = v;
+
   /// 当前取页任务的完成器（由 onLoadStop 触发）。
   Completer<Uri>? _loadCompleter;
   Uri? _expectUrl;
@@ -52,7 +57,17 @@ class WebViewSession implements WebViewFetcher {
     Duration timeout = const Duration(seconds: 30),
   }) {
     // 串行化：排队等待上一个任务完成。
-    final task = _lock.then((_) => _fetchInner(uri, timeout));
+    final task = _lock.then((_) async {
+      // 验证中时等待用户完成（最多 120 秒），避免导航覆盖验证页。
+      final verifyDeadline = DateTime.now().add(
+        const Duration(seconds: 120),
+      );
+      while (_verifying && DateTime.now().isBefore(verifyDeadline)) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      if (_verifying) throw TimeoutException('等待验证超时');
+      return _fetchInner(uri, timeout);
+    });
     // 无论成功失败，都更新锁（避免异常导致后续任务永久阻塞）。
     _lock = task.then((_) {}, onError: (_) {});
     return task;
