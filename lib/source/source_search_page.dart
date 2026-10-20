@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 
+import '../library_state.dart';
 import '../local_library.dart';
 import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
 import 'site_123.dart';
@@ -22,9 +23,10 @@ import 'source_download.dart';
 import 'webview_fetcher.dart';
 
 class SourceSearchPage extends StatefulWidget {
-  const SourceSearchPage({super.key, required this.local});
+  const SourceSearchPage({super.key, required this.local, required this.libraryState});
 
   final LocalLibraryStore local;
+  final LibraryState libraryState;
 
   @override
   State<SourceSearchPage> createState() => _SourceSearchPageState();
@@ -135,6 +137,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     // 续传因验证暂停的后台下载任务。
     await _downloadManager.resumeAfterVerify(
       onSaved: (task, book) {
+        _shelfBook(book);
         if (mounted) {
           showNovelFeedback(context, '《${task.detail.book.title}》下载完成，已入库');
         }
@@ -143,6 +146,16 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         if (mounted) showNovelFeedback(context, msg);
       },
     );
+  }
+
+  /// 下载完成入库后自动上架（与本地书库页"新书自动上架"逻辑一致）。
+  Future<void> _shelfBook(LocalBook book) async {
+    try {
+      final state = widget.libraryState;
+      // book 是 LocalBook，有 id；local.toNovel 转 Novel
+      final novel = widget.local.toNovel(book);
+      await state.toggleShelf(book.id, novel: novel);
+    } catch (_) {}
   }
 
   /// 后台下载因验证暂停时，用户点击横幅触发验证。
@@ -161,6 +174,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         adapter: _adapter,
         downloadManager: _downloadManager,
         local: widget.local,
+        onBookSaved: _shelfBook,
       ),
       reduceMotion: MediaQuery.disableAnimationsOf(context),
     );

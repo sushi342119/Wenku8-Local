@@ -23,6 +23,7 @@ class SourceDetailPage extends StatefulWidget {
     required this.adapter,
     required this.downloadManager,
     required this.local,
+    this.onBookSaved,
   });
 
   final SourceBook book;
@@ -30,6 +31,9 @@ class SourceDetailPage extends StatefulWidget {
   final SiteAdapter adapter;
   final SourceDownloadManager downloadManager;
   final LocalLibraryStore local;
+
+  /// 书籍下载完成入库后的回调（用于上架等）。
+  final void Function(LocalBook book)? onBookSaved;
 
   @override
   State<SourceDetailPage> createState() => _SourceDetailPageState();
@@ -111,6 +115,7 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
       },
       local: widget.local,
       onSaved: (book) {
+        widget.onBookSaved?.call(book);
         if (mounted) {
           showNovelFeedback(context, '已导入本地书库：《${book.displayTitle}》');
         }
@@ -181,6 +186,7 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
       },
       local: widget.local,
       onSaved: (book) {
+        widget.onBookSaved?.call(book);
         if (mounted) {
           showNovelFeedback(context, '已导入本地书库：《${book.displayTitle}》');
         }

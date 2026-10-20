@@ -2237,7 +2237,7 @@ class SettingsPage extends StatelessWidget {
                 subtitle: '搜索站内书籍，下载后转本地 TXT 阅读',
                 onTap: () => pushNovelPage<void>(
                   context,
-                  SourceSearchPage(local: localLibraryOf(repository)!),
+                  SourceSearchPage(local: localLibraryOf(repository)!, libraryState: state),
                   reduceMotion: state.reduceMotion,
                 ),
               ),
