@@ -151,7 +151,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 return true
             }
             "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
-            "deleteLocalDocument", "renameLocalDocument" -> {
+            "deleteLocalDocument", "renameLocalDocument", "createTextDocument" -> {
                 io.execute {
                     try {
                         val response: Any = when (call.method) {
@@ -161,6 +161,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                             "renameLocalDocument" -> renameLocalDocument(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
                                 call.argument<String>("newFileName") ?: "",
+                            )
+                            "createTextDocument" -> createTextDocument(
+                                Uri.parse(call.argument<String>("treeUri") ?: ""),
+                                call.argument<String>("fileName") ?: "",
+                                call.argument<String>("content") ?: "",
                             )
                             "decodeLocalText" -> decodeLocalText(
                                 call.argument<ByteArray>("bytes"),
@@ -500,6 +505,80 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     /** 重命名 SAF 文档。成功返回新 URI 与 provider 确认的实际文件名。 */
+    /**
+     * 在 SAF 文件夹（treeUri）下创建文本文件并写入 UTF-8 内容。
+     * 同名文件自动重命名为 "名称 (2).txt" 避免覆盖。
+     * 返回 fileUri（document URI）和 provider 确认的实际文件名。
+     */
+    private fun createTextDocument(treeUri: Uri, fileName: String, content: String): Map<String, Any?> {
+        require(fileName.isNotBlank()) { "文件名不能为空" }
+        require(DocumentsContract.isTreeUri(treeUri)) { "需要 SAF 文件夹 URI" }
+        val resolver = activity.contentResolver
+        val parentUri = DocumentsContract.buildDocumentUriUsingTree(
+            treeUri,
+            DocumentsContract.getTreeDocumentId(treeUri),
+        )
+        // 同名检查：已存在则生成 "名称 (2).txt"
+        val finalName = resolveUniqueFileName(resolver, treeUri, fileName)
+        val documentUri = DocumentsContract.createDocument(
+            resolver,
+            parentUri,
+            "text/plain",
+            finalName,
+        ) ?: throw IllegalStateException("无法在文件夹中创建文件")
+        try {
+            resolver.openOutputStream(documentUri, "w")?.use { output ->
+                output.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    writer.write(content)
+                }
+            } ?: throw IllegalStateException("无法写入文件")
+        } catch (e: Exception) {
+            // 写入失败，清理半成品
+            runCatching { DocumentsContract.deleteDocument(resolver, documentUri) }
+            throw e
+        }
+        var displayName: String? = null
+        try {
+            resolver.query(documentUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) displayName = cursor.getString(0)
+            }
+        } catch (_: Exception) {
+        }
+        val actualName = displayName?.takeIf { it.isNotBlank() } ?: finalName
+        return mapOf(
+            "fileUri" to documentUri.toString(),
+            "fileName" to actualName,
+        )
+    }
+
+    /** 在 SAF 文件夹中查找不冲突的文件名（"名称 (2).txt" 策略）。 */
+    private fun resolveUniqueFileName(resolver: android.content.ContentResolver, treeUri: Uri, fileName: String): String {
+        val existing = mutableSetOf<String>()
+        try {
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                treeUri,
+                DocumentsContract.getTreeDocumentId(treeUri),
+            )
+            resolver.query(childrenUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    cursor.getString(0)?.let { existing.add(it) }
+                }
+            }
+        } catch (_: Exception) {
+        }
+        if (!existing.contains(fileName)) return fileName
+        val dotIndex = fileName.lastIndexOf('.')
+        val base = if (dotIndex > 0) fileName.substring(0, dotIndex) else fileName
+        val ext = if (dotIndex > 0) fileName.substring(dotIndex) else ""
+        var counter = 2
+        while (true) {
+            val candidate = "$base ($counter)$ext"
+            if (!existing.contains(candidate)) return candidate
+            counter++
+            if (counter > 1000) throw IllegalStateException("文件名冲突过多")
+        }
+    }
+
     private fun renameLocalDocument(doc: Uri, newFileName: String): Map<String, Any?> {
         require(newFileName.isNotBlank()) { "文件名不能为空" }
         val resolver = activity.contentResolver

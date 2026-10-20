@@ -116,6 +116,26 @@ abstract final class LocalPlatform {
   static Future<String?> pickFontFile() =>
       channel.invokeMethod<String>('pickFontFile');
 
+  /// SAF：在指定的文件夹 URI 下创建文本文件并写入 UTF-8 内容。
+  /// 返回 (fileUri, fileName)：provider 确认的 document URI 与实际文件名
+  /// （同名时会自动重命名，如 "书名 (2).txt"）。
+  static Future<({String fileUri, String fileName})> createTextDocument(
+    String treeUri,
+    String fileName,
+    String content,
+  ) async {
+    final res = await channel.invokeMapMethod<String, dynamic>(
+      'createTextDocument',
+      {'treeUri': treeUri, 'fileName': fileName, 'content': content},
+    );
+    final fileUri = res?['fileUri'] as String?;
+    final actualName = res?['fileName'] as String?;
+    if (fileUri == null || actualName == null) {
+      throw StateError('创建文件失败');
+    }
+    return (fileUri: fileUri, fileName: actualName);
+  }
+
   static Future<void> shareText(String text) =>
       channel.invokeMethod<void>('shareText', {'text': text});
   static final Set<Object> _awakeOwners = {};

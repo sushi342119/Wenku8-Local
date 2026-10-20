@@ -18,6 +18,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../local_library.dart';
+import '../local_platform.dart';
 import 'source_client.dart';
 import 'source_models.dart';
 
@@ -180,6 +181,10 @@ class SourceDownloadTask extends ChangeNotifier {
 
   /// 生成 TXT 并入库。返回导入的 LocalBook，失败抛错。
   /// 有缺失章节时拒绝入库（不静默跳过）。
+  ///
+  /// 保存位置：用户已选择小说文件夹（SAF）时写入该文件夹并触发 scan()；
+  /// 未选择时写入 App 内置目录并触发 scanAppFolder()。
+  /// SAF 写入失败时直接抛错，不静默回退（避免用户以为存了却找不到）。
   Future<LocalBook> saveToLibrary() async {
     if (_status != SourceDownloadStatus.completed) {
       throw StateError('下载未完成，无法入库');
@@ -193,15 +198,29 @@ class SourceDownloadTask extends ChangeNotifier {
     }
     final text = _buildTxt();
     final fileName = _fileName();
-    final dir = await _novelsDir();
-    final file = File('$dir/$fileName');
-    await file.writeAsString(text);
-    final result = await local.scanAppFolder();
+    final safFolder = local.folderUri;
+    String actualFileName = fileName;
+    if (safFolder != null && safFolder.isNotEmpty) {
+      // SAF 文件夹：经原生层创建文档（同名自动重命名）。
+      final created = await LocalPlatform.createTextDocument(
+        safFolder,
+        fileName,
+        text,
+      );
+      actualFileName = created.fileName;
+      await local.scan();
+    } else {
+      // App 内置目录。
+      final dir = await _novelsDir();
+      final file = File('$dir/$fileName');
+      await file.writeAsString(text);
+      await local.scanAppFolder();
+    }
     final imported = local.books
-        .where((b) => b.fileName == fileName)
+        .where((b) => b.fileName == actualFileName)
         .cast<LocalBook?>();
     if (imported.isEmpty) {
-      throw StateError('入库失败：扫描完成但未找到书籍（added=${result.added}）');
+      throw StateError('入库失败：扫描完成但未找到书籍');
     }
     return imported.first!;
   }
