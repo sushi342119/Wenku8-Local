@@ -13,7 +13,7 @@ const updateRepository = String.fromEnvironment(
   defaultValue: 'sushi342119/Wenku8-Local',
 );
 const currentAppVersion = '1.2.2';
-const currentAppBuild = 1004;
+const currentAppBuild = 1005;
 // 试验版（source-trial 分支）走独立更新通道：只认 source- 前缀的 tag。
 // 构建时通过 --dart-define=TRIAL_CHANNEL=true 开启。
 const trialChannel = bool.fromEnvironment(
