@@ -32,9 +32,21 @@ class WebViewSession implements WebViewFetcher {
   Completer<Uri>? _loadCompleter;
   Uri? _expectUrl;
 
+  /// 主框架加载错误（由 onReceivedError 记录）。
+  /// 键为导航批次（每次 fetchHtml 自增），避免旧错误污染新任务。
+  int _navSeq = 0;
+  int _errorNavSeq = -1;
+  String? _lastErrorDescription;
+
   void attach(InAppWebViewController controller) {
     _controller = controller;
     if (!_ready.isCompleted) _ready.complete();
+  }
+
+  /// WebView 的 onReceivedError 回调应转发到此（仅主框架错误有效）。
+  void onReceivedError(String? description) {
+    _errorNavSeq = _navSeq;
+    _lastErrorDescription = description ?? '页面加载失败';
   }
 
   Future<void> get ready => _ready.future;
@@ -84,6 +96,8 @@ class WebViewSession implements WebViewFetcher {
     final loadCompleter = Completer<Uri>();
     _loadCompleter = loadCompleter;
     _expectUrl = uri;
+    _navSeq++;
+    final mySeq = _navSeq;
 
     try {
       await controller.loadUrl(urlRequest: URLRequest(url: WebUri.uri(uri)));
@@ -98,6 +112,10 @@ class WebViewSession implements WebViewFetcher {
         if (_loadCompleter == loadCompleter) _loadCompleter = null;
       }
 
+      // 主框架加载出错（如 DNS 失败）：绝不能把错误页当正文。
+      if (_errorNavSeq == mySeq) {
+        throw WebViewPageError(_lastErrorDescription ?? '页面加载失败');
+      }
       // 加载完成后取 HTML（此时文档已就绪）。
       String html = '';
       final deadline = DateTime.now().add(const Duration(seconds: 10));
@@ -113,6 +131,10 @@ class WebViewSession implements WebViewFetcher {
       }
       if (html.length < 100) {
         throw const WebViewFetchEmpty('页面内容为空');
+      }
+      // 兜底：错误页 HTML 特征检测（Chrome 错误页）。
+      if (_looksLikeErrorPage(html)) {
+        throw const WebViewPageError('页面加载失败（错误页）');
       }
       if (SourceClient.looksLikeChallenge(html)) {
         throw const WebViewNeedVerify();
@@ -139,4 +161,23 @@ class WebViewFetchEmpty implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+/// WebView 页面加载错误（如 DNS 失败、连接超时）。
+/// 调用方应将该章节标记为失败（可重试），绝不能存入正文。
+class WebViewPageError implements Exception {
+  const WebViewPageError(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// Chrome 错误页特征（兜底检测）。
+bool _looksLikeErrorPage(String html) {
+  final lower = html.toLowerCase();
+  return lower.contains('err_name_not_resolved') ||
+      lower.contains('err_internet_disconnected') ||
+      lower.contains('err_connection_') ||
+      lower.contains('net::err_') ||
+      (lower.contains('网页无法打开') && lower.contains('因为：'));
 }

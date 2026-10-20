@@ -338,6 +338,14 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                       url == null ? null : Uri.tryParse(url.toString()),
                     );
                   },
+                  onReceivedError: (controller, request, error) {
+                    // 仅主框架错误有效（isForMainFrame）
+                    if (request.isForMainFrame == true) {
+                      _webViewSession.onReceivedError(
+                        error.description,
+                      );
+                    }
+                  },
                 ),
               ),
             ],
