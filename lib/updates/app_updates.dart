@@ -13,7 +13,7 @@ const updateRepository = String.fromEnvironment(
   defaultValue: 'sushi342119/Wenku8-Local',
 );
 const currentAppVersion = '1.2.2';
-const currentAppBuild = 1006;
+const currentAppBuild = 1007;
 // 试验版（source-trial 分支）走独立更新通道：只认 source- 前缀的 tag。
 // 构建时通过 --dart-define=TRIAL_CHANNEL=true 开启。
 const trialChannel = bool.fromEnvironment(
@@ -124,6 +124,16 @@ class AppRelease {
       if (raw is! Map) continue;
       final name = raw['name'];
       final url = Uri.tryParse(raw['browser_download_url']?.toString() ?? '');
+      // GitHub 的 browser_download_url 会把 tag 中的 + 编码为 %2B
+      //（如 source-v1.2.2+1006 → source-v1.2.2%2B1006），两种写法都接受。
+      final encodedTag = tag.replaceAll('+', '%2B');
+      final underRelease =
+          url?.path.startsWith('/$repository/releases/download/$tag/') ==
+              true ||
+          url?.path.startsWith(
+                '/$repository/releases/download/$encodedTag/',
+              ) ==
+              true;
       final size = raw['size'];
       if (name is! String ||
           !name.startsWith('wenku8-') ||
@@ -133,7 +143,7 @@ class AppRelease {
           url.host != 'github.com' ||
           url.userInfo.isNotEmpty ||
           url.port != 443 ||
-          !url.path.startsWith('/$repository/releases/download/$tag/') ||
+          !underRelease ||
           url.pathSegments.last != name ||
           size is! int ||
           size <= 0 ||
