@@ -14,6 +14,7 @@ library;
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../local_library.dart';
@@ -30,7 +31,7 @@ typedef ChapterFetcher =
 /// 下载进度回调：(成功章数, 总章数, 当前章节标题)。
 typedef DownloadProgress = void Function(int done, int total, String current);
 
-class SourceDownloadTask {
+class SourceDownloadTask extends ChangeNotifier {
   SourceDownloadTask({
     required this.detail,
     required this.client,
@@ -69,6 +70,7 @@ class SourceDownloadTask {
 
   void cancel() {
     _cancelled = true;
+    notifyListeners();
   }
 
   /// 开始/继续下载。遇到 Cloudflare 挑战时抛 [SourceNeedVerify]，
@@ -108,6 +110,7 @@ class SourceDownloadTask {
             return;
           }
           _status = SourceDownloadStatus.pausedNeedVerify;
+          notifyListeners();
           rethrow;
         } catch (e) {
           error = e.toString();
@@ -138,7 +141,8 @@ class SourceDownloadTask {
           );
         }
         onProgress(done, total, chapter.title);
-        await Future.delayed(const Duration(milliseconds: 800));
+        notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 400));
         if (_cancelled) {
           _status = SourceDownloadStatus.cancelled;
           return;
@@ -167,6 +171,7 @@ class SourceDownloadTask {
       _status = SourceDownloadStatus.failed;
       _error = '${missing.length} 章未下载成功，可重试';
     }
+    notifyListeners();
   }
 
   /// 重试失败章节（= 继续下载未缓存章节）。运行中调用直接返回。

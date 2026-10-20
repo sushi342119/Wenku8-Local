@@ -10,6 +10,7 @@ import '../local_library.dart';
 import '../app_interactions.dart' show pushNovelPage, showNovelFeedback;
 import 'site_adapter.dart';
 import 'source_client.dart';
+import 'download_manager.dart';
 import 'webview_fetcher.dart';
 import 'source_download.dart';
 import 'source_models.dart';
@@ -20,16 +21,14 @@ class SourceDetailPage extends StatefulWidget {
     required this.book,
     required this.client,
     required this.adapter,
-    required this.onVerify,
+    required this.downloadManager,
     required this.local,
   });
 
   final SourceBook book;
   final SourceClient client;
   final SiteAdapter adapter;
-
-  /// 需要验证时的处理：打开 WebView，成功返回 true（调用方重试）。
-  final Future<bool> Function(Future<void> Function() retry) onVerify;
+  final SourceDownloadManager downloadManager;
   final LocalLibraryStore local;
 
   @override
@@ -41,11 +40,10 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
   String? _error;
   SourceBookDetail? _detail;
 
-  SourceDownloadTask? _task;
-  bool _downloading = false;
-  int _done = 0;
   int _total = 0;
-  String _current = '';
+
+  /// 当前书的下载任务（由管理器持有，详情页只监听展示）。
+  SourceDownloadTask? get _task => widget.downloadManager.taskFor(widget.book);
 
   @override
   void initState() {
@@ -83,14 +81,22 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
     }
   }
 
-  Future<void> _download() async {
+  /// 开始下载（经管理器后台执行，可离开本页）。
+  void _download() {
     final detail = _detail;
-    if (detail == null || _downloading) return;
+    if (detail == null) return;
     if (detail.chapters.isEmpty) {
       showNovelFeedback(context, '该书暂无章节');
       return;
     }
-    final task = SourceDownloadTask(
+    final existing = _task;
+    if (existing != null &&
+        (existing.status == SourceDownloadStatus.downloading ||
+            existing.status == SourceDownloadStatus.pausedNeedVerify)) {
+      showNovelFeedback(context, '下载进行中，可离开本页，后台继续下载');
+      return;
+    }
+    widget.downloadManager.startDownload(
       detail: detail,
       client: widget.client,
       fetcher: (client, chapter) async {
@@ -103,51 +109,23 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
         }
       },
       local: widget.local,
+      onSaved: (book) {
+        if (mounted) {
+          showNovelFeedback(context, '已导入本地书库：《${book.displayTitle}》');
+        }
+      },
+      onError: (msg) {
+        if (mounted) {
+          final task = _task;
+          if (task != null && task.status == SourceDownloadStatus.failed) {
+            _showFailedDialog(task);
+          } else {
+            showNovelFeedback(context, msg);
+          }
+        }
+      },
     );
-    setState(() {
-      _task = task;
-      _downloading = true;
-      _done = 0;
-      _current = '';
-    });
-    try {
-      await task.start((done, total, current) {
-        if (!mounted) return;
-        setState(() {
-          _done = done;
-          _total = total;
-          _current = current;
-        });
-      });
-    } on SourceNeedVerify {
-      if (!mounted) return;
-      setState(() => _downloading = false);
-      // 下载中遇到验证：弹回搜索页（验证 UI 在搜索页）
-      showNovelFeedback(context, '下载需要重新验证，已返回搜索页');
-      if (mounted) Navigator.of(context).pop();
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _downloading = false);
-    if (task.status == SourceDownloadStatus.completed) {
-      await _saveToLibrary(task);
-    } else if (task.status == SourceDownloadStatus.failed) {
-      _showFailedDialog(task);
-    }
-    // cancelled / pausedNeedVerify：保持任务，用户可继续操作。
-  }
-
-  Future<void> _saveToLibrary(SourceDownloadTask task) async {
-    showNovelFeedback(context, '下载完成，正在入库…');
-    try {
-      final book = await task.saveToLibrary();
-      if (!mounted) return;
-      showNovelFeedback(context, '已导入本地书库：《${book.displayTitle}》');
-      setState(() => _task = null);
-    } catch (e) {
-      if (!mounted) return;
-      showNovelFeedback(context, '入库失败：$e');
-    }
+    showNovelFeedback(context, '已开始后台下载，可去找其他书');
   }
 
   void _showFailedDialog(SourceDownloadTask task) {
@@ -186,30 +164,30 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
   }
 
   Future<void> _retry(SourceDownloadTask task) async {
-    setState(() => _downloading = true);
-    try {
-      await task.retryFailed((done, total, current) {
-        if (!mounted) return;
-        setState(() {
-          _done = done;
-          _total = total;
-          _current = current;
-        });
-      });
-    } on SourceNeedVerify {
-      if (!mounted) return;
-      setState(() => _downloading = false);
-      showNovelFeedback(context, '下载需要重新验证，已返回搜索页');
-      if (mounted) Navigator.of(context).pop();
-      return;
-    }
-    if (!mounted) return;
-    setState(() => _downloading = false);
-    if (task.status == SourceDownloadStatus.completed) {
-      await _saveToLibrary(task);
-    } else if (task.status == SourceDownloadStatus.failed) {
-      _showFailedDialog(task);
-    }
+    final detail = _detail;
+    if (detail == null) return;
+    widget.downloadManager.startDownload(
+      detail: detail,
+      client: widget.client,
+      fetcher: (client, chapter) async {
+        try {
+          return await widget.adapter.content(client, chapter);
+        } on SiteNeedVerify {
+          throw const SourceNeedVerify();
+        } on WebViewNeedVerify {
+          throw const SourceNeedVerify();
+        }
+      },
+      local: widget.local,
+      onSaved: (book) {
+        if (mounted) {
+          showNovelFeedback(context, '已导入本地书库：《${book.displayTitle}》');
+        }
+      },
+      onError: (msg) {
+        if (mounted) showNovelFeedback(context, msg);
+      },
+    );
   }
 
   @override
@@ -222,20 +200,33 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
           : SafeArea(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-                child: _downloading
-                    ? _buildProgress()
-                    : FilledButton.icon(
-                        icon: const Icon(CupertinoIcons.cloud_download),
-                        label: Text('下载全本（${_total}章）'),
-                        onPressed: _download,
-                      ),
+                child: ListenableBuilder(
+                  listenable: widget.downloadManager,
+                  builder: (context, _) {
+                    final task = _task;
+                    final active = task != null &&
+                        (task.status == SourceDownloadStatus.downloading ||
+                            task.status ==
+                                SourceDownloadStatus.pausedNeedVerify);
+                    if (active) return _buildProgress(task);
+                    return FilledButton.icon(
+                      icon: const Icon(CupertinoIcons.cloud_download),
+                      label: Text('下载全本（${_total}章）'),
+                      onPressed: _download,
+                    );
+                  },
+                ),
               ),
             ),
     );
   }
 
-  Widget _buildProgress() {
-    final progress = _total > 0 ? _done / _total : 0.0;
+  Widget _buildProgress(SourceDownloadTask task) {
+    final done = task.done;
+    final total = task.total;
+    final progress = total > 0 ? done / total : 0.0;
+    final paused =
+        task.status == SourceDownloadStatus.pausedNeedVerify;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -244,7 +235,9 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
           children: [
             Expanded(
               child: Text(
-                '正在下载 $_done/$_total${_current.isNotEmpty ? ' · $_current' : ''}',
+                paused
+                    ? '下载已暂停，需返回搜索页完成验证'
+                    : '正在下载 $done/$total（后台继续，可离开本页）',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.bodySmall,
@@ -252,8 +245,7 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
             ),
             TextButton(
               onPressed: () {
-                _task?.cancel();
-                setState(() => _downloading = false);
+                widget.downloadManager.cancelTask(widget.book);
               },
               child: const Text('取消'),
             ),

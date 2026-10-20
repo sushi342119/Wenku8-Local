@@ -17,6 +17,8 @@ import 'source_client.dart';
 import 'source_config.dart';
 import 'source_detail_page.dart';
 import 'source_models.dart';
+import 'download_manager.dart';
+import 'source_download.dart';
 import 'webview_fetcher.dart';
 
 class SourceSearchPage extends StatefulWidget {
@@ -33,6 +35,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   final SourceClient _client = SourceClient();
   final SiteAdapter _adapter = Site123Adapter();
   final WebViewSession _webViewSession = WebViewSession();
+  late final SourceDownloadManager _downloadManager = SourceDownloadManager();
 
   bool _searching = false;
   String? _error;
@@ -49,6 +52,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
 
   @override
   void dispose() {
+    _downloadManager.dispose();
     _keyword.dispose();
     super.dispose();
   }
@@ -105,32 +109,44 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     setState(() => _verifying = false);
     final retry = _pendingRetry;
     _pendingRetry = null;
-    if (retry == null) return;
     // 验证后试读：确认 WebView 会话可用（第一道验收门槛）。
+    bool verified = false;
     try {
       final probe = await _client.get(Uri.parse(SourceConfig.instance.baseUrl));
-      if (probe.challenged) {
-        if (mounted) {
-          showNovelFeedback(context, '验证尚未通过，请重新验证');
-          // 保留在验证流程：重新显示 WebView
-          _pendingRetry = retry;
-          setState(() => _verifying = true);
-        }
-        return;
-      }
+      verified = !probe.challenged;
     } catch (e) {
+      verified = false;
+      if (e is! WebViewNeedVerify && mounted) {
+        showNovelFeedback(context, '验证后试读失败：$e');
+      }
+    }
+    if (!verified) {
       if (mounted) {
-        if (e is WebViewNeedVerify) {
-          showNovelFeedback(context, '验证未完成，请继续验证');
-          _pendingRetry = retry;
-          setState(() => _verifying = true);
-        } else {
-          showNovelFeedback(context, '验证后试读失败：$e');
-        }
+        showNovelFeedback(context, '验证尚未通过，请继续验证');
+        // 保留待重试操作，重新显示 WebView
+        _pendingRetry = retry;
+        setState(() => _verifying = true);
       }
       return;
     }
-    await retry();
+    if (retry != null) await retry();
+    // 续传因验证暂停的后台下载任务。
+    await _downloadManager.resumeAfterVerify(
+      onSaved: (task, book) {
+        if (mounted) {
+          showNovelFeedback(context, '《${task.detail.book.title}》下载完成，已入库');
+        }
+      },
+      onError: (task, msg) {
+        if (mounted) showNovelFeedback(context, msg);
+      },
+    );
+  }
+
+  /// 后台下载因验证暂停时，用户点击横幅触发验证。
+  void _verifyForDownloads() {
+    if (_verifying) return;
+    setState(() => _verifying = true);
   }
 
   void _openDetail(SourceBook book) {
@@ -140,10 +156,72 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         book: book,
         client: _client,
         adapter: _adapter,
-        onVerify: _verifyThenRetry,
+        downloadManager: _downloadManager,
         local: widget.local,
       ),
       reduceMotion: MediaQuery.disableAnimationsOf(context),
+    );
+  }
+
+  /// 后台下载状态条：显示进行中/暂停的下载，点击暂停验证时触发验证。
+  Widget _buildDownloadBar() {
+    return ListenableBuilder(
+      listenable: _downloadManager,
+      builder: (context, _) {
+        final active = _downloadManager.tasks
+            .where(
+              (t) =>
+                  t.status == SourceDownloadStatus.downloading ||
+                  t.status == SourceDownloadStatus.pausedNeedVerify,
+            )
+            .toList();
+        if (active.isEmpty && !_downloadManager.needsVerify) {
+          return const SizedBox.shrink();
+        }
+        final task = active.isNotEmpty ? active.first : null;
+        final paused = _downloadManager.needsVerify ||
+            (task?.status == SourceDownloadStatus.pausedNeedVerify);
+        return Material(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          child: InkWell(
+            onTap: paused ? _verifyForDownloads : null,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(
+                children: [
+                  Icon(
+                    paused
+                        ? CupertinoIcons.exclamationmark_circle
+                        : CupertinoIcons.arrow_down_circle,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      paused
+                          ? '下载已暂停，需要验证，点击继续验证'
+                          : '后台下载《${task!.detail.book.title}》 '
+                              '${task.done}/${task.total}',
+                      style: const TextStyle(fontSize: 13),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (task != null && !paused)
+                    SizedBox(
+                      width: 60,
+                      child: LinearProgressIndicator(
+                        value: task.total == 0
+                            ? null
+                            : task.done / task.total,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -191,6 +269,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
                 ),
               ),
               if (_searching) const LinearProgressIndicator(),
+              _buildDownloadBar(),
               Expanded(
                 child: _buildBody(),
               ),
