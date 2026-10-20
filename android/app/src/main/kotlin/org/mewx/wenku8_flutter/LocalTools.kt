@@ -102,7 +102,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
                 "pickLocalFolder", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
-                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
+                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "createTextDocument", "pickFontFile"
             )
         ) return false
         if (closed) {
