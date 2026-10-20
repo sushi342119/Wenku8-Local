@@ -40,6 +40,13 @@ abstract class WebViewFetcher {
     Uri uri, {
     Duration timeout,
   });
+
+  /// 先加载 [uri] 再执行 [jsAction]（如站点分页 JS），返回导航后页面。
+  Future<({Uri url, String html})> fetchHtmlAfterJs(
+    Uri uri,
+    String jsAction, {
+    Duration timeout,
+  });
 }
 
 class SourceClient {
@@ -80,6 +87,31 @@ class SourceClient {
       }
     });
     return parts.join('; ');
+  }
+
+  /// 经 WebView 加载页面并执行 JS 后取导航结果页（如站点的 JS 分页）。
+  /// 必须已设置 [webViewSession]（HTTP 客户端无法执行 JS）。
+  Future<SourcePage> getAfterJs(
+    Uri uri,
+    String jsAction, {
+    Duration timeout = const Duration(seconds: 20),
+  }) async {
+    final session = webViewSession;
+    if (session == null) {
+      throw StateError('getAfterJs 需要 WebView 会话');
+    }
+    final result = await session.fetchHtmlAfterJs(
+      uri,
+      jsAction,
+      timeout: timeout,
+    );
+    final challenged = _looksLikeChallenge(result.html);
+    return SourcePage(
+      url: result.url,
+      statusCode: 200,
+      html: result.html,
+      challenged: challenged,
+    );
   }
 
   /// 拉取页面。遇到 Cloudflare 挑战时返回 challenged=true，由调用方

@@ -43,6 +43,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   String? _error;
   List<SourceBook> _results = [];
   String? _nextSearchUrl;
+  String? _nextSearchJs;
   bool _loadingMore = false;
   // 搜索代际：每轮新搜索自增，旧的分页请求返回时标识已过期，不得再写入。
   int _searchGen = 0;
@@ -73,6 +74,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
       _error = null;
       _results = [];
       _nextSearchUrl = null;
+      _nextSearchJs = null;
       _loadingMore = false;
     });
     try {
@@ -81,6 +83,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
       setState(() {
         _results = result.books;
         _nextSearchUrl = result.nextPageUrl;
+        _nextSearchJs = result.nextPageJs;
         if (result.books.isEmpty) _error = '没有找到相关书籍，换个关键词试试';
       });
     } on SiteNeedVerify {
@@ -101,15 +104,22 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
 
   /// 加载搜索下一页并追加（去重）。
   Future<void> _loadMore() async {
-    final next = _nextSearchUrl;
-    if (next == null || _loadingMore) return;
+    final nextUrl = _nextSearchUrl;
+    final nextJs = _nextSearchJs;
+    if ((nextUrl == null && nextJs == null) || _loadingMore) return;
     final gen = _searchGen;
+    final kw = _keyword.text.trim();
     setState(() {
       _loadingMore = true;
       _error = null;
     });
     try {
-      final result = await _adapter.searchMore(_client, next);
+      final SourceSearchResult result;
+      if (nextJs != null) {
+        result = await _adapter.searchMoreJs(_client, kw, nextJs);
+      } else {
+        result = await _adapter.searchMore(_client, nextUrl!);
+      }
       if (!mounted || gen != _searchGen) return;
       final seen = {for (final b in _results) b.detailUrl};
       setState(() {
@@ -117,6 +127,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
           if (seen.add(b.detailUrl)) _results.add(b);
         }
         _nextSearchUrl = result.nextPageUrl;
+        _nextSearchJs = result.nextPageJs;
       });
     } on SiteNeedVerify {
       if (!mounted || gen != _searchGen) return;
@@ -502,7 +513,7 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         child: Text('试验功能：搜索站内书籍，下载后转本地 TXT 阅读'),
       );
     }
-    final hasMore = _nextSearchUrl != null;
+    final hasMore = _nextSearchUrl != null || _nextSearchJs != null;
     return ListView.separated(
       itemCount: _results.length + (hasMore ? 1 : 0),
       separatorBuilder: (_, _) => const Divider(height: 1),

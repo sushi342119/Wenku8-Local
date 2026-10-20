@@ -51,6 +51,10 @@ class WebViewSession implements WebViewFetcher {
   /// 初始页加载等与本次无关的 onLoadStop 不会提前完成等待器。
   bool _navArmed = false;
 
+  /// JS 触发导航模式（如站点的分页 JS）：任意 onLoadStart 都武装，
+  /// 因为 JS 导航的目标 URL（可能是 POST 地址）无法预知。
+  bool _armAnyNav = false;
+
   void attach(InAppWebViewController controller, int instance) {
     if (instance != this.instance) return; // 旧实例，忽略
     _controller = controller;
@@ -90,6 +94,10 @@ class WebViewSession implements WebViewFetcher {
   /// 只有 URL 与本次取页目标相符时才武装（重定向链保持武装直到 onLoadStop）。
   void onLoadStart(Uri? url, int instance) {
     if (instance != this.instance) return; // 旧实例，忽略
+    if (_armAnyNav) {
+      _navArmed = true;
+      return;
+    }
     final expect = _expectUrl;
     if (expect != null && url != null &&
         url.removeFragment().toString() ==
@@ -124,6 +132,7 @@ class WebViewSession implements WebViewFetcher {
     _lastErrorDescription = null;
     _lastErrorTime = null;
     _navArmed = false;
+    _armAnyNav = false;
     _expectUrl = null;
     _ready = Completer<void>();
     instanceNotifier.value++;
@@ -152,6 +161,81 @@ class WebViewSession implements WebViewFetcher {
     // 无论成功失败，都更新锁（避免异常导致后续任务永久阻塞）。
     _lock = task.then((_) {}, onError: (_) {});
     return task;
+  }
+
+  /// 先加载 [uri]，再在页面内执行 [jsAction]（如站点的分页 JS 调用），
+  /// 等待它触发的导航完成并返回新页面 HTML。
+  Future<({Uri url, String html})> fetchHtmlAfterJs(
+    Uri uri,
+    String jsAction, {
+    Duration timeout = const Duration(seconds: 30),
+  }) {
+    final task = _lock.then((_) async {
+      final verifyDeadline = DateTime.now().add(
+        const Duration(seconds: 120),
+      );
+      while (_verifying && DateTime.now().isBefore(verifyDeadline)) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+      if (_verifying) throw TimeoutException('等待验证超时');
+      // 第一段：正常加载目标页（JS 必须在该页的上下文里执行）。
+      await _fetchInner(uri, timeout);
+      return _fetchJsNavInner(uri, jsAction, timeout);
+    });
+    _lock = task.then((_) {}, onError: (_) {});
+    return task;
+  }
+
+  /// 执行 JS 并等待其导航完成的第二段取页。
+  Future<({Uri url, String html})> _fetchJsNavInner(
+    Uri uri,
+    String jsAction,
+    Duration timeout,
+  ) async {
+    await ready;
+    final controller = _controller;
+    if (controller == null) throw StateError('WebView 未就绪');
+
+    final loadCompleter = Completer<Uri>();
+    _loadCompleter = loadCompleter;
+    _lastErrorUrl = null;
+    _lastErrorDescription = null;
+    _lastErrorTime = null;
+    _navStartTime = DateTime.now();
+    _navArmed = false;
+    _armAnyNav = true;
+
+    try {
+      // JS 执行本身也要有超时：执行回调不返回时不能永久占住队列。
+      try {
+        await controller.evaluateJavascript(source: jsAction).timeout(
+          timeout,
+          onTimeout: () => throw TimeoutException('JS 执行超时', timeout),
+        );
+      } on TimeoutException {
+        _invalidateInstance();
+        unawaited(_stopOldLoading(controller));
+        rethrow;
+      }
+      Uri loadedUrl;
+      try {
+        loadedUrl = await loadCompleter.future.timeout(
+          timeout,
+          onTimeout: () => throw TimeoutException('页面加载超时', timeout),
+        );
+      } on TimeoutException {
+        _invalidateInstance();
+        unawaited(_stopOldLoading(controller));
+        rethrow;
+      } finally {
+        if (_loadCompleter == loadCompleter) _loadCompleter = null;
+      }
+      return await _finishFetch(controller, uri, loadedUrl);
+    } finally {
+      if (_loadCompleter == loadCompleter) _loadCompleter = null;
+      _armAnyNav = false;
+      _navArmed = false;
+    }
   }
 
   Future<({Uri url, String html})> _fetchInner(
@@ -193,6 +277,21 @@ class WebViewSession implements WebViewFetcher {
         if (_loadCompleter == loadCompleter) _loadCompleter = null;
       }
 
+      return await _finishFetch(controller, uri, loadedUrl);
+    } finally {
+      if (_loadCompleter == loadCompleter) _loadCompleter = null;
+      _expectUrl = null;
+      _navArmed = false;
+    }
+  }
+
+  /// 导航完成后的统一收尾：主框架错误检查 → 取 HTML → 错误页/挑战检测。
+  Future<({Uri url, String html})> _finishFetch(
+    InAppWebViewController controller,
+    Uri uri,
+    Uri loadedUrl,
+  ) async {
+    {
       // 主框架加载出错（如 DNS 失败）：绝不能把错误页当正文。
       final navUrls = <String>{
         uri.removeFragment().toString(),
@@ -233,10 +332,6 @@ class WebViewSession implements WebViewFetcher {
         url: Uri.tryParse(currentUrlStr ?? '') ?? loadedUrl,
         html: html,
       );
-    } finally {
-      if (_loadCompleter == loadCompleter) _loadCompleter = null;
-      _expectUrl = null;
-      _navArmed = false;
     }
   }
 }

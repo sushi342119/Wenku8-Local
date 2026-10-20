@@ -67,12 +67,41 @@ String nextPageUrl,
 return _fetchSearchPage(client, Uri.parse(nextPageUrl));
 }
 
+@override
+Future<SourceSearchResult> searchMoreJs(
+SourceClient client,
+String keyword,
+String jsAction,
+) async {
+// 关键词必须 GBK 编码，UTF-8 会返回无结果。
+final encoded = gbkPercentEncode(keyword);
+final pageUri = Uri.parse(_base()).resolve('s.php?s=$encoded');
+final page = await client.getAfterJs(pageUri, jsAction);
+if (page.statusCode != 200) {
+throw HttpException('请求失败（${page.statusCode}）');
+}
+final doc = html_parser.parse(page.html);
+final title = doc.querySelector('title')?.text ?? '';
+if (title.toLowerCase().contains('just a moment')) {
+throw const SiteNeedVerify();
+}
+return _parseSearchPage(doc, pageUri);
+}
+
 /// 取一页搜索结果并解析（书目 + 下一页链接）。
 Future<SourceSearchResult> _fetchSearchPage(
 SourceClient client,
 Uri pageUri,
 ) async {
 final doc = await _fetchDocument(client, pageUri);
+return _parseSearchPage(doc, pageUri);
+}
+
+/// 解析一页搜索结果（书目 + 下一页）。
+SourceSearchResult _parseSearchPage(
+Document doc,
+Uri pageUri,
+) {
 final results = <SourceBook>[];
 final seen = <String>{};
 for (final a in doc.querySelectorAll('a')) {
@@ -95,27 +124,37 @@ detailUrl: detailUrl,
 ),
 );
 }
+final next = _findSearchNextPage(doc, pageUri);
 return SourceSearchResult(
 books: results,
-nextPageUrl: _findSearchNextPage(doc, pageUri),
+nextPageUrl: next.url,
+nextPageJs: next.js,
 );
 }
 
 /// 找搜索结果页的"下一页"链接（本站文字为「下一页」或「下页」）。
-/// 校验同站，且不能指回当前页。
-String? _findSearchNextPage(Document doc, Uri current) {
+/// 本站搜索分页用 JS（href 为 `javascript:searchpage(...)`），
+/// 普通 URL 分支保留作兼容。校验同站，且不能指回当前页。
+({String? url, String? js}) _findSearchNextPage(Document doc, Uri current) {
 const nextTexts = {'下一页', '下页', '下一页>', '下页>', '下一页»', '下页»'};
+const jsPrefix = 'javascript:';
 for (final a in doc.querySelectorAll('a')) {
 final t = a.text.trim();
 if (!nextTexts.contains(t)) continue;
-final href = a.attributes['href']?.trim()?? '';
+final href = a.attributes['href']?.trim() ?? '';
 if (href.isEmpty) continue;
+if (href.toLowerCase().startsWith(jsPrefix)) {
+// 站点分页 JS 调用，原样重放（只允许本站自带 searchpage 函数）。
+final js = href.substring(jsPrefix.length).trim();
+if (js.startsWith('searchpage(')) return (url: null, js: js);
+continue;
+}
 final resolved = current.resolve(href).removeFragment();
 if (!_isSameSite(resolved)) continue;
 if (resolved.toString() == current.removeFragment().toString()) continue;
-return resolved.toString();
+return (url: resolved.toString(), js: null);
 }
-return null;
+return (url: null, js: null);
 }
 
 /// 在条目边界内找作者：从链接向上找最近的容器，找到作者即停；

@@ -26,12 +26,18 @@ class SourceBook {
   final String? status;
 }
 
-/// 一页搜索结果；[nextPageUrl] 为空表示没有下一页。
+/// 一页搜索结果；[nextPageUrl] 与 [nextPageJs] 至多一个非空，都为空表示没有下一页。
 class SourceSearchResult {
-  const SourceSearchResult({required this.books, this.nextPageUrl});
+  const SourceSearchResult({required this.books, this.nextPageUrl, this.nextPageJs});
 
   final List<SourceBook> books;
+
+  /// 下一页的普通 URL（站点用链接分页时）。
   final String? nextPageUrl;
+
+  /// 下一页的 JS 调用（如 `searchpage('k','xiaye','1','6');`），
+  /// 站点用 JS 分页时由调用方在 WebView 内执行。
+  final String? nextPageJs;
 }
 
 /// 书籍详情：基本信息 + 章节目录。

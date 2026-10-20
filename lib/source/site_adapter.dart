@@ -22,6 +22,13 @@ abstract interface class SiteAdapter {
     String nextPageUrl,
   );
 
+  /// 搜索下一页（站点用 JS 分页时，重放 [jsAction]，先加载搜索页再执行）。
+  Future<SourceSearchResult> searchMoreJs(
+    SourceClient client,
+    String keyword,
+    String jsAction,
+  );
+
   /// 书籍详情（含目录）。
   Future<SourceBookDetail> detail(SourceClient client, SourceBook book);
 
