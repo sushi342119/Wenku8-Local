@@ -13,8 +13,14 @@ abstract interface class SiteAdapter {
   /// 站点显示名（如"123小说网"）。
   String get siteName;
 
-  /// 搜索。返回业务页面被 Cloudflare 拦截时抛 [SiteNeedVerify]。
-  Future<List<SourceBook>> search(SourceClient client, String keyword);
+  /// 搜索第一页。返回业务页面被 Cloudflare 拦截时抛 [SiteNeedVerify]。
+  Future<SourceSearchResult> search(SourceClient client, String keyword);
+
+  /// 搜索下一页（[nextPageUrl] 来自上一页结果）。
+  Future<SourceSearchResult> searchMore(
+    SourceClient client,
+    String nextPageUrl,
+  );
 
   /// 书籍详情（含目录）。
   Future<SourceBookDetail> detail(SourceClient client, SourceBook book);

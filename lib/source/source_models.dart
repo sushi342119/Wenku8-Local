@@ -26,6 +26,14 @@ class SourceBook {
   final String? status;
 }
 
+/// 一页搜索结果；[nextPageUrl] 为空表示没有下一页。
+class SourceSearchResult {
+  const SourceSearchResult({required this.books, this.nextPageUrl});
+
+  final List<SourceBook> books;
+  final String? nextPageUrl;
+}
+
 /// 书籍详情：基本信息 + 章节目录。
 class SourceBookDetail {
   const SourceBookDetail({

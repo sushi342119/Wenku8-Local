@@ -52,10 +52,26 @@ static final _detailPathPattern = RegExp(r'^/(\d+)/(\d+)/$');
 static final _chapterPathPattern = RegExp(r'^/(\d+)/(\d+)/(\d+)\.html$');
 
 @override
-Future<List<SourceBook>> search(SourceClient client, String keyword) async {
+Future<SourceSearchResult> search(SourceClient client, String keyword) async {
 // 关键词必须 GBK 编码，UTF-8 会返回无结果。
 final encoded = gbkPercentEncode(keyword);
 final pageUri = Uri.parse(_base()).resolve('s.php?s=$encoded');
+return _fetchSearchPage(client, pageUri);
+}
+
+@override
+Future<SourceSearchResult> searchMore(
+SourceClient client,
+String nextPageUrl,
+) {
+return _fetchSearchPage(client, Uri.parse(nextPageUrl));
+}
+
+/// 取一页搜索结果并解析（书目 + 下一页链接）。
+Future<SourceSearchResult> _fetchSearchPage(
+SourceClient client,
+Uri pageUri,
+) async {
 final doc = await _fetchDocument(client, pageUri);
 final results = <SourceBook>[];
 final seen = <String>{};
@@ -79,7 +95,27 @@ detailUrl: detailUrl,
 ),
 );
 }
-return results;
+return SourceSearchResult(
+books: results,
+nextPageUrl: _findSearchNextPage(doc, pageUri),
+);
+}
+
+/// 找搜索结果页的"下一页"链接（本站文字为「下一页」或「下页」）。
+/// 校验同站，且不能指回当前页。
+String? _findSearchNextPage(Document doc, Uri current) {
+const nextTexts = {'下一页', '下页', '下一页>', '下页>', '下一页»', '下页»'};
+for (final a in doc.querySelectorAll('a')) {
+final t = a.text.trim();
+if (!nextTexts.contains(t)) continue;
+final href = a.attributes['href']?.trim()?? '';
+if (href.isEmpty) continue;
+final resolved = current.resolve(href).removeFragment();
+if (!_isSameSite(resolved)) continue;
+if (resolved.toString() == current.removeFragment().toString()) continue;
+return resolved.toString();
+}
+return null;
 }
 
 /// 在条目边界内找作者：从链接向上找最近的容器，找到作者即停；

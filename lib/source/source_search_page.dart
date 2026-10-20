@@ -42,6 +42,10 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
   bool _searching = false;
   String? _error;
   List<SourceBook> _results = [];
+  String? _nextSearchUrl;
+  bool _loadingMore = false;
+  // 搜索代际：每轮新搜索自增，旧的分页请求返回时标识已过期，不得再写入。
+  int _searchGen = 0;
   bool _verifying = false; // WebView 验证中（显示内嵌 WebView）
 
   @override
@@ -63,17 +67,21 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
     final kw = _keyword.text.trim();
     if (kw.isEmpty || _searching) return;
     FocusScope.of(context).unfocus();
+    final gen = ++_searchGen;
     setState(() {
       _searching = true;
       _error = null;
       _results = [];
+      _nextSearchUrl = null;
+      _loadingMore = false;
     });
     try {
-      final results = await _adapter.search(_client, kw);
-      if (!mounted) return;
+      final result = await _adapter.search(_client, kw);
+      if (!mounted || gen != _searchGen) return;
       setState(() {
-        _results = results;
-        if (results.isEmpty) _error = '没有找到相关书籍，换个关键词试试';
+        _results = result.books;
+        _nextSearchUrl = result.nextPageUrl;
+        if (result.books.isEmpty) _error = '没有找到相关书籍，换个关键词试试';
       });
     } on SiteNeedVerify {
       if (!mounted) return;
@@ -88,6 +96,42 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
       setState(() => _error = '搜索失败：$e');
     } finally {
       if (mounted) setState(() => _searching = false);
+    }
+  }
+
+  /// 加载搜索下一页并追加（去重）。
+  Future<void> _loadMore() async {
+    final next = _nextSearchUrl;
+    if (next == null || _loadingMore) return;
+    final gen = _searchGen;
+    setState(() {
+      _loadingMore = true;
+      _error = null;
+    });
+    try {
+      final result = await _adapter.searchMore(_client, next);
+      if (!mounted || gen != _searchGen) return;
+      final seen = {for (final b in _results) b.detailUrl};
+      setState(() {
+        for (final b in result.books) {
+          if (seen.add(b.detailUrl)) _results.add(b);
+        }
+        _nextSearchUrl = result.nextPageUrl;
+      });
+    } on SiteNeedVerify {
+      if (!mounted || gen != _searchGen) return;
+      await _verifyThenRetry(_loadMore);
+    } on WebViewNeedVerify {
+      if (!mounted || gen != _searchGen) return;
+      await _verifyThenRetry(_loadMore);
+    } catch (e) {
+      if (!mounted || gen != _searchGen) return;
+      setState(() => _error = '加载下一页失败：$e');
+    } finally {
+      // 只有同代际才复位：新搜索已接管状态，旧请求不得清它。
+      if (mounted && gen == _searchGen) {
+        setState(() => _loadingMore = false);
+      }
     }
   }
 
@@ -458,10 +502,29 @@ class _SourceSearchPageState extends State<SourceSearchPage> {
         child: Text('试验功能：搜索站内书籍，下载后转本地 TXT 阅读'),
       );
     }
+    final hasMore = _nextSearchUrl != null;
     return ListView.separated(
-      itemCount: _results.length,
+      itemCount: _results.length + (hasMore ? 1 : 0),
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, i) {
+        if (i == _results.length) {
+          // "加载更多"行
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Center(
+              child: _loadingMore
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : TextButton(
+                      onPressed: _loadMore,
+                      child: const Text('加载更多'),
+                    ),
+            ),
+          );
+        }
         final book = _results[i];
         return ListTile(
           title: Text(
