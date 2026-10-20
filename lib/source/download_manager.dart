@@ -19,8 +19,8 @@ class SourceDownloadManager extends ChangeNotifier {
   bool _needsVerify = false;
   bool get needsVerify => _needsVerify;
 
-  /// 任务键：书籍 URL（同站内唯一）。
-  String _key(SourceBook book) => book.url;
+  /// 任务键：书籍详情 URL（同站内唯一）。
+  String _key(SourceBook book) => book.detailUrl;
 
   SourceDownloadTask? taskFor(SourceBook book) => _tasks[_key(book)];
 

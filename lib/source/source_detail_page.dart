@@ -66,7 +66,8 @@ class _SourceDetailPageState extends State<SourceDetailPage> {
     } on SiteNeedVerify {
       if (!mounted) return;
       setState(() => _loading = false);
-      await widget.onVerify(() => _load());
+      showNovelFeedback(context, '需要重新验证，已返回搜索页');
+      if (mounted) Navigator.of(context).pop();
     } on WebViewNeedVerify {
       if (!mounted) return;
       setState(() => _loading = false);
