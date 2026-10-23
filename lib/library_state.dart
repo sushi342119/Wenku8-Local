@@ -564,7 +564,7 @@ class LibraryState extends ChangeNotifier {
   }) {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
-        () => remapChapterProgress(
+        (_) => remapChapterProgress(
           id,
           oldChapters: oldChapters,
           newChapters: newChapters,
