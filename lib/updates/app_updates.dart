@@ -104,6 +104,16 @@ class AppRelease {
       if (raw is! Map) continue;
       final name = raw['name'];
       final url = Uri.tryParse(raw['browser_download_url']?.toString() ?? '');
+      // GitHub 的 browser_download_url 会把 tag 中的 + 编码为 %2B
+      //（如 v1.2.2+29 → v1.2.2%2B29），两种写法都接受。
+      final encodedTag = tag.replaceAll('+', '%2B');
+      final underRelease =
+          url?.path.startsWith('/$repository/releases/download/$tag/') ==
+              true ||
+          url?.path.startsWith(
+                '/$repository/releases/download/$encodedTag/',
+              ) ==
+              true;
       final size = raw['size'];
       if (name is! String ||
           !name.startsWith('wenku8-') ||
@@ -113,7 +123,7 @@ class AppRelease {
           url.host != 'github.com' ||
           url.userInfo.isNotEmpty ||
           url.port != 443 ||
-          !url.path.startsWith('/$repository/releases/download/$tag/') ||
+          !underRelease ||
           url.pathSegments.last != name ||
           size is! int ||
           size <= 0 ||

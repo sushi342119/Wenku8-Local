@@ -82,6 +82,17 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     setState(() => _scanning = true);
     try {
       final result = await widget.local.scan();
+      // 章节重切后迁移阅读进度，避免旧章节序号在新章节表下串章。
+      // 逐条容错：单条失败不中断其余迁移与后续清理。
+      for (final remap in result.chapterRemaps) {
+        try {
+          await widget.state.remapChapterProgress(
+            remap.bookId,
+            oldChapters: remap.oldChapters,
+            newChapters: remap.newChapters,
+          );
+        } catch (_) {}
+      }
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
       // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
       final cleanupIds = await widget.local.peekAssociatedCleanupIds();

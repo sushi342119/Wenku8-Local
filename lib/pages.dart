@@ -65,6 +65,18 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     if (!mounted) return;
     try {
       final result = await local.scan();
+      // 章节重切后迁移阅读进度，避免旧章节序号在新章节表下串章。
+      // state 不依赖页面生命周期且切分版本标记已在 scan 内写入，
+      // 必须赶在 mounted 检查前逐条执行；单条失败不中断其余。
+      for (final remap in result.chapterRemaps) {
+        try {
+          await widget.state.remapChapterProgress(
+            remap.bookId,
+            oldChapters: remap.oldChapters,
+            newChapters: remap.newChapters,
+          );
+        } catch (_) {}
+      }
       if (!mounted) return;
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
       // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
@@ -1889,20 +1901,22 @@ class _ShelfPageState extends State<ShelfPage> {
       reduceMotion: state.reduceMotion,
     );
     if (!mounted || !second) return;
-    // 源文件删除失败抛错（记录保留）；BookCleanupFailed 表示文件已删、
-    // 记录已恢复，可重试（重试时文件不存在视为已删）。
-    try {
-      await local.deleteBookFile(id);
-    } on BookCleanupFailed {
-      if (context.mounted) {
-        showNovelFeedback(context, '文件已删除，但书籍记录未清干净，请重试');
-      }
-      return;
-    } catch (_) {
-      if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
-      return;
-    }
-    // 源文件与书籍记录均已删除：关联数据尽力清理，失败如实提示。
+    // 删除失败的区分提示与兜底在 _deleteLocalBookWithFallback 内处理；
+    // failed 时记录保留，直接返回。
+    final deleteResult = await _deleteLocalBookWithFallback(
+      context,
+      local,
+      id,
+      reduceMotion: state.reduceMotion,
+      state: state,
+    );
+    if (deleteResult == _DeleteFileResult.failed) return;
+    final successText = switch (deleteResult) {
+      _DeleteFileResult.recordOnly => '已移出书库「$title」，源文件已保留',
+      _DeleteFileResult.recordOnlySourceGone => '已移出书库「$title」',
+      _ => '已删除「$title」',
+    };
+    // 书籍记录已移除：关联数据尽力清理，失败如实提示。
     var cleanupOk = true;
     try {
       await state.setShelfMembership(id, false);
@@ -1922,7 +1936,7 @@ class _ShelfPageState extends State<ShelfPage> {
     if (!mounted) return;
     showNovelFeedback(
       context,
-      cleanupOk ? '已删除「$title」' : '文件已删除，但部分关联数据未清干净，可重启后重试',
+      cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净，可重启后重试',
     );
   }
 
@@ -1933,6 +1947,183 @@ class _ShelfPageState extends State<ShelfPage> {
     if (message.contains('同名文件已存在')) return '同名文件已存在';
     if (message.contains('书籍不存在')) return '书籍已不存在';
     return '请重试';
+  }
+}
+
+/// 删除源文件的结果：已彻底删除 / 仅移出书库（源文件保留）/
+/// 仅移出书库（源文件已不存在）/ 失败（记录保留）。
+enum _DeleteFileResult { deleted, recordOnly, recordOnlySourceGone, failed }
+
+/// 删除源文件；失败时按原生错误码区分处理，不再统一一句「删除失败，请重试」：
+/// 无写权限可重新授权文件夹后重试；provider 拒绝/不支持/地址失效时，
+/// 可兜底「仅移出书库」；其余错误如实提示。关联数据清理由调用方负责。
+Future<_DeleteFileResult> _deleteLocalBookWithFallback(
+  BuildContext context,
+  LocalLibraryStore local,
+  int id, {
+  required bool reduceMotion,
+  bool canReauth = true,
+  LibraryState? state,
+}) async {
+  try {
+    await local.deleteBookFile(id);
+    return _DeleteFileResult.deleted;
+  } on BookCleanupFailed {
+    // 源文件已删、记录保存失败已恢复，可重试（重试时文件不存在视为已删）。
+    if (context.mounted) {
+      showNovelFeedback(context, '文件已删除，但书籍记录未清干净，请重试');
+    }
+    return _DeleteFileResult.failed;
+  } on LocalDeleteException catch (e) {
+    if (!context.mounted) return _DeleteFileResult.failed;
+    switch (e.code) {
+      case 'permission':
+        final choice = await showNovelChoiceSheet(
+          context,
+          title: '没有删除权限',
+          message: canReauth
+              ? '这个文件夹当初只授予了读取权限，App 无法删除或改名源文件。'
+                  '重新授权一次文件夹（仍选原来的文件夹）即可补上写权限；'
+                  '也可以先把这本书移出书库，源文件保留在手机里。'
+              : '重新授权后仍无法删除这本书的源文件。'
+                  '可以先把这本书移出书库，源文件保留在手机里。',
+          choices: [
+            if (canReauth) (value: 'reauth', label: '重新授权文件夹'),
+            (value: 'recordOnly', label: '仅移出书库（源文件保留）'),
+          ],
+          reduceMotion: reduceMotion,
+        );
+        if (choice == 'reauth') {
+          if (!context.mounted) return _DeleteFileResult.failed;
+          final previousFolder = local.folderUri;
+          String? picked;
+          try {
+            picked = await local.pickFolder();
+          } catch (_) {
+            // pickFolder 的异常发生在本 catch 块内，外层 catch 捕获不到，
+            // 必须就地处理，不能逸出成未捕获异步错误。
+            if (context.mounted) {
+              showNovelFeedback(context, '重新授权失败，请重试');
+            }
+            return _DeleteFileResult.failed;
+          }
+          if (picked == null || !context.mounted) {
+            return _DeleteFileResult.failed;
+          }
+          if (picked != previousFolder) {
+            // 用户选了别的目录：按 App 既有的切换文件夹流程完成扫描，
+            // 不再拿旧书 id 盲目重试删除，避免误判与误报。
+            try {
+              await local.scan();
+            } catch (_) {}
+            if (context.mounted) {
+              showNovelFeedback(context, '已切换到新文件夹，这本书未删除');
+            }
+            return _DeleteFileResult.failed;
+          }
+          try {
+            final scanResult = await local.scan();
+            // 章节重切可能顺带发生：同步迁移阅读进度，逐条容错，
+            // 单条失败不把整个重新授权误报为未完成。
+            if (state != null) {
+              for (final remap in scanResult.chapterRemaps) {
+                try {
+                  await state.remapChapterProgress(
+                    remap.bookId,
+                    oldChapters: remap.oldChapters,
+                    newChapters: remap.newChapters,
+                  );
+                } catch (_) {}
+              }
+            }
+          } catch (_) {
+            if (context.mounted) {
+              showNovelFeedback(context, '重新授权未完成，请重试');
+            }
+            return _DeleteFileResult.failed;
+          }
+          if (!context.mounted) return _DeleteFileResult.failed;
+          if (local.bookFor(id) == null) {
+            showNovelFeedback(context, '这本书已不在书库中');
+            return _DeleteFileResult.failed;
+          }
+          return _deleteLocalBookWithFallback(
+            context,
+            local,
+            id,
+            reduceMotion: reduceMotion,
+            canReauth: false,
+            state: state,
+          );
+        }
+        if (choice == 'recordOnly') {
+          if (!context.mounted) return _DeleteFileResult.failed;
+          return _removeBookRecordOnly(context, local, id);
+        }
+        return _DeleteFileResult.failed;
+      case 'unsupported':
+      case 'delete_rejected':
+        final choice = await showNovelChoiceSheet(
+          context,
+          title: '这个存储位置不让 App 删除',
+          message: '源文件所在的存储不允许 App 删除文件，需要用文件管理器手动删除。'
+              '可以先把这本书移出书库，源文件保留在手机里。',
+          choices: [(value: 'recordOnly', label: '仅移出书库（源文件保留）')],
+          reduceMotion: reduceMotion,
+        );
+        if (choice == 'recordOnly') {
+          if (!context.mounted) return _DeleteFileResult.failed;
+          return _removeBookRecordOnly(context, local, id);
+        }
+        return _DeleteFileResult.failed;
+      case 'invalid_uri':
+        final choice = await showNovelChoiceSheet(
+          context,
+          title: '源文件已找不到',
+          message: '这本书的源文件可能已被移动或删除，无法再彻底删除。'
+              '可以把它的书库记录移出。',
+          choices: [(value: 'recordOnly', label: '移出书库记录')],
+          reduceMotion: reduceMotion,
+        );
+        if (choice == 'recordOnly') {
+          if (!context.mounted) return _DeleteFileResult.failed;
+          // 源文件已不存在，成功文案不写「源文件已保留」。
+          return _removeBookRecordOnly(
+            context,
+            local,
+            id,
+            successResult: _DeleteFileResult.recordOnlySourceGone,
+          );
+        }
+        return _DeleteFileResult.failed;
+      case 'io_error':
+        showNovelFeedback(context, '存储暂时不可用，请稍后重试');
+        return _DeleteFileResult.failed;
+      default:
+        showNovelFeedback(context, '删除失败，请重试');
+        return _DeleteFileResult.failed;
+    }
+  } catch (_) {
+    if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
+    return _DeleteFileResult.failed;
+  }
+}
+
+/// 兜底：仅移出书库（加入忽略名单防再次扫描导入）。
+/// [successResult] 区分成功文案：默认源文件保留；源文件已不存在时传
+/// [_DeleteFileResult.recordOnlySourceGone]。
+Future<_DeleteFileResult> _removeBookRecordOnly(
+  BuildContext context,
+  LocalLibraryStore local,
+  int id, {
+  _DeleteFileResult successResult = _DeleteFileResult.recordOnly,
+}) async {
+  try {
+    await local.removeBookRecordOnly(id);
+    return successResult;
+  } catch (_) {
+    if (context.mounted) showNovelFeedback(context, '移出书库失败，请重试');
+    return _DeleteFileResult.failed;
   }
 }
 
@@ -3576,17 +3767,19 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       reduceMotion: state.reduceMotion,
     );
     if (!mounted || !second) return;
-    try {
-      await local.deleteBookFile(id);
-    } on BookCleanupFailed {
-      if (context.mounted) {
-        showNovelFeedback(context, '文件已删除，但书籍记录未清干净，请重试');
-      }
-      return;
-    } catch (_) {
-      if (context.mounted) showNovelFeedback(context, '删除失败，请重试');
-      return;
-    }
+    final deleteResult = await _deleteLocalBookWithFallback(
+      context,
+      local,
+      id,
+      reduceMotion: state.reduceMotion,
+      state: state,
+    );
+    if (deleteResult == _DeleteFileResult.failed) return;
+    final successText = switch (deleteResult) {
+      _DeleteFileResult.recordOnly => '已移出书库「$title」，源文件已保留',
+      _DeleteFileResult.recordOnlySourceGone => '已移出书库「$title」',
+      _ => '已删除「$title」',
+    };
     var cleanupOk = true;
     try {
       await state.setShelfMembership(id, false);
@@ -3617,7 +3810,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       ..showSnackBar(
         SnackBar(
           content: Text(
-            cleanupOk ? '已删除「$title」' : '文件已删除，但部分关联数据未清干净',
+            cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净',
           ),
         ),
       );

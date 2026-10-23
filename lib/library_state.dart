@@ -551,6 +551,80 @@ class LibraryState extends ChangeNotifier {
     });
   }
 
+  /// 本地书章节重切（切分规则升级）后迁移阅读进度，避免按旧章节序号串章。
+  /// 锚点换算：旧章节字符起点 + 旧滚动比例 × 旧章节长度 ≈ 全书字符位置，
+  /// 再落到包含该位置的新章节，章内比例按新章节长度折算。落点是近似位置
+  /// （比例来自滚动而非字符），但保证仍在原来读到的那段文字附近。
+  /// 段落锚点与像素偏移一并作废（width 置 0 强制阅读器按比例恢复），
+  /// updatedAt 保持不变，不扰动「最近阅读」排序。无进度记录时不处理。
+  Future<void> remapChapterProgress(
+    int id, {
+    required List<({int offset, int length})> oldChapters,
+    required List<({int offset, int length})> newChapters,
+  }) {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        () => remapChapterProgress(
+          id,
+          oldChapters: oldChapters,
+          newChapters: newChapters,
+        ),
+      );
+    }
+    return _queuePositionWrite(() async {
+      if (id <= 0 || oldChapters.isEmpty || newChapters.isEmpty) return;
+      final pos = _positions[id];
+      final savedChapter = _chapters[id];
+      if (pos == null && savedChapter == null) return;
+      final oldIndex = (pos?.chapter ?? savedChapter!)
+          .clamp(0, oldChapters.length - 1);
+      final oldChapter = oldChapters[oldIndex];
+      final global = oldChapter.offset +
+          ((pos?.fraction ?? 0) * oldChapter.length).round();
+      var newIndex = newChapters.length - 1;
+      for (var i = 0; i < newChapters.length; i++) {
+        if (global < newChapters[i].offset + newChapters[i].length) {
+          newIndex = i;
+          break;
+        }
+      }
+      final newChapter = newChapters[newIndex];
+      final newFraction = newChapter.length > 0
+          ? ((global - newChapter.offset) / newChapter.length)
+              .clamp(0.0, 1.0)
+              .toDouble()
+          : 0.0;
+      _chapters[id] = newIndex;
+      ReadingPosition? newPos;
+      if (pos != null) {
+        newPos = ReadingPosition(
+          chapter: newIndex,
+          chapterId: newIndex,
+          offset: 0,
+          fraction: newFraction,
+          fontSize: pos.fontSize,
+          width: 0,
+          updatedAt: pos.updatedAt,
+          lineHeight: pos.lineHeight,
+          textScale: pos.textScale,
+          typeface: pos.typeface,
+        );
+        _positions[id] = newPos;
+      }
+      // 先写阅读位置、后写章节键：中途崩溃时旧章节键与旧位置仍成对，
+      // 不会出现「新章节键 + 旧位置」的错位组合。
+      if (newPos != null) {
+        await writeLibraryPreference(
+          _prefs,
+          'reading_position_$id',
+          jsonEncode(newPos.toJson()),
+        );
+      }
+      await writeLibraryPreference(_prefs, 'chapter_$id', newIndex);
+      notifyListeners();
+    });
+  }
+
   Future<void> clearReadingHistory() {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => clearReadingHistory());

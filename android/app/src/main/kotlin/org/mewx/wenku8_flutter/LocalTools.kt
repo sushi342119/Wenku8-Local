@@ -16,6 +16,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
@@ -117,7 +118,16 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
                 pendingFolder = result
                 try {
-                    activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_FOLDER)
+                    // 显式申请读写 + 可持久化：删除/重命名源文件需要写权限，
+                    // 只授读权限时这些操作会被 provider 拒绝。
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        )
+                    }
+                    activity.startActivityForResult(intent, REQUEST_FOLDER)
                 } catch (_: Exception) {
                     pendingFolder = null
                     result.error("picker", "Folder picker could not open", null)
@@ -219,9 +229,16 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 return true
             }
             try {
-                activity.contentResolver.takePersistableUriPermission(
-                    uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
+                // 只持久化系统实际授予的权限（用返回 Intent 的 flags 做掩码）：
+                // 强传未授予的 WRITE 会抛 SecurityException；旧版固定只取 READ，
+                // 导致写授权未持久化，重启后删除/重命名源文件全部被拒。
+                val granted = (data?.flags ?: 0) and (
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                val takeFlags = if (granted != 0) granted
+                else Intent.FLAG_GRANT_READ_URI_PERMISSION
+                activity.contentResolver.takePersistableUriPermission(uri, takeFlags)
                 result.success(uri.toString())
             } catch (_: Exception) {
                 result.error("permission", "Folder permission was not granted", null)
@@ -489,13 +506,27 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         return true
     }
 
-    /** 删除 SAF 文档。文件已不存在视为删除成功；返回 false 表示 provider 拒绝。 */
-    private fun deleteLocalDocument(doc: Uri): Map<String, Any> {
+    /** 删除 SAF 文档。文件已不存在视为删除成功。
+     * 失败时返回结构化 code（permission / unsupported / delete_rejected /
+     * invalid_uri / io_error / unknown），供 Dart 侧区分提示与兜底，
+     * 不再把所有失败吞成同一句「删除失败」。 */
+    private fun deleteLocalDocument(doc: Uri): Map<String, Any?> {
         return try {
             val deleted = DocumentsContract.deleteDocument(activity.contentResolver, doc)
-            mapOf("deleted" to deleted)
+            if (deleted) mapOf("deleted" to true)
+            else mapOf("deleted" to false, "code" to "delete_rejected")
         } catch (e: FileNotFoundException) {
             mapOf("deleted" to true, "notFound" to true)
+        } catch (e: SecurityException) {
+            mapOf("deleted" to false, "code" to "permission", "message" to e.message)
+        } catch (e: UnsupportedOperationException) {
+            mapOf("deleted" to false, "code" to "unsupported", "message" to e.message)
+        } catch (e: IllegalArgumentException) {
+            mapOf("deleted" to false, "code" to "invalid_uri", "message" to e.message)
+        } catch (e: IOException) {
+            mapOf("deleted" to false, "code" to "io_error", "message" to e.message)
+        } catch (e: Exception) {
+            mapOf("deleted" to false, "code" to "unknown", "message" to e.message)
         }
     }
 

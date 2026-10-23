@@ -146,6 +146,8 @@ class LocalBook {
     String? customTitle,
     String? customAuthor,
     int? wordCount,
+    List<LocalChapterIndex>? chapters,
+    String? sourceId,
   }) =>
       LocalBook(
         id: id,
@@ -156,12 +158,12 @@ class LocalBook {
         kind: kind,
         size: size,
         modified: modified,
-        chapters: chapters,
+        chapters: chapters ?? this.chapters,
         pageCount: pageCount,
         wordCount: wordCount ?? this.wordCount,
         customTitle: customTitle,
         customAuthor: customAuthor,
-        sourceId: sourceId,
+        sourceId: sourceId ?? this.sourceId,
         sourceKey: sourceKey ?? this.sourceKey,
       );
 
@@ -219,6 +221,7 @@ class LocalScanResult {
     required this.skipped,
     this.backfilled = 0,
     this.switchedRemovedIds = const [],
+    this.chapterRemaps = const [],
   });
   final int added;
   final int refreshed;
@@ -231,13 +234,31 @@ class LocalScanResult {
 
   /// 文件夹切换时被清理的旧来源书籍 ID（调用方据此清理书架/标签/进度）。
   final List<int> switchedRemovedIds;
+
+  /// 章节重切（切分规则升级）导致章节表变化的书：调用方须据此迁移阅读
+  /// 进度（旧章节序号在新章节表下指向不同内容）。oldChapters/newChapters
+  /// 为 (字符起点, 长度) 列表。
+  final List<
+      ({
+        int bookId,
+        List<({int offset, int length})> oldChapters,
+        List<({int offset, int length})> newChapters
+      })> chapterRemaps;
 }
 
 /// 章节标题启发式：行首的"第X章/节/回"、Chapter N、序章/番外/后记等短行。
+/// 章节标题行（切分版本 2）。实测用户书库的漏检主因：
+/// 标题行常以多个全角空格（U+3000）缩进甚至居中（十余个），旧版行首只认
+/// 半角空白且最多 8 个；数字常为全角（第１章）；标题尾随文字可达近 40 字。
+/// 行首放宽到 32 个空白/括号字符、数字含全角、单位加「话/幕」，尾随放宽
+/// 到 40 字，配合 _splitChapters 的总长 64 字上限防正文行误报。
 final _chapterTitlePattern = RegExp(
-  r'^[ \t]{0,8}(第[一二三四五六七八九十百千零〇两\d\s　]+[章节回集卷部篇]|Chapter[ \t]*\d+|序章|序曲|楔子|终章|终曲|番外(?:[ \t]*\d+)?|后记|前言|引子|尾声)[^\n]{0,28}$',
+  r'^[ \t　【\[（(]{0,32}(第[一二三四五六七八九十百千零〇两\d０-９ \t　]+[章节回集卷部篇话幕]|卷[一二三四五六七八九十百千零〇两\d０-９]+|Chapter[ \t]*\d+|序章|序曲|楔子|终章|终曲|番外(?:[ \t]*\d+)?|后记|前言|引子|尾声)[^\n]{0,40}$',
   multiLine: true,
 );
+
+/// 章节切分规则版本：规则变化时递增，scan 据此对存量书重切一次。
+const _chapterSplitVersion = 2;
 
 const _shelfPalette = [
   [Color(0xFF5C4A3A), Color(0xFF8A6F55)],
@@ -563,6 +584,51 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     await _prefs.remove('local_library_folder');
   }
 
+  /// ---- 「仅移出书库」忽略名单 ----
+  ///
+  /// 源文件删不掉时用户可选择仅移出书库（源文件保留）。被移出文件的
+  /// [sourceId, sourceKey] 记入此名单，扫描时跳过，避免下次扫描又导入回来；
+  /// 文件后来从磁盘消失（用户手动删除等）时，名单条目在扫描中自动清理。
+  static const _ignoredSourcesKey = 'local_library_ignored_sources';
+
+  static String _ignoredKeyFor(String sourceId, String sourceKey) =>
+      jsonEncode([sourceId, sourceKey]);
+
+  /// 忽略名单的内存缓存：prefs 读取异常时用上次成功读到的名单兜底，
+  /// 避免把「读不到」误判成「名单为空」而重新导入已移出的书。
+  Set<String>? _ignoredCache;
+
+  Set<String> _readIgnoredSources() {
+    try {
+      final set = (_prefs.getStringList(_ignoredSourcesKey) ?? []).toSet();
+      _ignoredCache = Set.of(set);
+      return set;
+    } catch (_) {
+      final cache = _ignoredCache;
+      return cache == null ? {} : Set.of(cache);
+    }
+  }
+
+  Future<void> _writeIgnoredSources(Set<String> ignored) async {
+    await _checkedSet(
+      () => _prefs.setStringList(_ignoredSourcesKey, ignored.toList()),
+      _ignoredSourcesKey,
+    );
+    _ignoredCache = Set.of(ignored);
+  }
+
+  /// 书籍的有效忽略 key：sourceKey 为空用 fileUri 兜底；
+  /// sourceId 为空（旧数据）用当前文件夹推导，与 scan 的 sourceId 对齐。
+  String _effectiveIgnoredKeyFor(LocalBook book) {
+    final sourceKey = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
+    var sourceId = book.sourceId;
+    if (sourceId.isEmpty) {
+      final folder = folderUri;
+      if (folder != null && folder.isNotEmpty) sourceId = 'saf:$folder';
+    }
+    return _ignoredKeyFor(sourceId, sourceKey);
+  }
+
   /// 扫描已选文件夹：新增导入、内容变化的重新导入、源文件已删的移除。
   Future<LocalScanResult> scan() => _synchronized(() async {
     final treeUri = folderUri;
@@ -575,6 +641,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       throw IncompleteScanException(scanResult.reason ?? 'unknown');
     }
     final entries = scanResult.entries;
+    // 章节切分规则版本落后时，本轮对存量书重切一次（按来源分别标记）。
+    final chaptersStale = _prefs.getInt('local_library_chapter_split_v_saf') !=
+        _chapterSplitVersion;
+    final chapterRemaps = <
+        ({
+          int bookId,
+          List<({int offset, int length})> oldChapters,
+          List<({int offset, int length})> newChapters
+        })>[];
+    var chaptersRefreshFailed = false;
+    // 忽略名单对账移除的书：先只移除记录，其内部副本等索引落盘后再删。
+    final reconciledData = <LocalBook>[];
     // 按 sourceKey 索引当前来源的书籍，避免误删其他来源（修复#1）。
     final byKey = {
       for (final book in _books)
@@ -587,6 +665,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         if (book.sourceId.isEmpty) book.fileUri: book
     };
     final seen = <String>{};
+    final ignored = _readIgnoredSources();
     var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
     for (final entry in entries) {
       final uri = entry['uri'] as String? ?? '';
@@ -594,13 +673,46 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       if (uri.isEmpty || name.isEmpty) continue;
       final sourceKey = uri;
       seen.add(sourceKey);
+      // 「仅移出书库」的书：源文件还在，但用户已明确移出，跳过导入。
+      if (ignored.contains(_ignoredKeyFor(sourceId, sourceKey))) {
+        skipped++;
+        // 对账：记录若仍在库中（移出过程中进程中断、忽略已写但索引未落盘），
+        // 在此完成移除，避免「书还在但永远被跳过」的死状态。
+        // 内部副本延迟到本轮索引落盘后删除，避免中途抛错时索引与副本不一致。
+        final existing = byKey[sourceKey] ?? byUriLegacy[uri];
+        if (existing != null) {
+          _books.remove(existing);
+          reconciledData.add(existing);
+          removed++;
+        }
+        continue;
+      }
       final size = (entry['size'] as num?)?.toInt() ?? 0;
       final modified = (entry['modified'] as num?)?.toInt() ?? 0;
-      final existing = byKey[sourceKey] ?? byUriLegacy[uri];
+      var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
         if (existing.size == size && existing.modified == modified) {
+          // 旧数据回填来源标识：sourceId 为空的书在忽略名单等逻辑里需要
+          // 明确来源，按当前扫描来源补齐（sourceKey 同步为本次 uri）。
+          if (existing.sourceId.isEmpty) {
+            final idx = _books.indexWhere((b) => b.id == existing!.id);
+            if (idx >= 0) {
+              existing = _books[idx] = existing.copyWith(
+                sourceId: sourceId,
+                sourceKey: sourceKey,
+                customTitle: existing.customTitle,
+                customAuthor: existing.customAuthor,
+              );
+            }
+          }
           // 文件未变但缺字数时静默补算（v15 之前导入的书）。
           if (await _backfillWordCount(existing)) backfilled++;
+          if (chaptersStale) {
+            final outcome =
+                await _refreshChaptersIfStale(existing, chapterRemaps);
+            if (outcome == 1) refreshed++;
+            if (outcome == 2) chaptersRefreshFailed = true;
+          }
           continue;
         }
         // 先尝试导入，成功后再删除旧数据（修复#3：避免失败后丢失）。
@@ -647,6 +759,26 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         _books.add(book);
         added++;
       }
+    }
+    // 忽略名单清理：本来源下源文件已不在磁盘上的条目自动移除，
+    // 避免名单无限增长，也让同名新文件日后能正常导入。
+    final staleIgnored = ignored.where((key) {
+      try {
+        final parts = jsonDecode(key);
+        return parts is List &&
+            parts.length == 2 &&
+            parts[0] == sourceId &&
+            !seen.contains(parts[1]);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+    if (staleIgnored.isNotEmpty) {
+      ignored.removeAll(staleIgnored);
+      // 纯清理性质：写失败不中断正常扫描，下次扫描会再清。
+      try {
+        await _writeIgnoredSources(ignored);
+      } catch (_) {}
     }
     // 只清理当前来源的书籍，不碰其他来源（修复#1）。
     // 能到这里扫描一定是完整的（不完整已在开头抛错）。
@@ -731,9 +863,20 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         );
       }
     }
+    // 索引已落盘：现在才删对账移除书籍的内部副本。
+    for (final book in reconciledData) {
+      await _deleteBookData(book);
+    }
     // 完整扫描成功：恢复暂存标签（切回旧文件夹的场景），
     // 并清理该来源下已不存在文件对应的暂存条目。
     await _restoreStashedTags(sourceId);
+    // 有单本重切失败时不写版本标记，下一轮扫描继续重试失败的书。
+    if (chaptersStale && !chaptersRefreshFailed) {
+      try {
+        await _prefs.setInt(
+            'local_library_chapter_split_v_saf', _chapterSplitVersion);
+      } catch (_) {}
+    }
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -742,6 +885,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       skipped: skipped,
       backfilled: backfilled,
       switchedRemovedIds: switchedRemovedIds,
+      chapterRemaps: chapterRemaps,
     );
   });
 
@@ -758,6 +902,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   Future<LocalScanResult> scanAppFolder() => _synchronized(() async {
     final folderPath = await appFolderPath;
     const sourceId = 'appFolder:novels';
+    final chaptersStale =
+        _prefs.getInt('local_library_chapter_split_v_app') !=
+            _chapterSplitVersion;
     final dir = Directory(folderPath);
     final byKey = {
       for (final book in _books)
@@ -770,6 +917,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
           book.fileUri: book
     };
     final seen = <String>{};
+    final ignored = _readIgnoredSources();
+    final chapterRemaps = <
+        ({
+          int bookId,
+          List<({int offset, int length})> oldChapters,
+          List<({int offset, int length})> newChapters
+        })>[];
+    var chaptersRefreshFailed = false;
+    final reconciledData = <LocalBook>[];
     var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
     final files = await dir.list().where((e) => e is File).cast<File>().toList();
     for (final file in files) {
@@ -779,14 +935,43 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final uri = 'file://${file.path}';
       final sourceKey = file.path;
       seen.add(sourceKey);
+      // 「仅移出书库」的书跳过导入；记录仍在时对账移除（与 scan() 同规则）。
+      if (ignored.contains(_ignoredKeyFor(sourceId, sourceKey))) {
+        skipped++;
+        final existingIgnored = byKey[sourceKey] ?? byUriLegacy[uri];
+        if (existingIgnored != null) {
+          _books.remove(existingIgnored);
+          reconciledData.add(existingIgnored);
+          removed++;
+        }
+        continue;
+      }
       final stat = await file.stat();
       final size = stat.size;
       final modified = stat.modified.millisecondsSinceEpoch;
-      final existing = byKey[sourceKey] ?? byUriLegacy[uri];
+      var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
         if (existing.size == size && existing.modified == modified) {
+          // 旧数据回填来源标识（与 scan() 同规则）。
+          if (existing.sourceId.isEmpty) {
+            final idx = _books.indexWhere((b) => b.id == existing!.id);
+            if (idx >= 0) {
+              existing = _books[idx] = existing.copyWith(
+                sourceId: sourceId,
+                sourceKey: sourceKey,
+                customTitle: existing.customTitle,
+                customAuthor: existing.customAuthor,
+              );
+            }
+          }
           // 文件未变但缺字数时静默补算（v15 之前导入的书）。
           if (await _backfillWordCount(existing)) backfilled++;
+          if (chaptersStale) {
+            final outcome =
+                await _refreshChaptersIfStale(existing, chapterRemaps);
+            if (outcome == 1) refreshed++;
+            if (outcome == 2) chaptersRefreshFailed = true;
+          }
           continue;
         }
         LocalBook? book;
@@ -848,9 +1033,37 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       _books.remove(book);
       removed++;
     }
+    // 忽略名单清理：本来源下源文件已消失的条目自动移除（与 scan() 同规则，
+    // 写失败不中断扫描）。
+    final staleIgnored = ignored.where((key) {
+      try {
+        final parts = jsonDecode(key);
+        return parts is List &&
+            parts.length == 2 &&
+            parts[0] == sourceId &&
+            !seen.contains(parts[1]);
+      } catch (_) {
+        return false;
+      }
+    }).toList();
+    if (staleIgnored.isNotEmpty) {
+      ignored.removeAll(staleIgnored);
+      try {
+        await _writeIgnoredSources(ignored);
+      } catch (_) {}
+    }
     await _saveIndex();
+    for (final book in reconciledData) {
+      await _deleteBookData(book);
+    }
     // 完整扫描成功：恢复暂存标签并清理失效条目（与 scan() 同规则）。
     await _restoreStashedTags(sourceId);
+    if (chaptersStale && !chaptersRefreshFailed) {
+      try {
+        await _prefs.setInt(
+            'local_library_chapter_split_v_app', _chapterSplitVersion);
+      } catch (_) {}
+    }
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -858,6 +1071,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       total: _books.length,
       skipped: skipped,
       backfilled: backfilled,
+      chapterRemaps: chapterRemaps,
     );
   });
 
@@ -960,6 +1174,44 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       _books.insert(index, book);
       throw const BookCleanupFailed('书籍记录保存失败');
     }
+  });
+
+  /// 仅移出书库：删除内部副本与书籍记录，源文件保留在手机存储中。
+  /// 记录加入忽略名单，后续扫描不会把同一源文件重新导入（扫描侧另有对账，
+  /// 见 scan 中 ignored 分支）。
+  /// 事务顺序：先清标签暂存并保存索引（源文件与内部副本都还在），成功后
+  /// 才写忽略名单；任一步失败都恢复内存记录、标签暂存快照并重新保存索引，
+  /// 回滚异常不覆盖原始失败，最终抛 [BookCleanupFailed]。这样任何失败都
+  /// 收敛到「书还在库里」而不是半移出状态。书架/标签/阅读进度的清理由
+  /// 调用方负责（与 [deleteBookFile] 相同约定）。
+  Future<void> removeBookRecordOnly(int id) => _synchronized(() async {
+    final book = bookFor(id);
+    if (book == null) return;
+    final index = _books.indexOf(book);
+    final stashSnapshot = _readTagStash();
+    final hasIgnoreKey = book.sourceKey.isNotEmpty || book.fileUri.isNotEmpty;
+    final ignoreKey = hasIgnoreKey ? _effectiveIgnoredKeyFor(book) : null;
+    _books.removeAt(index);
+    try {
+      await _clearTagStashKeys([book]);
+      await _saveIndex();
+      if (ignoreKey != null) {
+        final ignored = _readIgnoredSources();
+        if (ignored.add(ignoreKey)) await _writeIgnoredSources(ignored);
+      }
+    } catch (e) {
+      _books.insert(index, book);
+      try {
+        await _writeTagStash(stashSnapshot);
+      } catch (_) {}
+      try {
+        await _saveIndex();
+      } catch (_) {}
+      throw const BookCleanupFailed('书籍记录保存失败');
+    }
+    // 记录与忽略名单都落盘后才删内部副本；_deleteBookData 内部吞错，
+    // 不会让已落盘的移除回滚。
+    await _deleteBookData(book);
   });
 
   /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
@@ -1198,7 +1450,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final valid = <RegExpMatch>[];
     for (final match in matches) {
       final title = match.group(0)!.trim();
-      if (title.isNotEmpty && title.length <= 42) valid.add(match);
+      if (title.isNotEmpty && title.length <= 64) valid.add(match);
     }
     if (valid.length < 2) {
       return [LocalChapterIndex('正文', 0, text.length)];
@@ -1233,6 +1485,61 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final text = await LocalPlatform.readLocalText(book.fileUri);
     await file.writeAsString(text);
     return text;
+  }
+
+  /// 章节切分规则升级后，对文件未变的存量书用应用内副本重切一次。
+  /// 返回 0=无变化，1=已更新，2=失败（调用方据此推迟版本标记，下轮重试，
+  /// 不能把失败与无变化混同）。更新时以 _books 中的当前对象为基底（保留
+  /// 本轮刚补算的字数等），并把旧/新章节表写入 [remaps] 供调用方迁移进度。
+  Future<int> _refreshChaptersIfStale(
+    LocalBook existing,
+    List<
+            ({
+              int bookId,
+              List<({int offset, int length})> oldChapters,
+              List<({int offset, int length})> newChapters
+            })>
+        remaps,
+  ) async {
+    if (existing.kind != LocalBookKind.txt) return 0;
+    try {
+      final index = _books.indexWhere((b) => b.id == existing.id);
+      if (index < 0) return 2;
+      final current = _books[index];
+      final text = await _readBookText(current);
+      if (text.isEmpty) return 2;
+      final chapters = _splitChapters(text);
+      final old = current.chapters;
+      if (chapters.length == old.length) {
+        var same = true;
+        for (var i = 0; i < chapters.length; i++) {
+          if (chapters[i].title != old[i].title ||
+              chapters[i].offset != old[i].offset) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return 0;
+      }
+      // copyWith 传 null 会清空 customTitle/customAuthor，这里必须透传原值。
+      _books[index] = current.copyWith(
+        chapters: chapters,
+        customTitle: current.customTitle,
+        customAuthor: current.customAuthor,
+      );
+      remaps.add((
+        bookId: current.id,
+        oldChapters: [
+          for (final c in old) (offset: c.offset, length: c.length)
+        ],
+        newChapters: [
+          for (final c in chapters) (offset: c.offset, length: c.length)
+        ],
+      ));
+      return 1;
+    } catch (_) {
+      return 2;
+    }
   }
 
   /// v15 之前导入的 TXT 没有字数：扫描时用应用内副本一次性补算。

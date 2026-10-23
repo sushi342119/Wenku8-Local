@@ -39,6 +39,24 @@ void main() {
     expect(chapters.map((c) => c.title), ['第一章 短标题', '第二章 另一章']);
   });
 
+  test('chapter splitter accepts full-width indented headings', () {
+    // 标题行以多个全角空格缩进/居中、数字为全角，是用户书库最常见的漏检格式。
+    const text = '　　第一章、美艳娇妻\n\n正文。\n\n　　　　　　　　第２章 奸情\n\n正文。\n';
+    final chapters = LocalLibraryStore.splitChaptersForTest(text);
+    expect(
+      chapters.map((c) => c.title),
+      ['第一章、美艳娇妻', '第２章 奸情'],
+    );
+  });
+
+  test('chapter splitter accepts longer chapter titles', () {
+    const text =
+        '第004章 太后寝宫内窃得抹胸绣鞋，稚根初试鞋穴抽送泄薄浆，出屏撞见母后含笑\n\n正文。\n\n第二章 短\n\n正文。\n';
+    final chapters = LocalLibraryStore.splitChaptersForTest(text);
+    expect(chapters.length, 2);
+    expect(chapters[0].title, startsWith('第004章'));
+  });
+
   test('title and author are parsed from common file name patterns', () {
     expect(
       LocalLibraryStore.titleFromNameForTest('斗破苍穹 - 天蚕土豆.txt'),

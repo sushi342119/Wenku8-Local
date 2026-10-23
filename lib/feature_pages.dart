@@ -43,6 +43,46 @@ Future<bool> confirmNovelAction(
     ) ==
     true;
 
+/// 多选项底部弹层：点某个选项返回其 value，点「取消」或关闭返回 null。
+Future<String?> showNovelChoiceSheet(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required List<({String value, String label})> choices,
+  bool reduceMotion = false,
+}) async =>
+    await showJellySheet<String>(
+      context: context,
+      reduceMotion: reduceMotion,
+      builder: (sheet) => Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 14),
+            Text(message),
+            const SizedBox(height: 24),
+            for (final choice in choices) ...[
+              GlassTextButton(
+                onPressed: () => Navigator.pop(sheet, choice.value),
+                child: Text(choice.label),
+              ),
+              const SizedBox(height: 8),
+            ],
+            GlassTextButton(
+              onPressed: () => Navigator.pop(sheet, null),
+              child: const Text('取消'),
+            ),
+          ],
+        ),
+      ),
+    );
+
 class ArchiveFeaturePage extends StatelessWidget {
   const ArchiveFeaturePage({
     super.key,

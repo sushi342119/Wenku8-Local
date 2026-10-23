@@ -4,6 +4,19 @@ import 'package:flutter/widgets.dart';
 
 import 'library_state.dart';
 
+/// SAF 源文件删除失败（原生侧结构化错误码）。
+/// code: permission（无写权限）/ unsupported（存储不支持删除）/
+/// delete_rejected（provider 拒绝）/ invalid_uri（源文件地址失效）/
+/// io_error（存储暂时不可用）/ unknown。
+class LocalDeleteException implements Exception {
+  const LocalDeleteException(this.code, [this.message]);
+  final String code;
+  final String? message;
+
+  @override
+  String toString() => 'LocalDeleteException($code, $message)';
+}
+
 /// Separate from the legacy API/JNI contract. Only explicit user file actions
 /// open the Android picker; the normal reader does not alter system settings.
 abstract final class LocalPlatform {
@@ -90,13 +103,35 @@ abstract final class LocalPlatform {
   static Future<void> clearPdfCache(String docUri) =>
       channel.invokeMethod<bool>('clearPdfCache', {'docUri': docUri});
 
-  /// SAF：删除文档。文件已不存在视为成功；provider 拒绝时抛错。
+  /// SAF：删除文档。文件已不存在视为成功；失败抛 [LocalDeleteException]
+  /// 并带原生侧的结构化 code，供上层区分提示与兜底（重授权/仅移出书库）。
   static Future<void> deleteLocalDocument(String documentUri) async {
-    final res = await channel.invokeMapMethod<String, dynamic>(
-      'deleteLocalDocument',
-      {'docUri': documentUri},
+    final Map<String, dynamic>? res;
+    try {
+      res = await channel.invokeMapMethod<String, dynamic>(
+        'deleteLocalDocument',
+        {'docUri': documentUri},
+      );
+    } on PlatformException catch (e) {
+      // 旧原生版本或外层兜底：已知语义的 error code 原样保留，
+      // 其余归 unknown（SecurityException 在原生外层以 permission 返回）。
+      const knownCodes = {
+        'permission',
+        'unsupported',
+        'delete_rejected',
+        'invalid_uri',
+        'io_error',
+      };
+      throw LocalDeleteException(
+        knownCodes.contains(e.code) ? e.code : 'unknown',
+        e.message,
+      );
+    }
+    if (res?['deleted'] == true) return;
+    throw LocalDeleteException(
+      (res?['code'] as String?) ?? 'delete_rejected',
+      res?['message'] as String?,
     );
-    if (res?['deleted'] != true) throw StateError('删除文件失败');
   }
 
   /// SAF：重命名文档。返回新 URI 与 provider 确认的实际文件名。
