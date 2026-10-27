@@ -96,7 +96,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             newChapters: remap.newChapters,
             migrationId: remap.migrationId,
           );
-          await widget.local.confirmChapterRemap(remap.migrationId);
+          await widget.local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId);
         } catch (error, stackTrace) {
           failedMigrationBooks.add(remap.bookId);
           failedChapterMigrations.add(remap.migrationId);
