@@ -94,7 +94,11 @@ class RecordRemovalJournal {
     // 损坏时阻止扫描，不把损坏待办当成没有待办。
     final intent = _RemovalIntent.decode(raw);
     if (!intent.committed) {
-      await _rollbackPrepared(intent);
+      try {
+        await _rollbackPrepared(intent);
+      } catch (error) {
+        throw RecordRemovalPending(intent.bookId, error);
+      }
       return;
     }
     await _finishCommitted(intent);

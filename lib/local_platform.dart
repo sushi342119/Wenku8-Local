@@ -28,10 +28,11 @@ class LocalTreePermission {
   final bool persistedRead;
   final bool persistedWrite;
 
-  String get deletionHint => persistedWrite
-      ? ''
-      : '当前授权只有读取权限或未持久化写权限，App 暂不能凭此授权删除源文件；'
-          '重新授权时请确认授予写权限';
+  String get deletionHint =>
+      (persistedRead && persistedWrite)
+          ? ''
+          : '当前授权读取或写权限未确认，App 暂不能凭此授权删除源文件；'
+              '重新授权时请确认授予读写权限';
 }
 
 const _knownLocalDeleteCodes = <String>{

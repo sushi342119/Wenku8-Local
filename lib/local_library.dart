@@ -304,26 +304,45 @@ class LocalChapterRemap {
     }
     final map = Map<String, dynamic>.from(value);
     final migrationId = map['migrationId'];
-    final bookId = map['bookId'];
+    final rawBookId = map['bookId'];
+    final rawStatus = map['status'];
+    final rawAttempts = map['attempts'];
+    final rawLastError = map['lastError'];
+    final rawLastFailedAt = map['lastFailedAt'];
     if (migrationId is! String || migrationId.isEmpty) {
       throw const FormatException('chapter remap migrationId is invalid');
     }
-    if (bookId is! num) {
+    // 与章节区间一样的严格规则：小数、负数一律拒绝，不能用 toInt() 静默截断。
+    if (rawBookId is! int || rawBookId <= 0) {
       throw const FormatException('chapter remap bookId is invalid');
     }
-    final status = map['status'];
-    final attempts = map['attempts'];
+    if (rawStatus != null &&
+        rawStatus != 'pending' &&
+        rawStatus != 'failed') {
+      throw const FormatException('chapter remap status is invalid');
+    }
+    if (rawAttempts != null &&
+        (rawAttempts is! int || rawAttempts < 0)) {
+      throw const FormatException('chapter remap attempts is invalid');
+    }
+    if (rawLastError != null && rawLastError is! String) {
+      throw const FormatException('chapter remap lastError is invalid');
+    }
+    if (rawLastFailedAt != null &&
+        (rawLastFailedAt is! int || rawLastFailedAt < 0)) {
+      throw const FormatException('chapter remap lastFailedAt is invalid');
+    }
     return LocalChapterRemap(
       migrationId: migrationId,
-      bookId: bookId.toInt(),
+      bookId: rawBookId,
       oldChapters:
           List.unmodifiable(_decodeChapterRanges(map['oldChapters'])),
       newChapters:
           List.unmodifiable(_decodeChapterRanges(map['newChapters'])),
-      status: status is String && status.isNotEmpty ? status : 'pending',
-      attempts: attempts is num ? attempts.toInt() : 0,
-      lastError: map['lastError'] as String?,
-      lastFailedAt: (map['lastFailedAt'] as num?)?.toInt(),
+      status: rawStatus as String? ?? 'pending',
+      attempts: rawAttempts as int? ?? 0,
+      lastError: rawLastError as String?,
+      lastFailedAt: rawLastFailedAt as int?,
     );
   }
 
@@ -635,6 +654,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       }
       for (var i = start; i <= end; i++) {
         selected.add((entry.key, chain[i].migrationId));
+        // 失败任务之后的同书任务不再暴露：必须等前置任务确认后
+        // 才会再次出现，避免下一轮跳过失败项直接迁移后续。
+        if (chain[i].status == 'failed') {
+          break;
+        }
       }
     }
     return List.unmodifiable([
@@ -644,13 +668,30 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }
 
   /// state.remapChapterProgress 成功返回后才能调用。
-  Future<void> confirmChapterRemap(String migrationId) {
+  Future<void> confirmChapterRemap(
+    String migrationId, {
+    required int bookId,
+  }) {
     return _synchronized(() async {
       final current = _readPendingChapterRemaps();
-      final remaining = [
-        for (final remap in current)
-          if (remap.migrationId != migrationId) remap,
-      ];
+      // 任务身份是 (bookId, migrationId) 复合键，不能只按 migrationId
+      // 查找删除：不同书共用同一任务 ID 时会跨书误清待办。
+      final targetIndex = current.indexWhere(
+        (remap) =>
+            remap.bookId == bookId && remap.migrationId == migrationId,
+      );
+      if (targetIndex < 0) return;
+      // 同一本书必须按产生顺序确认：先确认 B→C 会让剩下的 A→B
+      // 终点不等于已落盘表而永久不可见，进度可能已按错误顺序迁移。
+      final hasEarlierSameBook = current
+          .take(targetIndex)
+          .any((remap) => remap.bookId == bookId);
+      if (hasEarlierSameBook) {
+        throw StateError(
+          '同一本书必须按迁移任务产生顺序确认：$bookId/$migrationId',
+        );
+      }
+      final remaining = current.toList()..removeAt(targetIndex);
       if (remaining.length == current.length) return;
       if (remaining.isEmpty) {
         await _checkedSet(
@@ -931,10 +972,16 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       'local.pending_record_removal.v1';
 
   Set<String> _readIgnoredSourcesForRemoval() {
-    final ignored =
-        (_prefs.getStringList(_ignoredSourcesKey) ?? <String>[]).toSet();
-    _ignoredCache = Set<String>.of(ignored);
-    return ignored;
+    try {
+      final values = _prefs.getStringList(_ignoredSourcesKey);
+      final ignored = (values ?? <String>[]).toSet();
+      _ignoredCache = Set<String>.of(ignored);
+      return ignored;
+    } catch (_) {
+      final cached = _ignoredCache;
+      if (cached != null) return Set<String>.of(cached);
+      rethrow;
+    }
   }
 
   RecordRemovalJournal get _recordRemovalJournal => RecordRemovalJournal(
@@ -961,7 +1008,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             await _clearTagStashKeys([book]);
             // 在索引仍保留完整 LocalBook 时清理副本。
             // 崩溃后不用引入另一套 LocalBook 序列化协议。
-            await _deleteBookData(book);
+            // 副本删不干净时抛错、保留已提交待办，不能先移出
+            // 索引再清待办，否则残留副本没有恢复机会。
+            final deleted = await _deleteBookData(book);
+            if (!deleted) {
+              throw StateError('内部副本删除失败，保留仅移出待办');
+            }
             _books.remove(book);
           }
           // 必须无条件保存：
@@ -1710,16 +1762,24 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
   }
 
-  Future<void> _deleteBookData(LocalBook book) async {
+  /// 内部副本清理是否完整成功。其他调用方仍按尽力清理处理，
+  /// 只有仅移出提交路径（finishRemoval）把失败当成提交失败。
+  Future<bool> _deleteBookData(LocalBook book) async {
+    var ok = true;
     try {
       final textFile = File('${_booksDir.path}/book_${book.id}.txt');
       if (await textFile.exists()) await textFile.delete();
-    } catch (_) {}
+    } catch (_) {
+      ok = false;
+    }
     if (book.kind == LocalBookKind.pdf) {
       try {
         await LocalPlatform.clearPdfCache(book.fileUri);
-      } catch (_) {}
+      } catch (_) {
+        ok = false;
+      }
     }
+    return ok;
   }
 
   Future<LocalBook?> _importEntry({

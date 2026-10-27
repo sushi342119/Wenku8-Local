@@ -84,7 +84,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
             migrationId: remap.migrationId,
           );
           // state 已经完整写入目标位置后，才能确认本地任务。
-          await local.confirmChapterRemap(remap.migrationId);
+          await local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId);
         } catch (error, stackTrace) {
           failedMigrationBooks.add(remap.bookId);
           failedChapterMigrations.add(remap.migrationId);
@@ -2034,7 +2034,7 @@ Future<LocalScanFollowUp> _applyLocalScanAfterReauth(
         migrationId: remap.migrationId,
       );
     },
-    confirm: (remap) => local.confirmChapterRemap(remap.migrationId),
+    confirm: (remap) => local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId),
     recordFailure: (remap, error) =>
         local.markChapterRemapFailed(remap, error),
     bookIdOf: (remap) => remap.bookId,
@@ -2157,8 +2157,23 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
             return _DeleteFileResult.failed;
           }
           // 权限以实际查询为准，不凭“重授权成功”就断定写权限已拿到。
-          final permission =
-              await LocalPlatform.queryTreePermission(picked);
+          // 查询本身抛异常时也按保守失败处理，不让异常逸出删除流程。
+          LocalTreePermission permission;
+          try {
+            permission =
+                await LocalPlatform.queryTreePermission(picked);
+          } catch (error, stackTrace) {
+            debugPrint(
+              'failed to query tree permission: $error\n$stackTrace',
+            );
+            if (context.mounted) {
+              showNovelFeedback(
+                context,
+                '无法确认文件夹写权限；为避免误删，本次不会重试删除，请检查授权后重试',
+              );
+            }
+            return _DeleteFileResult.failed;
+          }
           if (!context.mounted) return _DeleteFileResult.failed;
           final migrationNotice = followUp.failedMigrations == 0
               ? ''

@@ -558,8 +558,8 @@ class LibraryState extends ChangeNotifier {
     return 'reading_anchor_$id';
   }
 
-  String _remapJournalKey(String migrationId) {
-    return 'reading_remap_journal_$migrationId';
+  String _remapJournalKey(int bookId, String migrationId) {
+    return 'reading_remap_journal_${bookId}_$migrationId';
   }
 
   Map<String, dynamic>? _readJsonObjectPreference(String key) {
@@ -673,9 +673,17 @@ class LibraryState extends ChangeNotifier {
       if (id <= 0 || oldChapters.isEmpty || newChapters.isEmpty) return;
       // 兼容 ID 已收紧为必传：两次不同重切若只按章节数量拼 ID，
       // 会共用同一个 done journal，生产调用方全部传持久化任务 ID。
+      // journal key 按书隔离，并校验 journal 所属书籍，防止多本书
+      // 共用同一任务 ID 时读到别本书的 journal。
       final effectiveMigrationId = migrationId;
-      final journalKey = _remapJournalKey(effectiveMigrationId);
+      if (effectiveMigrationId.trim().isEmpty) {
+        throw ArgumentError.value(migrationId, 'migrationId');
+      }
+      final journalKey = _remapJournalKey(id, effectiveMigrationId);
       final existingJournal = _readJsonObjectPreference(journalKey);
+      if (existingJournal != null && existingJournal['bookId'] != id) {
+        throw StateError('remap journal book id mismatch: $journalKey');
+      }
       // 任务已经完整应用过。调用方可能在 state 成功后、confirm 前退出，
       // 所以这里必须保留并识别 done journal；journal 查询必须放在
       // 无进度判断之前，否则 prepared 任务会被无进度判断吞掉。

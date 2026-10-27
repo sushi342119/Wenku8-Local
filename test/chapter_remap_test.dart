@@ -59,7 +59,7 @@ void main() {
     expect(anchor['globalOffset'], 100);
     expect(anchor['fraction'], 0.5);
     final journal = jsonDecode(
-      prefs.getString('reading_remap_journal_test-remap-merged-chapter')!,
+      prefs.getString('reading_remap_journal_102_test-remap-merged-chapter')!,
     ) as Map<String, dynamic>;
     expect(journal['status'], 'done');
   });
@@ -198,7 +198,7 @@ void main() {
     );
     final prefs = await SharedPreferences.getInstance();
     final journal = jsonDecode(
-      prefs.getString('reading_remap_journal_no-progress-done')!,
+      prefs.getString('reading_remap_journal_110_no-progress-done')!,
     ) as Map<String, dynamic>;
     expect(journal['status'], 'done');
     // 用户随后按新表产生进度，再重放同一任务：必须原样保留。
@@ -286,6 +286,49 @@ void main() {
     final position = jsonDecode(prefs.getString('reading_position_109')!)
         as Map<String, dynamic>;
     expect(position['fraction'], 0.0);
+  });
+
+  test('same migration id on two books does not share a journal', () async {
+    final prefs = await stateWithPosition(id: 111, chapter: 0, fraction: 0.5);
+    final stateA = await LibraryState.load();
+    const oldChapters = [
+      (offset: 0, length: 100),
+      (offset: 100, length: 100),
+    ];
+    const newChapters = [(offset: 0, length: 200)];
+    await stateA.remapChapterProgress(
+      111,
+      oldChapters: oldChapters,
+      newChapters: newChapters,
+      migrationId: 'shared-id',
+    );
+    expect(prefs.getInt('chapter_111'), 0);
+    // 第二本书用同一个任务 ID，必须照常迁移，不能读到第一本的 done。
+    // 不能用 setMockInitialValues 重置，否则会把第一本的 journal 清掉。
+    await prefs.setInt('chapter_112', 1);
+    await prefs.setString(
+      'reading_position_112',
+      jsonEncode(ReadingPosition(
+        chapter: 1,
+        chapterId: 1,
+        offset: 0,
+        fraction: 0.5,
+        fontSize: 19,
+        width: 0,
+        updatedAt: 123,
+      ).toJson()),
+    );
+    final stateB = await LibraryState.load();
+    await stateB.remapChapterProgress(
+      112,
+      oldChapters: oldChapters,
+      newChapters: newChapters,
+      migrationId: 'shared-id',
+    );
+    expect(prefs.getInt('chapter_112'), 0);
+    final positionB = jsonDecode(prefs.getString('reading_position_112')!)
+        as Map<String, dynamic>;
+    expect(positionB['fraction'], 0.75);
   });
 
   test('empty chapter does not participate in offset matching', () async {
