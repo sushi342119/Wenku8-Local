@@ -17,6 +17,73 @@ class LocalDeleteException implements Exception {
   String toString() => 'LocalDeleteException($code, $message)';
 }
 
+/// 某 SAF 树目录的持久化权限：只作为是否重试删除的依据，
+/// 不承诺 provider 支持删除。
+class LocalTreePermission {
+  const LocalTreePermission({
+    required this.persistedRead,
+    required this.persistedWrite,
+  });
+
+  final bool persistedRead;
+  final bool persistedWrite;
+
+  String get deletionHint => persistedWrite
+      ? ''
+      : '当前授权只有读取权限或未持久化写权限，App 暂不能凭此授权删除源文件；'
+          '重新授权时请确认授予写权限';
+}
+
+const _knownLocalDeleteCodes = <String>{
+  'permission',
+  'unsupported',
+  'delete_rejected',
+  'invalid_uri',
+  'io_error',
+};
+
+/// 用可注入的 MethodChannel 删除 SAF 文档，便于测试协议解析。
+/// 旧原生把 FileNotFound 映射成的 notFound:true 不再接受为成功。
+Future<void> deleteLocalDocumentWithChannel(
+  MethodChannel channel,
+  String documentUri,
+) async {
+  final Map<String, dynamic>? result;
+  try {
+    result = await channel.invokeMapMethod<String, dynamic>(
+      'deleteLocalDocument',
+      {'docUri': documentUri},
+    );
+  } on PlatformException catch (error) {
+    throw LocalDeleteException(
+      _knownLocalDeleteCodes.contains(error.code) ? error.code : 'unknown',
+      error.message,
+    );
+  }
+  final outcome = result?['outcome'];
+  // 兼容旧原生真实删除成功的返回。
+  if (result?['deleted'] == true &&
+      result?['notFound'] != true &&
+      result?['code'] == null &&
+      (outcome == 'deleted' || outcome == null)) {
+    return;
+  }
+  if (result?['notFound'] == true || outcome == 'unconfirmed') {
+    throw LocalDeleteException(
+      'io_error',
+      '文件提供方无法确认删除结果，请恢复连接后重试',
+    );
+  }
+  final rawCode = result?['code'];
+  final rawMessage = result?['message'];
+  throw LocalDeleteException(
+    rawCode is String && _knownLocalDeleteCodes.contains(rawCode)
+        ? rawCode
+        : 'unknown',
+    rawMessage is String ? rawMessage : '未收到可确认的删除结果',
+  );
+}
+
 /// Separate from the legacy API/JNI contract. Only explicit user file actions
 /// open the Android picker; the normal reader does not alter system settings.
 abstract final class LocalPlatform {
@@ -103,35 +170,36 @@ abstract final class LocalPlatform {
   static Future<void> clearPdfCache(String docUri) =>
       channel.invokeMethod<bool>('clearPdfCache', {'docUri': docUri});
 
-  /// SAF：删除文档。文件已不存在视为成功；失败抛 [LocalDeleteException]
+  /// SAF：删除文档。provider 确认删除成功才算成功；无法确认时
+  /// （如 FileNotFoundException）抛 io_error，保留本地记录，不再把
+  /// “已不存在”当成删除成功。失败抛 [LocalDeleteException]
   /// 并带原生侧的结构化 code，供上层区分提示与兜底（重授权/仅移出书库）。
-  static Future<void> deleteLocalDocument(String documentUri) async {
-    final Map<String, dynamic>? res;
+  static Future<void> deleteLocalDocument(String documentUri) =>
+      deleteLocalDocumentWithChannel(channel, documentUri);
+
+  /// 查询某 SAF 树 URI 的持久化读/写权限（原生侧查 persistedUriPermissions）。
+  /// 查询失败时保守返回“读已确认、写未确认”，避免凭猜测重试删除。
+  static Future<LocalTreePermission> queryTreePermission(
+    String treeUri,
+  ) async {
     try {
-      res = await channel.invokeMapMethod<String, dynamic>(
-        'deleteLocalDocument',
-        {'docUri': documentUri},
+      final res = await channel.invokeMapMethod<String, dynamic>(
+        'queryTreePermission',
+        {'treeUri': treeUri},
       );
-    } on PlatformException catch (e) {
-      // 旧原生版本或外层兜底：已知语义的 error code 原样保留，
-      // 其余归 unknown（SecurityException 在原生外层以 permission 返回）。
-      const knownCodes = {
-        'permission',
-        'unsupported',
-        'delete_rejected',
-        'invalid_uri',
-        'io_error',
-      };
-      throw LocalDeleteException(
-        knownCodes.contains(e.code) ? e.code : 'unknown',
-        e.message,
+      return LocalTreePermission(
+        persistedRead: res?['persistedRead'] == true,
+        persistedWrite: res?['persistedWrite'] == true,
+      );
+    } catch (_) {
+      // 查询失败时没有任何证据证明持久化读取权限存在，不能
+      // 默认读为 true：两个字段都按未确认处理，finishLocalReauthorization
+      // 会因 persistedRead 为 false 阻止重授权完成与删除重试。
+      return const LocalTreePermission(
+        persistedRead: false,
+        persistedWrite: false,
       );
     }
-    if (res?['deleted'] == true) return;
-    throw LocalDeleteException(
-      (res?['code'] as String?) ?? 'delete_rejected',
-      res?['message'] as String?,
-    );
   }
 
   /// SAF：重命名文档。返回新 URI 与 provider 确认的实际文件名。

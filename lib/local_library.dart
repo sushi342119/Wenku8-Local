@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'catalog.dart';
 import 'local_platform.dart';
 import 'book_tags.dart';
+import 'local_record_removal.dart';
+import 'local_source_identity.dart';
 
 /// 本地图书 ID 段：避开文库在线 aid（通常远小于此），落在 int32 范围内，
 /// 因此书架、历史、进度等既有 `id > 0` 逻辑无需改动。
@@ -212,6 +214,161 @@ class LocalBook {
   }
 }
 
+/// 章节重切后待迁移的阅读进度任务（可恢复、幂等）。
+/// 任务先于包含新章节表的 index.json 写入，调用方在
+/// [LibraryState.remapChapterProgress] 成功写回进度后，才用
+/// [LocalLibraryStore.confirmChapterRemap] 确认删除。
+/// 失败时由 [LocalLibraryStore.markChapterRemapFailed] 保留失败信息，
+/// 下次扫描仍会返回该任务，不依赖本轮扫描再次发现章节变化。
+const _pendingChapterRemapsKey =
+    'local_library_pending_chapter_remaps_v1';
+
+String _chapterRemapMigrationId({
+  required int bookId,
+  required List<({int offset, int length})> oldChapters,
+  required List<({int offset, int length})> newChapters,
+}) {
+  final source = jsonEncode({
+    'bookId': bookId,
+    'old': [
+      for (final chapter in oldChapters)
+        {'offset': chapter.offset, 'length': chapter.length},
+    ],
+    'new': [
+      for (final chapter in newChapters)
+        {'offset': chapter.offset, 'length': chapter.length},
+    ],
+  });
+  var hash = 0x811c9dc5;
+  for (final codeUnit in source.codeUnits) {
+    hash ^= codeUnit;
+    hash = (hash * 0x01000193) & 0x7fffffff;
+  }
+  return 'chremap-v1-$bookId-${hash.toRadixString(16)}';
+}
+
+List<({int offset, int length})> _decodeChapterRanges(Object? value) {
+  if (value is! List) {
+    throw const FormatException('chapter ranges must be a list');
+  }
+  final result = <({int offset, int length})>[];
+  for (final item in value) {
+    if (item is! Map) {
+      throw const FormatException('chapter range must be an object');
+    }
+    final map = Map<String, dynamic>.from(item);
+    final offset = map['offset'];
+    final length = map['length'];
+    // 损坏的持久化数据不能直接参与进度迁移：小数、负数一律拒绝，
+    // 不能用 toInt() 静默截断。
+    if (offset is! int || length is! int || offset < 0 || length < 0) {
+      throw const FormatException('chapter range offset/length is invalid');
+    }
+    result.add((offset: offset, length: length));
+  }
+  return result;
+}
+
+class LocalChapterRemap {
+  const LocalChapterRemap({
+    required this.migrationId,
+    required this.bookId,
+    required this.oldChapters,
+    required this.newChapters,
+    this.status = 'pending',
+    this.attempts = 0,
+    this.lastError,
+    this.lastFailedAt,
+  });
+
+  factory LocalChapterRemap.create({
+    required int bookId,
+    required List<({int offset, int length})> oldChapters,
+    required List<({int offset, int length})> newChapters,
+  }) {
+    return LocalChapterRemap(
+      migrationId: _chapterRemapMigrationId(
+        bookId: bookId,
+        oldChapters: oldChapters,
+        newChapters: newChapters,
+      ),
+      bookId: bookId,
+      oldChapters: List.unmodifiable(oldChapters),
+      newChapters: List.unmodifiable(newChapters),
+    );
+  }
+
+  factory LocalChapterRemap.fromJson(Object value) {
+    if (value is! Map) {
+      throw const FormatException('chapter remap must be an object');
+    }
+    final map = Map<String, dynamic>.from(value);
+    final migrationId = map['migrationId'];
+    final bookId = map['bookId'];
+    if (migrationId is! String || migrationId.isEmpty) {
+      throw const FormatException('chapter remap migrationId is invalid');
+    }
+    if (bookId is! num) {
+      throw const FormatException('chapter remap bookId is invalid');
+    }
+    final status = map['status'];
+    final attempts = map['attempts'];
+    return LocalChapterRemap(
+      migrationId: migrationId,
+      bookId: bookId.toInt(),
+      oldChapters:
+          List.unmodifiable(_decodeChapterRanges(map['oldChapters'])),
+      newChapters:
+          List.unmodifiable(_decodeChapterRanges(map['newChapters'])),
+      status: status is String && status.isNotEmpty ? status : 'pending',
+      attempts: attempts is num ? attempts.toInt() : 0,
+      lastError: map['lastError'] as String?,
+      lastFailedAt: (map['lastFailedAt'] as num?)?.toInt(),
+    );
+  }
+
+  final String migrationId;
+  final int bookId;
+  final List<({int offset, int length})> oldChapters;
+  final List<({int offset, int length})> newChapters;
+  final String status;
+  final int attempts;
+  final String? lastError;
+  final int? lastFailedAt;
+
+  Map<String, dynamic> toJson() {
+    return {
+      'migrationId': migrationId,
+      'bookId': bookId,
+      'oldChapters': [
+        for (final chapter in oldChapters)
+          {'offset': chapter.offset, 'length': chapter.length},
+      ],
+      'newChapters': [
+        for (final chapter in newChapters)
+          {'offset': chapter.offset, 'length': chapter.length},
+      ],
+      'status': status,
+      'attempts': attempts,
+      'lastError': lastError,
+      'lastFailedAt': lastFailedAt,
+    };
+  }
+
+  LocalChapterRemap withFailure(Object error) {
+    return LocalChapterRemap(
+      migrationId: migrationId,
+      bookId: bookId,
+      oldChapters: oldChapters,
+      newChapters: newChapters,
+      status: 'failed',
+      attempts: attempts + 1,
+      lastError: error.toString(),
+      lastFailedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+}
+
 class LocalScanResult {
   const LocalScanResult({
     required this.added,
@@ -236,14 +393,10 @@ class LocalScanResult {
   final List<int> switchedRemovedIds;
 
   /// 章节重切（切分规则升级）导致章节表变化的书：调用方须据此迁移阅读
-  /// 进度（旧章节序号在新章节表下指向不同内容）。oldChapters/newChapters
-  /// 为 (字符起点, 长度) 列表。
-  final List<
-      ({
-        int bookId,
-        List<({int offset, int length})> oldChapters,
-        List<({int offset, int length})> newChapters
-      })> chapterRemaps;
+  /// 进度（旧章节序号在新章节表下指向不同内容）。这里返回的是持久化
+  /// 的待迁移任务（见 [LocalChapterRemap]），不只是本轮新发现的变化：
+  /// 上轮已落盘新章节表、但进度尚未迁移确认的任务，下次扫描仍会返回。
+  final List<LocalChapterRemap> chapterRemaps;
 }
 
 /// 章节标题启发式：行首的"第X章/节/回"、Chapter N、序章/番外/后记等短行。
@@ -303,6 +456,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final support = await getApplicationSupportDirectory();
     final store = LocalLibraryStore._(prefs, support);
     await store._loadIndex();
+    // 索引已加载进 _books 后，先记录已持久化的章节表快照，
+    // 再向 UI 发布书库前恢复仅移出待办。
+    store._captureSavedRemapRanges();
+    await store._recordRemovalJournal.recover();
     return store;
   }
 
@@ -366,6 +523,161 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       } catch (_) {}
     }
     await tmp.rename(target.path);
+    // 索引成功提交后，才更新已持久化章节表快照。
+    _captureSavedRemapRanges();
+  }
+
+  /// ---- 章节迁移任务（可恢复）----
+  List<LocalChapterRemap> _readPendingChapterRemaps() {
+    final raw = _prefs.getString(_pendingChapterRemapsKey);
+    if (raw == null || raw.isEmpty) return const [];
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) {
+      throw const FormatException(
+        'local chapter remap queue must be a list',
+      );
+    }
+    return [
+      for (final item in decoded) LocalChapterRemap.fromJson(item),
+    ];
+  }
+
+  Future<void> _writePendingChapterRemaps(
+    Iterable<LocalChapterRemap> remaps,
+  ) async {
+    // 不排序：队列必须保留产生顺序，同一本书 A→B、B→C 的迁移
+    // 不能因 migrationId 的哈希字典序被打乱，否则调用方按序执行会串章。
+    await _checkedSet(
+      () => _prefs.setString(
+        _pendingChapterRemapsKey,
+        jsonEncode([
+          for (final remap in remaps) remap.toJson(),
+        ]),
+      ),
+      _pendingChapterRemapsKey,
+    );
+  }
+
+  /// 把任务写成 journal。必须在 _saveIndex() 之前调用（扫描函数内部，
+  /// 已在 _synchronized 保护内，不要再套一层锁）。
+  Future<void> _stageChapterRemaps(
+    Iterable<LocalChapterRemap> remaps,
+  ) async {
+    final incoming = remaps.toList();
+    if (incoming.isEmpty) return;
+    final merged = <String, LocalChapterRemap>{
+      for (final remap in _readPendingChapterRemaps())
+        remap.migrationId: remap,
+    };
+    for (final remap in incoming) {
+      // 已存在的失败记录要保留 lastError 和 attempts。
+      merged.putIfAbsent(remap.migrationId, () => remap);
+    }
+    await _writePendingChapterRemaps(merged.values);
+  }
+
+  /// 最后一次成功加载／保存的章节表（按书 id）。
+  /// 只用它筛选可执行任务：任务可以先于索引落盘写入 journal，
+  /// 但只有新章节表已经随索引提交后，任务才能交给调用方迁移，
+  /// 否则进度会迁到尚未落盘的表上，造成串章。
+  Map<int, List<({int offset, int length})>> _savedRemapRanges = {};
+
+  void _captureSavedRemapRanges() {
+    _savedRemapRanges = {
+      for (final book in _books)
+        book.id: [
+          for (final c in book.chapters)
+            (offset: c.offset, length: c.length),
+        ],
+    };
+  }
+
+  bool _sameRemapRanges(
+    List<({int offset, int length})> a,
+    List<({int offset, int length})> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  /// 当前待处理任务的公开只读视图，供调用点和页面观察。
+  /// 仅返回可以迁移到已持久化章节表的任务；尚未提交索引的任务
+  /// 继续保留在原始队列中，不交出去。同一本书的迁移链按产生顺序
+  /// 返回（从最终已提交的表反向找链，再正序还原）。
+  List<LocalChapterRemap> get pendingChapterRemaps {
+    // 按小胖补丁：返回终点章节表等于已落盘表的完整连续迁移链，
+    // 且按持久化队列原顺序返回，不按书分组重排、不按 migrationId 排序。
+    final queued = _readPendingChapterRemaps();
+    final byBook = <int, List<LocalChapterRemap>>{};
+    for (final remap in queued) {
+      (byBook[remap.bookId] ??= <LocalChapterRemap>[]).add(remap);
+    }
+    final selected = <(int, String)>{};
+    for (final entry in byBook.entries) {
+      final saved = _savedRemapRanges[entry.key];
+      if (saved == null) continue;
+      final chain = entry.value;
+      var end = -1;
+      for (var i = 0; i < chain.length; i++) {
+        if (_sameRemapRanges(chain[i].newChapters, saved)) end = i;
+      }
+      if (end < 0) continue;
+      var start = end;
+      while (start > 0 &&
+          _sameRemapRanges(
+            chain[start - 1].newChapters,
+            chain[start].oldChapters,
+          )) {
+        start--;
+      }
+      for (var i = start; i <= end; i++) {
+        selected.add((entry.key, chain[i].migrationId));
+      }
+    }
+    return List.unmodifiable([
+      for (final remap in queued)
+        if (selected.contains((remap.bookId, remap.migrationId))) remap,
+    ]);
+  }
+
+  /// state.remapChapterProgress 成功返回后才能调用。
+  Future<void> confirmChapterRemap(String migrationId) {
+    return _synchronized(() async {
+      final current = _readPendingChapterRemaps();
+      final remaining = [
+        for (final remap in current)
+          if (remap.migrationId != migrationId) remap,
+      ];
+      if (remaining.length == current.length) return;
+      if (remaining.isEmpty) {
+        await _checkedSet(
+          () => _prefs.remove(_pendingChapterRemapsKey),
+          _pendingChapterRemapsKey,
+        );
+      } else {
+        await _writePendingChapterRemaps(remaining);
+      }
+    });
+  }
+
+  /// state 迁移失败后调用。即使任务因某种原因还没有入队，
+  /// 这里也会把它重新放回可恢复队列。
+  Future<void> markChapterRemapFailed(
+    LocalChapterRemap remap,
+    Object error,
+  ) {
+    return _synchronized(() async {
+      final current = <String, LocalChapterRemap>{
+        for (final item in _readPendingChapterRemaps())
+          item.migrationId: item,
+      };
+      final previous = current[remap.migrationId] ?? remap;
+      current[remap.migrationId] = previous.withFailure(error);
+      await _writePendingChapterRemaps(current.values);
+    });
   }
 
   int _nextId() {
@@ -591,9 +903,6 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   /// 文件后来从磁盘消失（用户手动删除等）时，名单条目在扫描中自动清理。
   static const _ignoredSourcesKey = 'local_library_ignored_sources';
 
-  static String _ignoredKeyFor(String sourceId, String sourceKey) =>
-      jsonEncode([sourceId, sourceKey]);
-
   /// 忽略名单的内存缓存：prefs 读取异常时用上次成功读到的名单兜底，
   /// 避免把「读不到」误判成「名单为空」而重新导入已移出的书。
   Set<String>? _ignoredCache;
@@ -617,20 +926,66 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     _ignoredCache = Set.of(ignored);
   }
 
-  /// 书籍的有效忽略 key：sourceKey 为空用 fileUri 兜底；
-  /// sourceId 为空（旧数据）用当前文件夹推导，与 scan 的 sourceId 对齐。
+  /// ---- 仅移出待办（可恢复）----
+  static const _pendingRecordRemovalKey =
+      'local.pending_record_removal.v1';
+
+  Set<String> _readIgnoredSourcesForRemoval() {
+    final ignored =
+        (_prefs.getStringList(_ignoredSourcesKey) ?? <String>[]).toSet();
+    _ignoredCache = Set<String>.of(ignored);
+    return ignored;
+  }
+
+  RecordRemovalJournal get _recordRemovalJournal => RecordRemovalJournal(
+        readIntent: () => _prefs.getString(_pendingRecordRemovalKey),
+        writeIntent: (raw) async {
+          if (raw == null) {
+            await _checkedSet(
+              () => _prefs.remove(_pendingRecordRemovalKey),
+              _pendingRecordRemovalKey,
+            );
+          } else {
+            await _checkedSet(
+              () => _prefs.setString(_pendingRecordRemovalKey, raw),
+              _pendingRecordRemovalKey,
+            );
+          }
+        },
+        readIgnored: _readIgnoredSourcesForRemoval,
+        writeIgnored: _writeIgnoredSources,
+        finishRemoval: (id) async {
+          final book = bookFor(id);
+          if (book != null) {
+            // 待办已提交；这些步骤可以在恢复时重复执行。
+            await _clearTagStashKeys([book]);
+            // 在索引仍保留完整 LocalBook 时清理副本。
+            // 崩溃后不用引入另一套 LocalBook 序列化协议。
+            await _deleteBookData(book);
+            _books.remove(book);
+          }
+          // 必须无条件保存：
+          // 上一次可能已经从内存移除，但 _saveIndex 失败。
+          await _saveIndex();
+        },
+      );
+
+  /// 书籍的有效忽略 key：统一走 [LocalSourceIdentity]，与两处扫描
+  /// 的键生成规则一致。旧 appFolder 记录即使当前选中 SAF 文件夹，
+  /// 仍属于 appFolder:novels，不会被当前文件夹覆盖。
   String _effectiveIgnoredKeyFor(LocalBook book) {
-    final sourceKey = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
-    var sourceId = book.sourceId;
-    if (sourceId.isEmpty) {
-      final folder = folderUri;
-      if (folder != null && folder.isNotEmpty) sourceId = 'saf:$folder';
-    }
-    return _ignoredKeyFor(sourceId, sourceKey);
+    return LocalSourceIdentity.forBook(
+      sourceId: book.sourceId,
+      sourceKey: book.sourceKey,
+      fileUri: book.fileUri,
+      folderUri: folderUri,
+    ).ignoredKey;
   }
 
   /// 扫描已选文件夹：新增导入、内容变化的重新导入、源文件已删的移除。
   Future<LocalScanResult> scan() => _synchronized(() async {
+    // 扫描入口必须先恢复，尤其不能先扫描导入、最后才恢复。
+    await _recordRemovalJournal.recover();
     final treeUri = folderUri;
     if (treeUri == null) throw StateError('请先选择小说文件夹');
     final sourceId = 'saf:$treeUri';
@@ -644,12 +999,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     // 章节切分规则版本落后时，本轮对存量书重切一次（按来源分别标记）。
     final chaptersStale = _prefs.getInt('local_library_chapter_split_v_saf') !=
         _chapterSplitVersion;
-    final chapterRemaps = <
-        ({
-          int bookId,
-          List<({int offset, int length})> oldChapters,
-          List<({int offset, int length})> newChapters
-        })>[];
+    final chapterRemaps = <LocalChapterRemap>[];
     var chaptersRefreshFailed = false;
     // 忽略名单对账移除的书：先只移除记录，其内部副本等索引落盘后再删。
     final reconciledData = <LocalBook>[];
@@ -674,7 +1024,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final sourceKey = uri;
       seen.add(sourceKey);
       // 「仅移出书库」的书：源文件还在，但用户已明确移出，跳过导入。
-      if (ignored.contains(_ignoredKeyFor(sourceId, sourceKey))) {
+      // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
+      if (ignored.contains(
+        LocalSourceIdentity.saf(treeUri, sourceKey).ignoredKey,
+      )) {
         skipped++;
         // 对账：记录若仍在库中（移出过程中进程中断、忽略已写但索引未落盘），
         // 在此完成移除，避免「书还在但永远被跳过」的死状态。
@@ -850,6 +1203,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       await _deleteBookData(book);
       _books.remove(book);
     }
+    // 先写迁移 journal，再写包含新章节表的 index。
+    // 如果进程在这两步之间退出，下次扫描会根据 journal 重建/确认新表。
+    await _stageChapterRemaps(chapterRemaps);
     await _saveIndex();
     // 索引落盘成功后，才确认消费待清理记录。
     if (toClean.isNotEmpty) {
@@ -885,7 +1241,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       skipped: skipped,
       backfilled: backfilled,
       switchedRemovedIds: switchedRemovedIds,
-      chapterRemaps: chapterRemaps,
+      // 返回持久化队列而非仅本轮新发现的迁移：上轮已落盘新表、
+      // 但进度未确认的任务，下次扫描仍要返回。
+      chapterRemaps: pendingChapterRemaps,
     );
   });
 
@@ -900,6 +1258,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }
 
   Future<LocalScanResult> scanAppFolder() => _synchronized(() async {
+    // 与 scan() 同规则：先恢复仅移出待办，再扫描导入。
+    await _recordRemovalJournal.recover();
     final folderPath = await appFolderPath;
     const sourceId = 'appFolder:novels';
     final chaptersStale =
@@ -918,12 +1278,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     };
     final seen = <String>{};
     final ignored = _readIgnoredSources();
-    final chapterRemaps = <
-        ({
-          int bookId,
-          List<({int offset, int length})> oldChapters,
-          List<({int offset, int length})> newChapters
-        })>[];
+    final chapterRemaps = <LocalChapterRemap>[];
     var chaptersRefreshFailed = false;
     final reconciledData = <LocalBook>[];
     var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
@@ -936,7 +1291,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final sourceKey = file.path;
       seen.add(sourceKey);
       // 「仅移出书库」的书跳过导入；记录仍在时对账移除（与 scan() 同规则）。
-      if (ignored.contains(_ignoredKeyFor(sourceId, sourceKey))) {
+      // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
+      if (ignored.contains(
+        LocalSourceIdentity.appFolder(file.path).ignoredKey,
+      )) {
         skipped++;
         final existingIgnored = byKey[sourceKey] ?? byUriLegacy[uri];
         if (existingIgnored != null) {
@@ -1052,6 +1410,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         await _writeIgnoredSources(ignored);
       } catch (_) {}
     }
+    // 先写迁移 journal，再写包含新章节表的 index（与 scan() 同规则）。
+    await _stageChapterRemaps(chapterRemaps);
     await _saveIndex();
     for (final book in reconciledData) {
       await _deleteBookData(book);
@@ -1071,7 +1431,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       total: _books.length,
       skipped: skipped,
       backfilled: backfilled,
-      chapterRemaps: chapterRemaps,
+      // 返回持久化队列而非仅本轮新发现的迁移（与 scan() 同规则）。
+      chapterRemaps: pendingChapterRemaps,
     );
   });
 
@@ -1179,39 +1540,40 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   /// 仅移出书库：删除内部副本与书籍记录，源文件保留在手机存储中。
   /// 记录加入忽略名单，后续扫描不会把同一源文件重新导入（扫描侧另有对账，
   /// 见 scan 中 ignored 分支）。
-  /// 事务顺序：先清标签暂存并保存索引（源文件与内部副本都还在），成功后
-  /// 才写忽略名单；任一步失败都恢复内存记录、标签暂存快照并重新保存索引，
-  /// 回滚异常不覆盖原始失败，最终抛 [BookCleanupFailed]。这样任何失败都
-  /// 收敛到「书还在库里」而不是半移出状态。书架/标签/阅读进度的清理由
-  /// 调用方负责（与 [deleteBookFile] 相同约定）。
+  /// 事务顺序（见 [RecordRemovalJournal]）：先写准备待办，再写忽略名单，
+  /// 再写提交待办，最后清理标签/副本并保存索引。提交前失败回滚忽略名单，
+  /// 书仍保留在库中；提交后失败抛 [RecordRemovalPending]，下次启动或
+  /// 扫描时继续完成移除，不再声称“任何失败都留在库中”。书架/标签/
+  /// 阅读进度的清理由调用方负责（与 [deleteBookFile] 相同约定）。
   Future<void> removeBookRecordOnly(int id) => _synchronized(() async {
+    // 必须先恢复，不能用新操作覆盖旧待办。
+    await _recordRemovalJournal.recover();
     final book = bookFor(id);
     if (book == null) return;
-    final index = _books.indexOf(book);
-    final stashSnapshot = _readTagStash();
     final hasIgnoreKey = book.sourceKey.isNotEmpty || book.fileUri.isNotEmpty;
-    final ignoreKey = hasIgnoreKey ? _effectiveIgnoredKeyFor(book) : null;
-    _books.removeAt(index);
-    try {
-      await _clearTagStashKeys([book]);
-      await _saveIndex();
-      if (ignoreKey != null) {
-        final ignored = _readIgnoredSources();
-        if (ignored.add(ignoreKey)) await _writeIgnoredSources(ignored);
+    String? ignoreKey;
+    if (hasIgnoreKey) {
+      try {
+        ignoreKey = _effectiveIgnoredKeyFor(book);
+      } catch (_) {
+        // 来源无法确认时拒绝此次移出，不能先删记录再让下次扫描
+        // 重新导入：记录保留，用户先扫描原目录回填来源后再移出。
+        throw const BookCleanupFailed(
+          '无法确认源文件身份，请先扫描原目录后重试',
+        );
       }
-    } catch (e) {
-      _books.insert(index, book);
-      try {
-        await _writeTagStash(stashSnapshot);
-      } catch (_) {}
-      try {
-        await _saveIndex();
-      } catch (_) {}
-      throw const BookCleanupFailed('书籍记录保存失败');
     }
-    // 记录与忽略名单都落盘后才删内部副本；_deleteBookData 内部吞错，
-    // 不会让已落盘的移除回滚。
-    await _deleteBookData(book);
+    try {
+      await _recordRemovalJournal.remove(
+        bookId: id,
+        ignoreKey: ignoreKey,
+      );
+    } on RecordRemovalPending {
+      rethrow;
+    } catch (_) {
+      // 走到这里表示提交前失败，且回滚已经完成。
+      throw const BookCleanupFailed('移除未提交，书籍仍保留在库中');
+    }
   });
 
   /// 从书名派生安全的文件名（保留原扩展名及其大小写）。
@@ -1493,13 +1855,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   /// 本轮刚补算的字数等），并把旧/新章节表写入 [remaps] 供调用方迁移进度。
   Future<int> _refreshChaptersIfStale(
     LocalBook existing,
-    List<
-            ({
-              int bookId,
-              List<({int offset, int length})> oldChapters,
-              List<({int offset, int length})> newChapters
-            })>
-        remaps,
+    List<LocalChapterRemap> remaps,
   ) async {
     if (existing.kind != LocalBookKind.txt) return 0;
     try {
@@ -1521,13 +1877,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         }
         if (same) return 0;
       }
-      // copyWith 传 null 会清空 customTitle/customAuthor，这里必须透传原值。
-      _books[index] = current.copyWith(
-        chapters: chapters,
-        customTitle: current.customTitle,
-        customAuthor: current.customAuthor,
-      );
-      remaps.add((
+      // 先写迁移任务，成功后才能改变内存章节表：任务写入失败时
+      // 本轮返回失败、章节表保持原样，同进程重试时旧表仍可取得。
+      final remap = LocalChapterRemap.create(
         bookId: current.id,
         oldChapters: [
           for (final c in old) (offset: c.offset, length: c.length)
@@ -1535,7 +1887,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         newChapters: [
           for (final c in chapters) (offset: c.offset, length: c.length)
         ],
-      ));
+      );
+      await _stageChapterRemaps([remap]);
+      // copyWith 传 null 会清空 customTitle/customAuthor，这里必须透传原值。
+      _books[index] = current.copyWith(
+        chapters: chapters,
+        customTitle: current.customTitle,
+        customAuthor: current.customAuthor,
+      );
+      remaps.add(remap);
       return 1;
     } catch (_) {
       return 2;

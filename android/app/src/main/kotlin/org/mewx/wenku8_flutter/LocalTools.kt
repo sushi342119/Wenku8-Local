@@ -12,11 +12,10 @@ import android.provider.OpenableColumns
 import android.view.WindowManager
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import local.saf.localDeleteOutcome
 import java.io.ByteArrayOutputStream
 import java.io.File
-import java.io.FileNotFoundException
 import java.io.FileOutputStream
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
@@ -102,7 +101,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 本地书库：SAF 文件夹选择 / 扫描 / 文本读取 / PDF 渲染。与上方文档操作互相独立。 */
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
-                "pickLocalFolder", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
+                "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
                 "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
             )
         ) return false
@@ -161,11 +160,12 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 return true
             }
             "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
-            "deleteLocalDocument", "renameLocalDocument" -> {
+            "deleteLocalDocument", "renameLocalDocument", "queryTreePermission" -> {
                 io.execute {
                     try {
                         val response: Any = when (call.method) {
                             "scanLocalFolder" -> scanLocalFolder(Uri.parse(call.argument<String>("treeUri") ?: ""))
+                            "queryTreePermission" -> queryTreePermission(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "readLocalText" -> readLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "deleteLocalDocument" -> deleteLocalDocument(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "renameLocalDocument" -> renameLocalDocument(
@@ -506,28 +506,35 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         return true
     }
 
-    /** 删除 SAF 文档。文件已不存在视为删除成功。
+    /** 删除 SAF 文档。provider 确认删除成功才算成功；FileNotFoundException
+     * 不能证明文件不存在，保守返回 io_error / unconfirmed，保留本地记录，
+     * 不再把“已不存在”当成删除成功。
      * 失败时返回结构化 code（permission / unsupported / delete_rejected /
      * invalid_uri / io_error / unknown），供 Dart 侧区分提示与兜底，
      * 不再把所有失败吞成同一句「删除失败」。 */
-    private fun deleteLocalDocument(doc: Uri): Map<String, Any?> {
-        return try {
-            val deleted = DocumentsContract.deleteDocument(activity.contentResolver, doc)
-            if (deleted) mapOf("deleted" to true)
-            else mapOf("deleted" to false, "code" to "delete_rejected")
-        } catch (e: FileNotFoundException) {
-            mapOf("deleted" to true, "notFound" to true)
-        } catch (e: SecurityException) {
-            mapOf("deleted" to false, "code" to "permission", "message" to e.message)
-        } catch (e: UnsupportedOperationException) {
-            mapOf("deleted" to false, "code" to "unsupported", "message" to e.message)
-        } catch (e: IllegalArgumentException) {
-            mapOf("deleted" to false, "code" to "invalid_uri", "message" to e.message)
-        } catch (e: IOException) {
-            mapOf("deleted" to false, "code" to "io_error", "message" to e.message)
-        } catch (e: Exception) {
-            mapOf("deleted" to false, "code" to "unknown", "message" to e.message)
+    private fun deleteLocalDocument(doc: Uri): Map<String, Any?> =
+        localDeleteOutcome {
+            DocumentsContract.deleteDocument(
+                activity.contentResolver,
+                doc
+            )
         }
+
+    /** 查询某 SAF 树 URI 的持久化读/写权限（persistedUriPermissions）。 */
+    private fun queryTreePermission(treeUri: Uri): Map<String, Any?> {
+        var persistedRead = false
+        var persistedWrite = false
+        for (permission in activity.contentResolver.persistedUriPermissions) {
+            if (permission.uri == treeUri) {
+                persistedRead = permission.isReadPermission
+                persistedWrite = permission.isWritePermission
+                break
+            }
+        }
+        return mapOf(
+            "persistedRead" to persistedRead,
+            "persistedWrite" to persistedWrite
+        )
     }
 
     /** 重命名 SAF 文档。成功返回新 URI 与 provider 确认的实际文件名。 */

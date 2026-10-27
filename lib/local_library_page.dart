@@ -84,14 +84,41 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       final result = await widget.local.scan();
       // 章节重切后迁移阅读进度，避免旧章节序号在新章节表下串章。
       // 逐条容错：单条失败不中断其余迁移与后续清理。
+      final failedChapterMigrations = <String>[];
+      // 同一本书的前序迁移失败后，暂停该书的后继任务（与首页同规则）。
+      final failedMigrationBooks = <int>{};
       for (final remap in result.chapterRemaps) {
+        if (failedMigrationBooks.contains(remap.bookId)) continue;
         try {
           await widget.state.remapChapterProgress(
             remap.bookId,
             oldChapters: remap.oldChapters,
             newChapters: remap.newChapters,
+            migrationId: remap.migrationId,
           );
-        } catch (_) {}
+          await widget.local.confirmChapterRemap(remap.migrationId);
+        } catch (error, stackTrace) {
+          failedMigrationBooks.add(remap.bookId);
+          failedChapterMigrations.add(remap.migrationId);
+          try {
+            await widget.local.markChapterRemapFailed(remap, error);
+          } catch (recordError, recordStackTrace) {
+            debugPrint(
+              'failed to persist chapter migration error '
+              '${remap.migrationId}: $recordError\n$recordStackTrace',
+            );
+          }
+          debugPrint(
+            'chapter migration failed from local library page '
+            '${remap.migrationId}: $error\n$stackTrace',
+          );
+        }
+      }
+      if (failedChapterMigrations.isNotEmpty && mounted) {
+        showNovelFeedback(
+          context,
+          '${failedChapterMigrations.length} 本书的阅读进度迁移失败，已保存待重试任务',
+        );
       }
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
       // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。

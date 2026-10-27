@@ -546,9 +546,95 @@ class LibraryState extends ChangeNotifier {
       _known.remove(id);
       await _prefs.remove('reading_position_$id');
       await _prefs.remove('chapter_$id');
+      // 独立锚点也一并清除，但不要删 remap journal：journal 是为了
+      // 让同一个任务在 confirm 前继续幂等重放。
+      await _prefs.remove(_chapterProgressAnchorKey(id));
       _historyChanged();
       notifyListeners();
     });
+  }
+
+  String _chapterProgressAnchorKey(int id) {
+    return 'reading_anchor_$id';
+  }
+
+  String _remapJournalKey(String migrationId) {
+    return 'reading_remap_journal_$migrationId';
+  }
+
+  Map<String, dynamic>? _readJsonObjectPreference(String key) {
+    final raw = _prefs.getString(key);
+    if (raw == null || raw.isEmpty) return null;
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) {
+      throw FormatException('$key must contain a JSON object');
+    }
+    return Map<String, dynamic>.from(decoded);
+  }
+
+  int _pickNewChapterForGlobalOffset(
+    List<({int offset, int length})> chapters, {
+    required int globalOffset,
+    required bool preferPreviousAtBoundary,
+    required int fallbackIndex,
+  }) {
+    final nonEmpty = <int>[
+      for (var i = 0; i < chapters.length; i++)
+        if (chapters[i].length > 0) i,
+    ];
+    if (nonEmpty.isEmpty) {
+      if (chapters.isEmpty) return 0;
+      if (fallbackIndex < 0) return 0;
+      if (fallbackIndex >= chapters.length) return chapters.length - 1;
+      return fallbackIndex;
+    }
+    final firstIndex = nonEmpty.first;
+    final lastIndex = nonEmpty.last;
+    final lastChapter = chapters[lastIndex];
+    final fullBookEnd = lastChapter.offset + lastChapter.length;
+    // 全书末尾是一个特殊边界，固定落在最后一个非空章节末尾。
+    if (globalOffset >= fullBookEnd) {
+      return lastIndex;
+    }
+    // 章末锚点优先使用左侧区间。
+    if (preferPreviousAtBoundary) {
+      for (var n = nonEmpty.length - 1; n >= 0; n--) {
+        final index = nonEmpty[n];
+        final chapter = chapters[index];
+        final end = chapter.offset + chapter.length;
+        if (globalOffset > chapter.offset && globalOffset <= end) {
+          return index;
+        }
+      }
+    }
+    // 普通锚点使用右侧区间，符合半开区间 [start, end)。
+    for (final index in nonEmpty) {
+      final chapter = chapters[index];
+      final end = chapter.offset + chapter.length;
+      if (globalOffset >= chapter.offset && globalOffset < end) {
+        return index;
+      }
+    }
+    // 章节之间理论上不应有空洞；如果存在，选择下一个非空章节。
+    for (final index in nonEmpty) {
+      if (globalOffset < chapters[index].offset) {
+        return index;
+      }
+    }
+    return firstIndex;
+  }
+
+  double _fractionForGlobalOffset(
+    ({int offset, int length}) chapter,
+    int globalOffset,
+  ) {
+    if (chapter.length <= 0) return 0.0;
+    if (globalOffset <= chapter.offset) return 0.0;
+    final end = chapter.offset + chapter.length;
+    if (globalOffset >= end) return 1.0;
+    return ((globalOffset - chapter.offset) / chapter.length)
+        .clamp(0.0, 1.0)
+        .toDouble();
   }
 
   /// 本地书章节重切（切分规则升级）后迁移阅读进度，避免按旧章节序号串章。
@@ -557,10 +643,21 @@ class LibraryState extends ChangeNotifier {
   /// （比例来自滚动而非字符），但保证仍在原来读到的那段文字附近。
   /// 段落锚点与像素偏移一并作废（width 置 0 强制阅读器按比例恢复），
   /// updatedAt 保持不变，不扰动「最近阅读」排序。无进度记录时不处理。
+  /// 本地书章节重切后迁移阅读进度（可恢复、幂等）。
+  ///
+  /// 章节使用半开区间 [offset, offset + length)。
+  /// fraction == 1.0 是旧章节的章末锚点，落在字符边界上时优先保留在
+  /// 左侧旧章节的末尾，避免跳到下一章的 0.0。
+  /// fraction < 1.0 使用 floor 生成字符位置，避免接近 1.0 时因为 round
+  /// 直接跨到下一章。
+  /// 迁移不更新 updatedAt，也不调用 _historyChanged()。
+  /// 同一个 migrationId 第二次调用时，若 journal 已是 done 则直接返回，
+  /// 不会把已迁移的位置再次按旧表换算。
   Future<void> remapChapterProgress(
     int id, {
     required List<({int offset, int length})> oldChapters,
     required List<({int offset, int length})> newChapters,
+    required String migrationId,
   }) {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
@@ -568,59 +665,213 @@ class LibraryState extends ChangeNotifier {
           id,
           oldChapters: oldChapters,
           newChapters: newChapters,
+          migrationId: migrationId,
         ),
       );
     }
     return _queuePositionWrite(() async {
       if (id <= 0 || oldChapters.isEmpty || newChapters.isEmpty) return;
+      // 兼容 ID 已收紧为必传：两次不同重切若只按章节数量拼 ID，
+      // 会共用同一个 done journal，生产调用方全部传持久化任务 ID。
+      final effectiveMigrationId = migrationId;
+      final journalKey = _remapJournalKey(effectiveMigrationId);
+      final existingJournal = _readJsonObjectPreference(journalKey);
+      // 任务已经完整应用过。调用方可能在 state 成功后、confirm 前退出，
+      // 所以这里必须保留并识别 done journal；journal 查询必须放在
+      // 无进度判断之前，否则 prepared 任务会被无进度判断吞掉。
+      if (existingJournal?['status'] == 'done') {
+        return;
+      }
       final pos = _positions[id];
       final savedChapter = _chapters[id];
-      if (pos == null && savedChapter == null) return;
-      final oldIndex = (pos?.chapter ?? savedChapter!)
-          .clamp(0, oldChapters.length - 1);
-      final oldChapter = oldChapters[oldIndex];
-      final global = oldChapter.offset +
-          ((pos?.fraction ?? 0) * oldChapter.length).round();
-      var newIndex = newChapters.length - 1;
-      for (var i = 0; i < newChapters.length; i++) {
-        if (global < newChapters[i].offset + newChapters[i].length) {
-          newIndex = i;
-          break;
-        }
+      // 正式阅读位置优先；只有 pos 为空且锚点章节等于当前章节键时，
+      // 独立锚点才可参与换算，否则旧锚点会覆盖已更新的章节或污染
+      // 正式位置（例如旧章末标记把新位置拉回上一章章末）。
+      final storedAnchor = pos == null
+          ? _readJsonObjectPreference(_chapterProgressAnchorKey(id))
+          : null;
+      final anchor = savedChapter != null &&
+              storedAnchor?['chapter'] == savedChapter
+          ? storedAnchor
+          : null;
+      if (existingJournal == null &&
+          pos == null &&
+          savedChapter == null &&
+          anchor == null) {
+        // 无进度也要持久化完成标记：否则调用方确认失败或中断后，
+        // 用户按新表产生进度，再重放该任务会把新进度当旧表换算。
+        await writeLibraryPreference(
+          _prefs,
+          journalKey,
+          jsonEncode({
+            'version': 1,
+            'status': 'done',
+            'migrationId': effectiveMigrationId,
+            'bookId': id,
+            'hasPosition': false,
+          }),
+        );
+        return;
       }
-      final newChapter = newChapters[newIndex];
-      final newFraction = newChapter.length > 0
-          ? ((global - newChapter.offset) / newChapter.length)
-              .clamp(0.0, 1.0)
-              .toDouble()
-          : 0.0;
-      _chapters[id] = newIndex;
+      late int globalOffset;
+      late int newIndex;
+      late double newFraction;
+      late bool preferPreviousAtBoundary;
+      late bool hasPosition;
+      if (existingJournal != null) {
+        final storedIndex = existingJournal['newChapter'];
+        final storedFraction = existingJournal['newFraction'];
+        final storedGlobal = existingJournal['globalOffset'];
+        if (storedIndex is! num ||
+            storedFraction is! num ||
+            storedGlobal is! num) {
+          throw FormatException(
+            'invalid remap journal: $journalKey',
+          );
+        }
+        newIndex = storedIndex.toInt();
+        newFraction = storedFraction.toDouble().clamp(0.0, 1.0).toDouble();
+        globalOffset = storedGlobal.toInt();
+        preferPreviousAtBoundary =
+            existingJournal['atChapterEnd'] == true;
+        hasPosition = existingJournal['hasPosition'] == true;
+        if (newIndex < 0 || newIndex >= newChapters.length) {
+          throw StateError(
+            'remap journal chapter index out of range: $journalKey',
+          );
+        }
+      } else {
+        // 锚点已在上文筛选过：这里只取正式位置或当前章节键，
+        // 不再从锚点取章节，避免已换章节时用旧全书偏移。
+        final rawOldIndex = pos?.chapter ?? savedChapter;
+        if (rawOldIndex == null) return;
+        final oldIndex = rawOldIndex < 0
+            ? 0
+            : rawOldIndex >= oldChapters.length
+                ? oldChapters.length - 1
+                : rawOldIndex;
+        final oldChapter = oldChapters[oldIndex];
+        final storedGlobal =
+            pos == null ? (anchor?['globalOffset']) : null;
+        final fraction = (pos?.fraction ??
+                (anchor?['fraction'] as num?)?.toDouble() ??
+                0.0)
+            .clamp(0.0, 1.0)
+            .toDouble();
+        if (storedGlobal is num) {
+          globalOffset = storedGlobal.toInt();
+        } else {
+          // 非章末位置用 floor，fraction == 1.0 才使用章节长度本身。
+          final localOffset = oldChapter.length <= 0
+              ? 0
+              : fraction >= 1.0
+                  ? oldChapter.length
+                  : (fraction * oldChapter.length).floor();
+          globalOffset = oldChapter.offset + localOffset;
+        }
+        preferPreviousAtBoundary = oldChapter.length > 0 &&
+            (anchor?['atChapterEnd'] == true || fraction >= 1.0);
+        newIndex = _pickNewChapterForGlobalOffset(
+          newChapters,
+          globalOffset: globalOffset,
+          preferPreviousAtBoundary: preferPreviousAtBoundary,
+          fallbackIndex: oldIndex,
+        );
+        final newChapter = newChapters[newIndex];
+        newFraction = _fractionForGlobalOffset(
+          newChapter,
+          globalOffset,
+        );
+        hasPosition = pos != null;
+        // 先写 prepared journal。后续任一步失败，下一次重放都使用
+        // 同一个目标位置，不会根据已经部分写入的新状态重新计算。
+        await writeLibraryPreference(
+          _prefs,
+          journalKey,
+          jsonEncode({
+            'version': 1,
+            'status': 'prepared',
+            'migrationId': effectiveMigrationId,
+            'bookId': id,
+            'newChapter': newIndex,
+            'newFraction': newFraction,
+            'globalOffset': globalOffset,
+            'atChapterEnd': preferPreviousAtBoundary,
+            'hasPosition': hasPosition,
+          }),
+        );
+      }
       ReadingPosition? newPos;
-      if (pos != null) {
+      if (hasPosition) {
+        // 正常情况下 prepared journal 产生于 pos 非空时，重启后旧位置
+        // 或新位置都应该能恢复出来。如果位置记录已经被外部清掉，
+        // 让任务失败并保留 journal，不能悄悄伪造字体和布局参数。
+        final template = pos;
+        if (template == null) {
+          throw StateError(
+            'reading position disappeared during chapter remap: $id',
+          );
+        }
         newPos = ReadingPosition(
           chapter: newIndex,
           chapterId: newIndex,
           offset: 0,
           fraction: newFraction,
-          fontSize: pos.fontSize,
+          fontSize: template.fontSize,
           width: 0,
-          updatedAt: pos.updatedAt,
-          lineHeight: pos.lineHeight,
-          textScale: pos.textScale,
-          typeface: pos.typeface,
+          updatedAt: template.updatedAt,
+          lineHeight: template.lineHeight,
+          textScale: template.textScale,
+          typeface: template.typeface,
         );
         _positions[id] = newPos;
-      }
-      // 先写阅读位置、后写章节键：中途崩溃时旧章节键与旧位置仍成对，
-      // 不会出现「新章节键 + 旧位置」的错位组合。
-      if (newPos != null) {
         await writeLibraryPreference(
           _prefs,
           'reading_position_$id',
           jsonEncode(newPos.toJson()),
         );
+        // 有正式 ReadingPosition 时，旧的独立锚点不再作为来源。
+        await _prefs.remove(_chapterProgressAnchorKey(id));
+      } else {
+        // 只有 chapter_$id 的旧数据不能丢掉计算出的新比例。
+        // 这里同时保存全书字符位置，供下一次重切继续使用。
+        await writeLibraryPreference(
+          _prefs,
+          _chapterProgressAnchorKey(id),
+          jsonEncode({
+            'version': 1,
+            'chapter': newIndex,
+            'fraction': newFraction,
+            'globalOffset': globalOffset,
+            'atChapterEnd': preferPreviousAtBoundary,
+          }),
+        );
       }
-      await writeLibraryPreference(_prefs, 'chapter_$id', newIndex);
+      _chapters[id] = newIndex;
+      // 位置或锚点写成功后再写章节键。
+      await writeLibraryPreference(
+        _prefs,
+        'chapter_$id',
+        newIndex,
+      );
+      // journal 完成标记最后写。即使进程在这之前退出，下一次也会
+      // 重复写入同一个目标，属于幂等重放。
+      await writeLibraryPreference(
+        _prefs,
+        journalKey,
+        jsonEncode({
+          'version': 1,
+          'status': 'done',
+          'migrationId': effectiveMigrationId,
+          'bookId': id,
+          'newChapter': newIndex,
+          'newFraction': newFraction,
+          'globalOffset': globalOffset,
+          'atChapterEnd': preferPreviousAtBoundary,
+          'hasPosition': hasPosition,
+        }),
+      );
+      // 不调用 _historyChanged()，不改变最近阅读排序。
       notifyListeners();
     });
   }
