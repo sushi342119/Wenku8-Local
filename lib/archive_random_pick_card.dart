@@ -4,6 +4,38 @@ import 'package:flutter/material.dart';
 
 enum _PickPhase { idle, spinning, result }
 
+/// 按权重和上的均匀随机落点抽样；无有效权重时退回均匀抽样。
+@visibleForTesting
+int sampleArchiveRandomPickIndex(List<double> weights, math.Random random) {
+  if (weights.isEmpty) {
+    throw ArgumentError.value(weights, 'weights', '候选不能为空');
+  }
+  final validWeights = [
+    for (final weight in weights)
+      weight.isFinite && weight > 0 ? weight : 0.0,
+  ];
+  final largest = validWeights.reduce(math.max);
+  if (largest == 0) return random.nextInt(weights.length);
+
+  // 同比例缩放，避免权重和溢出或极小权重乘随机落点时损失精度。
+  for (var i = 0; i < validWeights.length; i++) {
+    validWeights[i] /= largest;
+  }
+  final total = validWeights.fold(0.0, (sum, weight) => sum + weight);
+
+  var point = random.nextDouble() * total;
+  var lastPositive = 0;
+  for (var i = 0; i < validWeights.length; i++) {
+    final weight = validWeights[i];
+    if (weight == 0) continue;
+    lastPositive = i;
+    if (point < weight) return i;
+    point -= weight;
+  }
+  // 浮点舍入到总和边界时，仍只能落在正权重候选上。
+  return lastPositive;
+}
+
 class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
   const ArchiveRandomPickCard({
     super.key,
@@ -12,6 +44,8 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
     required this.authorOf,
     required this.onOpenDetail,
     this.identityOf,
+    this.weightOf,
+    this.onPicked,
     this.filterHeader,
     this.emptyState,
   });
@@ -23,6 +57,12 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 
   /// 有稳定的书籍 ID 时建议传入；未传入时按对象的 == 比较。
   final Object Function(T book)? identityOf;
+
+  /// 默认均匀抽样；0、负数和非有限值不参与，全部无效时退回均匀抽样。
+  final double Function(T book)? weightOf;
+
+  /// 每次主动抽取确定结果时调用一次；单本候选的自动展示不计为抽取。
+  final ValueChanged<T>? onPicked;
 
   final Widget? filterHeader;
   final Widget? emptyState;
@@ -200,9 +240,15 @@ class _ArchiveRandomPickCardState<T extends Object>
     _controller.stop();
     _controller.reset();
 
-    // 每轮只进行一次独立均匀抽样，允许再次抽中上一本。
+    // 每轮只抽样一次，允许再次抽中上一本。
     // 洗牌阶段只显示卡背，不提前泄露书名和作者。
-    final index = _random.nextInt(widget.books.length);
+    final weightOf = widget.weightOf;
+    final index = weightOf == null
+        ? _random.nextInt(widget.books.length)
+        : sampleArchiveRandomPickIndex(
+            widget.books.map(weightOf).toList(growable: false),
+            _random,
+          );
     final skipAnimation = _reduceMotion || widget.books.length == 1;
 
     setState(() {
@@ -214,6 +260,7 @@ class _ArchiveRandomPickCardState<T extends Object>
     if (!skipAnimation) {
       _controller.forward();
     }
+    widget.onPicked?.call(widget.books[index]);
   }
 
   void _openDetail() {
@@ -578,7 +625,6 @@ class _ArchiveRandomPickCardState<T extends Object>
 
   Widget _buildStage() {
     final book = _displayedBook;
-    final result = _phase == _PickPhase.result;
 
     // 放大字体时增加卡片高度，避免固定高度压缩正文。
     final scaledTitleSize = MediaQuery.textScalerOf(context).scale(23);
