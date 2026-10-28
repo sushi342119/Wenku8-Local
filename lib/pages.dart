@@ -67,47 +67,32 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     if (!mounted) return;
     try {
       final result = await local.scan();
-      // 章节重切后迁移阅读进度，避免旧章节序号在新章节表下串章。
-      // state 不依赖页面生命周期且切分版本标记已在 scan 内写入，
-      // 必须赶在 mounted 检查前逐条执行；单条失败不中断其余。
-      final failedChapterMigrations = <String>[];
-      // 同一本书的前序迁移失败后，暂停该书的后继任务：链式迁移
-      // 必须按序执行，不能跳过失败项直接跑下一项。
-      final failedMigrationBooks = <int>{};
-      for (final remap in result.chapterRemaps) {
-        if (failedMigrationBooks.contains(remap.bookId)) continue;
-        try {
-          await widget.state.remapChapterProgress(
-            remap.bookId,
-            oldChapters: remap.oldChapters,
-            newChapters: remap.newChapters,
-            migrationId: remap.migrationId,
-          );
-          // state 已经完整写入目标位置后，才能确认本地任务。
-          await local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId);
-        } catch (error, stackTrace) {
-          failedMigrationBooks.add(remap.bookId);
-          failedChapterMigrations.add(remap.migrationId);
-          try {
-            await local.markChapterRemapFailed(remap, error);
-          } catch (recordError, recordStackTrace) {
-            // 任务在 scan() 中已经先入队；这里记录的是更新失败详情。
-            // 不能让一个任务阻塞其他任务。
-            debugPrint(
-              'failed to persist chapter migration error '
-              '${remap.migrationId}: $recordError\n$recordStackTrace',
-            );
-          }
-          debugPrint(
-            'chapter migration failed '
-            '${remap.migrationId}: $error\n$stackTrace',
-          );
-        }
-      }
-      if (failedChapterMigrations.isNotEmpty && mounted) {
+      // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。
+      final followUp = await applyLocalScanFollowUp<LocalChapterRemap>(
+        remaps: result.chapterRemaps,
+        cleanupAssociations: () async {},
+        migrate: (remap) => widget.state.remapChapterProgress(
+          remap.bookId,
+          oldChapters: remap.oldChapters,
+          newChapters: remap.newChapters,
+          migrationId: remap.migrationId,
+        ),
+        confirm: (_) async {},
+        recordFailure: (_, _) async {},
+        bookIdOf: (remap) => remap.bookId,
+        commitMigrationOutcomes: (confirmed, failures) =>
+            local.commitChapterRemapResults(
+              confirmed: [
+                for (final remap in confirmed)
+                  (bookId: remap.bookId, migrationId: remap.migrationId),
+              ],
+              failures: failures,
+            ),
+      );
+      if (followUp.failedMigrations > 0 && mounted) {
         showNovelFeedback(
           context,
-          '${failedChapterMigrations.length} 本书的阅读进度迁移失败，已保存待重试任务',
+          '${followUp.failedMigrations} 本书的阅读进度迁移失败，已保存待重试任务',
         );
       }
       if (!mounted) return;
@@ -137,11 +122,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       }
       final changed = result.added + result.refreshed + result.removed;
       if (changed == 0 && result.switchedRemovedIds.isEmpty) return;
-      for (final book in local.books) {
-        if (!state.shelf.contains(book.id)) {
-          await state.toggleShelf(book.id, novel: local.toNovel(book));
-        }
-      }
+      final shelfAdditions = [
+        for (final book in local.books)
+          if (!state.contains(book.id)) local.toNovel(book),
+      ];
+      await state.addShelfBooks(shelfAdditions);
       if (!mounted) return;
       final parts = <String>[];
       if (result.added > 0) parts.add('新增 ${result.added} 本');
@@ -207,6 +192,9 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       homeRepository,
       // 本地书库首页加载全部书籍，用于 3D 轮播全量循环和随机抽选。
       loadAll: true,
+      loadAllItems: homeRepository is LocalLibraryStore
+          ? homeRepository.list
+          : null,
     );
     _searchFeed = NovelFeedController(homeRepository, search: true);
     _searchText.addListener(_searchEdited);
@@ -2034,9 +2022,17 @@ Future<LocalScanFollowUp> _applyLocalScanAfterReauth(
         migrationId: remap.migrationId,
       );
     },
-    confirm: (remap) => local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId),
-    recordFailure: (remap, error) =>
-        local.markChapterRemapFailed(remap, error),
+    confirm: (remap) =>
+        local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId),
+    recordFailure: (remap, error) => local.markChapterRemapFailed(remap, error),
+    commitMigrationOutcomes: (confirmed, failures) =>
+        local.commitChapterRemapResults(
+          confirmed: [
+            for (final remap in confirmed)
+              (bookId: remap.bookId, migrationId: remap.migrationId),
+          ],
+          failures: failures,
+        ),
     bookIdOf: (remap) => remap.bookId,
   );
 }

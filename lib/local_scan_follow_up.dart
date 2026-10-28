@@ -18,6 +18,12 @@ class LocalScanFollowUp {
   bool get handled => cleanupError == null && unrecordedFailures == 0;
 }
 
+typedef LocalMigrationCommit<M> =
+    Future<void> Function(
+      List<M> confirmed,
+      List<({M remap, Object error})> failures,
+    );
+
 class LocalScanFollowUpException implements Exception {
   const LocalScanFollowUpException(this.result);
 
@@ -38,6 +44,8 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
   required Future<void> Function(M) migrate,
   required Future<void> Function(M) confirm,
   required Future<void> Function(M, Object) recordFailure,
+  // 提供时在所有迁移完成后一次提交确认和失败状态。
+  LocalMigrationCommit<M>? commitMigrationOutcomes,
   // 按小胖补丁改为必传：不传时同书暂停静默失效，编译就能查出遗漏。
   required int Function(M) bookIdOf,
 }) async {
@@ -46,6 +54,8 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
   var unrecordedFailures = 0;
   // 同一本书的前序迁移失败后，暂停该书的后继任务。
   final failedBooks = <int>{};
+  final confirmed = <M>[];
+  final failures = <({M remap, Object error})>[];
   try {
     await cleanupAssociations();
   } catch (error, stackTrace) {
@@ -57,20 +67,39 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
     if (failedBooks.contains(bookId)) continue;
     try {
       await migrate(remap);
-      await confirm(remap);
+      if (commitMigrationOutcomes == null) {
+        await confirm(remap);
+      } else {
+        confirmed.add(remap);
+      }
     } catch (error, stackTrace) {
       failedBooks.add(bookId);
       failedMigrations++;
       debugPrint('chapter migration failed: $error\n$stackTrace');
-      try {
-        await recordFailure(remap, error);
-      } catch (recordError, recordStackTrace) {
-        unrecordedFailures++;
-        debugPrint(
-          'failed to persist chapter migration failure: '
-          '$recordError\n$recordStackTrace',
-        );
+      if (commitMigrationOutcomes == null) {
+        try {
+          await recordFailure(remap, error);
+        } catch (recordError, recordStackTrace) {
+          unrecordedFailures++;
+          debugPrint(
+            'failed to persist chapter migration failure: '
+            '$recordError\n$recordStackTrace',
+          );
+        }
+      } else {
+        failures.add((remap: remap, error: error));
       }
+    }
+  }
+  if (commitMigrationOutcomes != null &&
+      (confirmed.isNotEmpty || failures.isNotEmpty)) {
+    try {
+      await commitMigrationOutcomes(confirmed, failures);
+    } catch (error, stackTrace) {
+      unrecordedFailures++;
+      debugPrint(
+        'failed to persist chapter migration outcomes: $error\n$stackTrace',
+      );
     }
   }
   return LocalScanFollowUp(

@@ -16,6 +16,10 @@ import local.saf.localDeleteOutcome
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.nio.charset.CharacterCodingException
+import android.content.Context
+import org.json.JSONArray
 import java.nio.ByteBuffer
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
@@ -101,7 +105,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 本地书库：SAF 文件夹选择 / 扫描 / 文本读取 / PDF 渲染。与上方文档操作互相独立。 */
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
-                "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage",
+                "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage",
                 "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
             )
         ) return false
@@ -159,7 +163,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
                 return true
             }
-            "scanLocalFolder", "readLocalText", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
+            "scanLocalFolder", "readLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
             "deleteLocalDocument", "renameLocalDocument", "queryTreePermission" -> {
                 io.execute {
                     try {
@@ -167,6 +171,8 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                             "scanLocalFolder" -> scanLocalFolder(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "queryTreePermission" -> queryTreePermission(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "readLocalText" -> readLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "prepareLocalText" -> prepareLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "writeLibraryPreferences" -> writeLibraryPreferences(call.argument<Map<String, Any?>>("changes") ?: emptyMap())
                             "deleteLocalDocument" -> deleteLocalDocument(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "renameLocalDocument" -> renameLocalDocument(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
@@ -184,7 +190,10 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                                 call.argument<Int>("widthPx") ?: 1200,
                             )
                         }
-                        activity.runOnUiThread { if (!closed) result.success(response) }
+                        activity.runOnUiThread {
+                            if (!closed) result.success(response)
+                            else if (call.method == "prepareLocalText" && response is String) File(response).delete()
+                        }
                     } catch (e: SecurityException) {
                         activity.runOnUiThread { if (!closed) result.error("permission", "Folder permission was revoked", null) }
                     } catch (e: Exception) {
@@ -386,6 +395,79 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             "complete" to complete,
             "reason" to reason,
         )
+    }
+
+    /** One Editor commit for all library keys; the Dart rollback journal brackets it. */
+    private fun writeLibraryPreferences(changes: Map<String, Any?>): Boolean {
+        val editor = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).edit()
+        for ((key, value) in changes) {
+            val prefixed = "flutter.$key"
+            when (value) {
+                null -> editor.remove(prefixed)
+                is Boolean -> editor.putBoolean(prefixed, value)
+                is Int -> editor.putLong(prefixed, value.toLong())
+                is Long -> editor.putLong(prefixed, value)
+                is Double -> editor.putString(prefixed, "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBEb3VibGUu$value")
+                is String -> {
+                    require(!value.startsWith("VGhpcyBpcyB0aGUgcHJlZml4IGZvciBhIGxpc3Qu") &&
+                        !value.startsWith("VGhpcyBpcyB0aGUgcHJlZml4IGZvciBCaWdJbnRlZ2Vy") &&
+                        !value.startsWith("VGhpcyBpcyB0aGUgcHJlZml4IGZvciBEb3VibGUu")) {
+                        "StorageError: String clashes with special identifier prefixes"
+                    }
+                    editor.putString(prefixed, value)
+                }
+                is List<*> -> {
+                    require(value.all { it is String })
+                    // The legacy shared_preferences plugin's JSON string-list encoding.
+                    editor.putString(prefixed, "VGhpcyBpcyB0aGUgcHJlZml4IGZvciBhIGxpc3Qu!" + JSONArray(value).toString())
+                }
+                else -> throw IllegalArgumentException("Unsupported preference value")
+            }
+        }
+        return editor.commit()
+    }
+
+    /** Stage bounded source bytes once, then decode without a full-book byte/string buffer.
+     * The UTF-8 -> GB18030 -> lenient UTF-8 order is identical to decodeTextBytes. */
+    private fun prepareLocalText(doc: Uri): String {
+        val raw = File.createTempFile("local-raw-", ".tmp", activity.cacheDir)
+        val decoded = File.createTempFile("local-utf8-", ".tmp", activity.cacheDir)
+        try {
+            activity.contentResolver.openInputStream(doc)?.use { input ->
+                raw.outputStream().use { output ->
+                    val buffer = ByteArray(65536)
+                    var total = 0
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        total += count
+                        require(total <= MAX_TEXT_BYTES) { "Text file exceeds 16 MB" }
+                        output.write(buffer, 0, count)
+                    }
+                }
+            } ?: throw IllegalStateException("File is not readable")
+            val encodings = listOf(Charsets.UTF_8, charset("GB18030"), Charsets.UTF_8)
+            for ((index, encoding) in encodings.withIndex()) {
+                val action = if (index == 2) CodingErrorAction.REPLACE else CodingErrorAction.REPORT
+                try {
+                    InputStreamReader(raw.inputStream(), encoding.newDecoder()
+                        .onMalformedInput(action).onUnmappableCharacter(action)).use { reader ->
+                        decoded.bufferedWriter(Charsets.UTF_8).use { writer ->
+                            reader.copyTo(writer, 32768)
+                        }
+                    }
+                    return decoded.absolutePath
+                } catch (error: CharacterCodingException) {
+                    if (index == 2) throw error
+                }
+            }
+            throw IllegalStateException("Text decoding failed")
+        } catch (error: Exception) {
+            decoded.delete()
+            throw error
+        } finally {
+            raw.delete()
+        }
     }
 
     /** 读取文本文件：严格 UTF-8 优先，失败则 GB18030，最后宽容回退。 */

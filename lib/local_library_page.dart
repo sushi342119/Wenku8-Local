@@ -1,4 +1,3 @@
-
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +9,7 @@ import 'catalog.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'local_scan_follow_up.dart';
 
 /// 本地书库管理：选择文件夹、扫描导入 TXT / PDF、移除。
 class LocalLibraryPage extends StatefulWidget {
@@ -82,42 +82,32 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     setState(() => _scanning = true);
     try {
       final result = await widget.local.scan();
-      // 章节重切后迁移阅读进度，避免旧章节序号在新章节表下串章。
-      // 逐条容错：单条失败不中断其余迁移与后续清理。
-      final failedChapterMigrations = <String>[];
-      // 同一本书的前序迁移失败后，暂停该书的后继任务（与首页同规则）。
-      final failedMigrationBooks = <int>{};
-      for (final remap in result.chapterRemaps) {
-        if (failedMigrationBooks.contains(remap.bookId)) continue;
-        try {
-          await widget.state.remapChapterProgress(
-            remap.bookId,
-            oldChapters: remap.oldChapters,
-            newChapters: remap.newChapters,
-            migrationId: remap.migrationId,
-          );
-          await widget.local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId);
-        } catch (error, stackTrace) {
-          failedMigrationBooks.add(remap.bookId);
-          failedChapterMigrations.add(remap.migrationId);
-          try {
-            await widget.local.markChapterRemapFailed(remap, error);
-          } catch (recordError, recordStackTrace) {
-            debugPrint(
-              'failed to persist chapter migration error '
-              '${remap.migrationId}: $recordError\n$recordStackTrace',
-            );
-          }
-          debugPrint(
-            'chapter migration failed from local library page '
-            '${remap.migrationId}: $error\n$stackTrace',
-          );
-        }
-      }
-      if (failedChapterMigrations.isNotEmpty && mounted) {
+      // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。
+      final followUp = await applyLocalScanFollowUp<LocalChapterRemap>(
+        remaps: result.chapterRemaps,
+        cleanupAssociations: () async {},
+        migrate: (remap) => widget.state.remapChapterProgress(
+          remap.bookId,
+          oldChapters: remap.oldChapters,
+          newChapters: remap.newChapters,
+          migrationId: remap.migrationId,
+        ),
+        confirm: (_) async {},
+        recordFailure: (_, _) async {},
+        bookIdOf: (remap) => remap.bookId,
+        commitMigrationOutcomes: (confirmed, failures) =>
+            widget.local.commitChapterRemapResults(
+              confirmed: [
+                for (final remap in confirmed)
+                  (bookId: remap.bookId, migrationId: remap.migrationId),
+              ],
+              failures: failures,
+            ),
+      );
+      if (followUp.failedMigrations > 0 && mounted) {
         showNovelFeedback(
           context,
-          '${failedChapterMigrations.length} 本书的阅读进度迁移失败，已保存待重试任务',
+          '${followUp.failedMigrations} 本书的阅读进度迁移失败，已保存待重试任务',
         );
       }
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
@@ -135,15 +125,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
         }
       }
       await widget.local.confirmAssociatedCleanupIds(cleanupDone);
-      // 新书自动上架。
-      for (final book in widget.local.books) {
-        if (!widget.state.shelf.contains(book.id)) {
-          await widget.state.toggleShelf(
-            book.id,
-            novel: widget.local.toNovel(book),
-          );
-        }
-      }
+      // 新书自动上架：一次提交书架和对应元数据。
+      await widget.state.addShelfBooks([
+        for (final book in widget.local.books)
+          if (!widget.state.contains(book.id)) widget.local.toNovel(book),
+      ]);
       if (!mounted) return;
       setState(() {});
       final parts = <String>[];

@@ -12,6 +12,7 @@ class NovelFeedController extends ChangeNotifier {
     this.search = false,
     this.initialItems = 0,
     this.loadAll = false,
+    this.loadAllItems,
   }) : assert(initialItems >= 0);
   final NovelRepository repository;
   final bool search;
@@ -22,6 +23,9 @@ class NovelFeedController extends ChangeNotifier {
 
   /// 为本地书库首页加载全部书籍，忽略 initialItems 和页数限制。
   final bool loadAll;
+
+  /// Local catalogs can return their entire collection in one conversion pass.
+  final Future<List<Novel>> Function()? loadAllItems;
   List<Novel> _items = const [];
   NovelSort sort = NovelSort.lastUpdate;
   String query = '';
@@ -143,17 +147,31 @@ class NovelFeedController extends ChangeNotifier {
     notifyListeners();
     try {
       while (true) {
-        final result = search
-            ? await repository.searchPage(
-                requestedQuery,
-                page: requestedPage,
-                refresh: force,
-              )
-            : await repository.browse(
-                sort: requestedSort,
-                page: requestedPage,
-                refresh: force,
-              );
+        final NovelPage result;
+        if (loadAll && !search && loadAllItems != null) {
+          final all = await loadAllItems!();
+          final selected = requestedSort == NovelSort.fullFlag
+              ? all.where((book) => book.isComplete).toList()
+              : all;
+          result = NovelPage(
+            items: selected,
+            page: requestedPage,
+            totalPages: requestedPage,
+            totalItems: selected.length,
+          );
+        } else {
+          result = search
+              ? await repository.searchPage(
+                  requestedQuery,
+                  page: requestedPage,
+                  refresh: force,
+                )
+              : await repository.browse(
+                  sort: requestedSort,
+                  page: requestedPage,
+                  refresh: force,
+                );
+        }
         if (_disposed || generation != _generation) return;
         if (result.page != requestedPage) {
           throw const FormatException('分页游标不匹配');

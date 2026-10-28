@@ -8,6 +8,49 @@ void main() {
     persistedWrite: true,
   );
 
+  test('批量后处理按序迁移、暂停失败书，最后只提交一次', () async {
+    final calls = <String>[];
+    final result = await applyLocalScanFollowUp<({int bookId, String id})>(
+      remaps: [
+        (bookId: 1, id: 'a'),
+        (bookId: 1, id: 'b'),
+        (bookId: 2, id: 'c'),
+        (bookId: 2, id: 'd'),
+        (bookId: 3, id: 'e'),
+      ],
+      cleanupAssociations: () async {},
+      migrate: (task) async {
+        calls.add(task.id);
+        if (task.id == 'c') throw StateError('retry');
+      },
+      confirm: (_) async => fail('should batch confirmations'),
+      recordFailure: (_, _) async => fail('should batch failures'),
+      bookIdOf: (task) => task.bookId,
+      commitMigrationOutcomes: (confirmed, failures) async {
+        calls.add('commit');
+        expect(confirmed.map((task) => task.id), ['a', 'b', 'e']);
+        expect(failures.single.remap.id, 'c');
+      },
+    );
+    expect(calls, ['a', 'b', 'c', 'e', 'commit']);
+    expect(result.failedMigrations, 1);
+    expect(result.handled, isTrue);
+  });
+
+  test('批量结果写入失败保留未处理状态', () async {
+    final result = await applyLocalScanFollowUp<int>(
+      remaps: [1],
+      cleanupAssociations: () async {},
+      migrate: (_) async {},
+      confirm: (_) async {},
+      recordFailure: (_, _) async {},
+      bookIdOf: (id) => id,
+      commitMigrationOutcomes: (_, _) async => throw StateError('disk'),
+    );
+    expect(result.handled, isFalse);
+    expect(result.unrecordedFailures, greaterThan(0));
+  });
+
   test('重授权换目录处理清理队列、迁移确认和迁移失败记录', () async {
     final calls = <String>[];
     final result = await finishLocalReauthorization(

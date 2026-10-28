@@ -13,6 +13,7 @@ import 'library_backup.dart';
 import 'book_tags.dart';
 import 'performance_preferences.dart';
 import 'app_typography.dart';
+import 'local_platform.dart';
 
 class ReadingPosition {
   const ReadingPosition({
@@ -1050,28 +1051,57 @@ class LibraryState extends ChangeNotifier {
 
   /// One transactional merge/notification rather than rebuilding the shelf
   /// once per imported cloud/legacy ID. Reading records are never overwritten.
-  Future<void> addShelfIds(Iterable<int> values) async {
+  Future<void> addShelfIds(
+    Iterable<int> values, {
+    Map<int, Novel> novels = const {},
+  }) async {
     final ids = values.where((id) => id > 0 && id <= 0x7fffffff).toSet();
     if (_restoreBarrier case final barrier?) {
       await barrier.future;
-      return addShelfIds(ids);
+      return addShelfIds(ids, novels: novels);
     }
     await _queuePositionWrite(() async {
       final additions = ids.difference(_shelf);
       if (additions.isEmpty) return;
       final shelf = {..._shelf, ...additions};
       final now = DateTime.now().millisecondsSinceEpoch;
-      await _commitLibraryRecords({
+      final snapshots = <int, Novel>{};
+      final changes = <String, Object>{
         'shelf': shelf.map((id) => '$id').toList(),
         for (final id in additions) 'shelf_added_$id': now,
-      });
+      };
+      for (final id in additions) {
+        final novel = novels[id];
+        if (novel == null) continue;
+        final snapshot = _novelSnapshot(novel);
+        snapshots[id] = novel;
+        if (snapshot != null) changes['novel_meta_$id'] = snapshot;
+      }
+      try {
+        await _commitLibraryRecords(changes);
+      } catch (_) {
+        for (final entry in snapshots.entries) {
+          if (identical(_persistedNovels[entry.key], entry.value)) {
+            _persistedNovels.remove(entry.key);
+          }
+        }
+        rethrow;
+      }
       _shelf.addAll(additions);
       for (final id in additions) {
         _added[id] = now;
         _shelfRevisions[id] = shelfRevision(id) + 1;
+        final novel = novels[id];
+        if (novel != null) _known[id] = novel;
       }
       if (!_disposed) notifyListeners();
     });
+  }
+
+  /// 扫描自动上架的批量入口，同时持久化书架和书籍元数据。
+  Future<void> addShelfBooks(Iterable<Novel> novels) async {
+    final byId = <int, Novel>{for (final novel in novels) novel.id: novel};
+    await addShelfIds(byId.keys, novels: byId);
   }
 
   Future<void> setShelfMembership(
@@ -1866,6 +1896,27 @@ class LibraryState extends ChangeNotifier {
     return jsonEncode(position);
   }
 
+  Future<void> _writeLibraryBatch(Map<String, Object> changes) async {
+    if (LocalPlatform.android) {
+      try {
+        final committed = await LocalPlatform.channel.invokeMethod<bool>(
+          'writeLibraryPreferences',
+          {'changes': changes},
+        );
+        await _prefs.reload();
+        if (committed != true) {
+          throw StateError('Local preference batch did not commit');
+        }
+        return;
+      } on MissingPluginException {
+        // Other embedders retain the existing journal-protected write protocol.
+      }
+    }
+    for (final entry in changes.entries) {
+      await writeLibraryPreference(_prefs, entry.key, entry.value);
+    }
+  }
+
   Future<void> _commitLibraryRecords(Map<String, Object> changes) async {
     changes.removeWhere(
       (key, value) => jsonEncode(_prefs.get(key)) == jsonEncode(value),
@@ -1879,9 +1930,7 @@ class LibraryState extends ChangeNotifier {
     }
     try {
       await writeLibraryPreference(_prefs, restoreJournalKey, journal);
-      for (final entry in changes.entries) {
-        await writeLibraryPreference(_prefs, entry.key, entry.value);
-      }
+      await _writeLibraryBatch(changes);
       await writeLibraryPreference(_prefs, restoreJournalKey, null);
     } catch (_) {
       if (_prefs.get(restoreJournalKey) != null) {

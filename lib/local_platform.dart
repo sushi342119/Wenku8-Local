@@ -137,6 +137,15 @@ abstract final class LocalPlatform {
       await channel.invokeMethod<String>('readLocalText', {'docUri': docUri}) ??
       '';
 
+  /// Native decoding streams into a temporary UTF-8 file; callers own cleanup.
+  static Future<String> prepareLocalText(String docUri) async {
+    final path = await channel.invokeMethod<String>('prepareLocalText', {
+      'docUri': docUri,
+    });
+    if (path == null || path.isEmpty) throw StateError('原生文本解码未返回文件');
+    return path;
+  }
+
   /// 解码原始字节，自动识别 UTF-8 / GB18030 编码。
   /// encoding: 'auto'（默认，先 UTF-8 后 GB18030）、'utf-8'、'gb18030'
   static Future<String> decodeLocalText(
