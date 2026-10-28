@@ -40,7 +40,7 @@ void main() {
         throwsA(isA<TimeoutException>()),
       ),
     ];
-    await tester.pump(const Duration(seconds: 31));
+    await tester.pump(const Duration(seconds: 121));
     await Future.wait(checks);
   });
 }

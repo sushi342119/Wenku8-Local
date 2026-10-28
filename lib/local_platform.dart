@@ -166,7 +166,7 @@ abstract final class LocalPlatform {
     final path = await channel
         .invokeMethod<String>('prepareLocalText', {'docUri': docUri})
         .timeout(
-          _localIoTimeout,
+          const Duration(minutes: 2),
           onTimeout: () => throw TimeoutException('源文件读取超时，请重试'),
         );
     if (path == null || path.isEmpty) throw StateError('原生文本解码未返回文件');
@@ -176,7 +176,7 @@ abstract final class LocalPlatform {
   static Future<String> fingerprintLocalText(String docUri) async {
     final fingerprint = await channel.invokeMethod<String>(
       'fingerprintLocalText', {'docUri': docUri},
-    ).timeout(_localIoTimeout);
+    ).timeout(const Duration(minutes: 2));
     if (fingerprint == null || fingerprint.isEmpty) {
       throw StateError('源文件 SHA-256 校验未返回结果');
     }
@@ -188,7 +188,7 @@ abstract final class LocalPlatform {
   ) async {
     final result = await channel.invokeMapMethod<String, dynamic>(
       'prepareLocalText', {'docUri': docUri, 'withFingerprint': true},
-    ).timeout(_localIoTimeout);
+    ).timeout(const Duration(minutes: 2));
     final path = result?['path'] as String?;
     final fingerprint = result?['fingerprint'] as String?;
     if (path == null || path.isEmpty || fingerprint == null || fingerprint.isEmpty) {

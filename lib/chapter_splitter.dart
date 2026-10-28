@@ -131,6 +131,9 @@ class ChapterTextIndex {
     }
     final h = _parse(line, next);
     if (h != null) _headings.add(h);
+    if (_headings.length + _directoryMarkers.length > 100000) {
+      throw const FormatException('TXT 章节索引过大：候选标题与目录标记超过 100000 条');
+    }
     _words += _lineWords;
     _lineWords = 0;
     _line = '';

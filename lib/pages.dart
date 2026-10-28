@@ -3095,9 +3095,11 @@ class DetailLoaderPage extends StatefulWidget {
 }
 
 class _DetailLoaderPageState extends State<DetailLoaderPage> {
-  late Future<Novel> _loaded = _load();
+  late Future<Novel> _loaded;
   Novel? _cached;
-  LocalLibraryStore? get _local => localLibraryOf(widget.repository);
+  LocalLibraryStore? get _local => isLocalNovelId(widget.novel.id)
+      ? localLibraryOf(widget.repository)
+      : null;
   String? _revision;
   bool _loadingLocal = false;
   int _loadGeneration = 0;
@@ -3106,8 +3108,7 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
     final book = _local?.bookFor(widget.novel.id);
     if (!mounted ||
         _loadingLocal ||
-        book == null ||
-        book.revision == _revision) {
+        book?.revision == _revision) {
       return;
     }
     setState(() {
@@ -3131,14 +3132,17 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
       widget.state.bindLocalChapters(local);
       local.addListener(_localChanged);
     }
+    _loaded = _load();
     unawaited(_seedFromCache());
   }
 
   Future<void> _seedFromCache() async {
+    final generation = _loadGeneration;
     if (widget.repository case final OfflineNovelRepository offline) {
       try {
-        final cached = await offline.cachedBook(widget.novel.id);
-        if (mounted && cached != null && cached.chapters.isNotEmpty) {
+        final cached = await offline.cachedBook(widget.novel.id).timeout(widget.loadTimeout);
+        if (mounted && generation == _loadGeneration && _loadingLocal &&
+            cached != null && cached.chapters.isNotEmpty) {
           setState(() => _cached = cached);
         }
       } catch (_) {
@@ -3157,6 +3161,7 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
 
   Future<Novel> _loadWithDeadline() async {
     final generation = ++_loadGeneration;
+    _revision = _local?.bookFor(widget.novel.id)?.revision;
     var expired = false;
     _loadingLocal = true;
     void checkActive() {
@@ -3175,8 +3180,9 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
       final chapters = await widget.repository.chapters(widget.novel.id);
       checkActive();
       final loaded = detail.withChapters(chapters);
-      await widget.state.rememberNovel(loaded);
-      checkActive();
+      unawaited(widget.state.rememberNovel(loaded).catchError((Object error) {
+        debugPrint('书籍详情保存失败：$error');
+      }));
       return loaded;
     }
     try {

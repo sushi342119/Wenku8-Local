@@ -24,6 +24,9 @@ part 'local_text_worker.dart';
 /// 本地图书 ID 段：避开文库在线 aid（通常远小于此），落在 int32 范围内，
 /// 因此书架、历史、进度等既有 `id > 0` 逻辑无需改动。
 const localNovelIdBase = 0x40000000;
+const localTextMaxSourceBytes = 256 * 1024 * 1024;
+const localTextMaxDecodedBytes = 3 * localTextMaxSourceBytes;
+const localTextMaxReadCodeUnits = 4 * 1024 * 1024;
 
 bool isLocalNovelId(int id) =>
     id >= localNovelIdBase && id <= 0x7fffffff;
@@ -518,6 +521,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   final Directory _supportDir;
   final Duration _operationTimeout;
   final _LocalTextWorker _textWorker;
+  final _LocalTextWorker _readerWorker = _LocalTextWorker();
   final List<LocalBook> _books = [];
   final Map<int, int> _bookPositions = {};
   final Map<int, LocalBook> _savedBookRefs = {};
@@ -561,7 +565,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   static Future<LocalLibraryStore> load({
     Duration operationTimeout = _localOperationTimeout,
     Duration workerReadyTimeout = const Duration(seconds: 3),
-    Duration workerReplyTimeout = const Duration(seconds: 12),
+    Duration workerReplyTimeout = const Duration(minutes: 2),
   }) async {
     final prefs = await SharedPreferences.getInstance();
     final support = await getApplicationSupportDirectory();
@@ -921,16 +925,27 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ],
       );
 
-  Future<void> ensureReady(int id) => _synchronized(
-    () => _ensureReadyInLock(id),
-    timeout: _operationTimeout,
-    operation: '详情准备',
-  );
+  Future<void> ensureReady(int id) async {
+    final book = bookFor(id);
+    if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
+    if (identical(_savedBookRefs[id], book) &&
+        !isMigrationPending(id) &&
+        (book.kind != LocalBookKind.txt ||
+            book.chapterSplitVersion == _chapterSplitVersion)) {
+      return;
+    }
+    await _synchronized(
+      () => _ensureReadyInLock(id),
+      timeout: _operationTimeout,
+      operation: '详情准备',
+    );
+  }
 
   Future<void> _ensureReadyInLock(int id) async {
     if (_dirtyBookIds.contains(id)) await _saveIndex();
     final book = bookFor(id);
-    if (book == null || book.kind != LocalBookKind.txt) return;
+    if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
+    if (book.kind != LocalBookKind.txt) return;
     if (book.chapterSplitVersion != _chapterSplitVersion) {
       final remaps = <LocalChapterRemap>[];
       final updates = <int, LocalBook>{};
@@ -1706,7 +1721,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           continue;
         }
         if (book == null) {
-          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
+          failures['$name ($sourceKey)'] = 'PDF 没有可读取的页面';
           skipped++;
           continue;
         }
@@ -1741,7 +1756,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           continue;
         }
         if (book == null) {
-          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
+          failures['$name ($sourceKey)'] = 'PDF 没有可读取的页面';
           skipped++;
           continue;
         }
@@ -2010,7 +2025,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           continue;
         }
         if (book == null) {
-          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
+          failures['$name ($sourceKey)'] = 'TXT 文件为空';
           skipped++;
           continue;
         }
@@ -2045,7 +2060,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           continue;
         }
         if (book == null) {
-          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
+          failures['$name ($sourceKey)'] = 'TXT 文件为空';
           skipped++;
           continue;
         }
@@ -2125,8 +2140,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     required String sourceKey,
     LocalBook? existing,
   }) async {
-    const maxSize = 16 * 1024 * 1024;
-    if (size > maxSize) throw const FormatException('TXT 超过 16 MiB 导入上限');
+    if (size > localTextMaxSourceBytes) {
+      throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
+    }
     final id = existing?.id ?? _nextId();
     final processed = await _importText(path, id, direct: true);
     if (processed.inputLength == 0) return null;
@@ -2421,7 +2437,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         chapterSplitVersion: _chapterSplitVersion,
       );
     }
-    if (size > 16 * 1024 * 1024) return null;
+    if (size > localTextMaxSourceBytes) {
+      throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
+    }
     final processed = await _importText(uri, id);
     if (processed.inputLength == 0) return null;
     return LocalBook(
@@ -2509,10 +2527,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         path,
         outputPath: '${_booksDir.path}/book_$id.staging',
         normalize: true,
-        maxBytes: temporary == null ? 16 * 1024 * 1024 : null,
+        maxBytes: temporary == null
+            ? localTextMaxSourceBytes
+            : localTextMaxDecodedBytes,
         preserveBom: temporary != null,
         sourceFingerprint: sourceFingerprint,
       );
+      if (result.length == 0) {
+        throw const FormatException('TXT 文件为空');
+      }
       if (result.inputLength > 0) {
         final staged = File('${_booksDir.path}/book_$id.staging');
         final target = '${_booksDir.path}/book_${id}_${result.fingerprint}.txt';
@@ -2523,6 +2546,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         }
       }
       return result;
+    } on FormatException catch (error) {
+      if (error.message.startsWith('TXT ')) rethrow;
+      throw FormatException('TXT 解码失败：${error.message}');
     } finally {
       if (temporary != null) {
         try {
@@ -2573,18 +2599,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final pending = _textReads[book.id];
     if (pending != null) return pending;
     late final Future<String> future;
-    // The source cannot be refreshed/deleted while this read restores its copy.
     future =
-        _synchronized(() async {
-          final current = bookFor(book.id);
-          if (current == null) return '';
-          final source = await _ensureBookTextPath(current);
-          final text = await _textWorker.read(source.path, preserveBom: true);
+        (() async {
+          final path = await _readableTextPath(book);
+          final text = await _readerWorker.read(path, preserveBom: true);
           if (identical(_textReads[book.id], future)) {
             _cacheText(book.id, text);
           }
           return text;
-        }).whenComplete(() {
+        })().whenComplete(() {
           if (identical(_textReads[book.id], future)) {
             _textReads.remove(book.id);
           }
@@ -2593,11 +2616,23 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return future;
   }
 
+  Future<String> _readableTextPath(LocalBook book) async {
+    final path = textPathFor(book);
+    if (await File(path).exists()) return path;
+    return _synchronized(() async {
+      if (bookFor(book.id)?.revision != book.revision) {
+        throw const StaleLocalChapterException();
+      }
+      return (await _ensureBookTextPath(book)).path;
+    }, timeout: _operationTimeout, operation: '正文恢复');
+  }
+
   @override
   void dispose() {
     // Finish queued file operations before releasing the worker and cache.
     _mutationLock.then((_) {
       _textWorker.dispose();
+      _readerWorker.dispose();
       _textCache.clear();
       _textCacheBytes = 0;
     });
@@ -2796,7 +2831,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   @override
   Future<Novel> detail(Novel novel) async {
     final book = bookFor(novel.id);
-    return book == null ? novel : toNovel(book);
+    if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
+    return toNovel(book);
   }
 
   @override
@@ -2838,15 +2874,23 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     final index = chapter.id;
     final ref = book.chapters[index];
-    final text = await _readBookText(book);
+    final String content;
+    if (_textCache.containsKey(book.id) ||
+        await File(await _readableTextPath(book)).length() <= _textCacheBudget ~/ 2) {
+      final text = await _readBookText(book);
+      if (!validChapterRanges(book.chapters, text.length)) {
+        throw StateError('章节范围损坏，请重新扫描');
+      }
+      content = text.substring(ref.offset, ref.offset + ref.length);
+    } else {
+      final path = await _readableTextPath(book);
+      content = await _readerWorker.readRange(path, ref.offset, ref.length);
+    }
     if (bookFor(novelId)?.revision != chapter.revision ||
         isMigrationPending(novelId)) {
       throw const StaleLocalChapterException();
     }
-    if (!validChapterRanges(book.chapters, text.length)) {
-      throw StateError('章节范围损坏，请重新扫描');
-    }
-    return text.substring(ref.offset, ref.offset + ref.length).trim();
+    return content.trim();
   }
 }
 

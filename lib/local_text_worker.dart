@@ -29,23 +29,37 @@ class _LocalTextWorker extends LocalTextWorkerClient {
   Future<String> read(String path, {bool preserveBom = false}) async =>
       await run({'path': path, 'read': true, 'preserveBom': preserveBom})
           as String;
+
+  Future<String> readRange(String path, int offset, int length) async =>
+      await run({'path': path, 'offset': offset, 'length': length}) as String;
 }
 
 void _textWorkerMain(SendPort ready) async {
   final requests = ReceivePort();
+  _TextSeekIndex? seekIndex;
   ready.send(requests.sendPort);
   await for (final message in requests) {
     try {
       final (reply, job) = message as (SendPort, Map<String, Object?>);
       final path = job['path'] as String;
+      if (job['offset'] != null) {
+        final stat = await File(path).stat();
+        if (seekIndex?.path != path ||
+            seekIndex?.size != stat.size ||
+            seekIndex?.modified != stat.modified) {
+          seekIndex = _TextSeekIndex(path, stat.size, stat.modified);
+        }
+        reply.send([
+          true,
+          await seekIndex!.read(job['offset'] as int, job['length'] as int),
+        ]);
+        continue;
+      }
       final result = job['read'] == true
-          ? await _decodeTextChunks(
-              _boundedTextBytes(path, null),
-              job['preserveBom'] == true,
-            ).join()
+          ? await _readSmallText(path, job['preserveBom'] == true)
           : job['hash'] == true
           ? await sha256
-                .bind(_boundedTextBytes(path, 16 * 1024 * 1024))
+                .bind(_boundedTextBytes(path, localTextMaxSourceBytes))
                 .first
                 .then((d) => d.toString())
           : await _analyzeTextFile(
@@ -100,12 +114,81 @@ Stream<List<int>> _boundedTextBytes(String path, int? maxBytes) async* {
     await for (final chunk in File(path).openRead()) {
       bytes += chunk.length;
       if (maxBytes != null && bytes > maxBytes) {
-        throw const FormatException('Text file exceeds 16 MB');
+        throw FormatException(
+          'TXT 文件过大：超过 ${maxBytes ~/ (1024 * 1024)} MiB 上限',
+        );
       }
       yield chunk;
     }
   } on FileSystemException catch (error) {
     throw _TextSourceException(error);
+  }
+}
+
+Future<String> _readSmallText(String path, bool preserveBom) async {
+  final text = StringBuffer();
+  await for (final chunk in _decodeTextChunks(
+    _boundedTextBytes(path, localTextMaxReadCodeUnits),
+    preserveBom,
+  )) {
+    if (text.length + chunk.length > localTextMaxReadCodeUnits) {
+      throw const FormatException('文本过大，请按章节读取');
+    }
+    text.write(chunk);
+  }
+  return text.toString();
+}
+
+class _TextSeekIndex {
+  _TextSeekIndex(this.path, this.size, this.modified);
+  final String path;
+  final int size;
+  final DateTime modified;
+  final _checkpoints = <({int bytes, int units})>[(bytes: 0, units: 0)];
+
+  Future<String> read(int offset, int length) async {
+    if (size > localTextMaxDecodedBytes) {
+      throw const FormatException('TXT 解码后文件过大：超过 768 MiB 上限');
+    }
+    if (offset < 0 || length < 0) throw StateError('章节范围损坏，请重新扫描');
+    if (length > localTextMaxReadCodeUnits) {
+      throw const FormatException('单章正文过大：超过 4194304 个 UTF-16 字符，请拆分章节');
+    }
+    var low = 0;
+    var high = _checkpoints.length;
+    while (low + 1 < high) {
+      final middle = (low + high) ~/ 2;
+      if (_checkpoints[middle].units <= offset) {
+        low = middle;
+      } else {
+        high = middle;
+      }
+    }
+    var bytes = _checkpoints[low].bytes;
+    var units = _checkpoints[low].units;
+    final end = offset + length;
+    final text = StringBuffer();
+    await for (final chunk in _decodeTextChunks(
+      File(path).openRead(bytes),
+      true,
+    )) {
+      final next = units + chunk.length;
+      if (next > offset && units < end) {
+        final startInChunk = offset > units ? offset - units : 0;
+        final endInChunk = end < next ? end - units : chunk.length;
+        text.write(chunk.substring(startInChunk, endInChunk));
+      }
+      units = next;
+      bytes += utf8.encode(chunk).length;
+      if (bytes - _checkpoints.last.bytes >= 64 * 1024) {
+        _checkpoints.add((bytes: bytes, units: units));
+      }
+      if (units >= end) break;
+    }
+    if (units < end || text.length != length) {
+      throw StateError('章节范围损坏，请重新扫描');
+    }
+    return text.toString();
   }
 }
 
@@ -165,18 +248,20 @@ Future<_TextMetadata> _analyzeTextFile(
   required bool normalize,
   String? sourceFingerprint,
   String? outputPath,
-  int? maxBytes,
+  int? maxBytes = localTextMaxDecodedBytes,
   bool preserveBom = false,
 }) async {
   var inputLength = 0;
+  var outputBytes = 0;
   final digest = _DigestSink();
   final hashing = sha256.startChunkedConversion(digest);
   final rawDigest = _DigestSink();
   final rawHash = sha256.startChunkedConversion(rawDigest);
-  final bytes = _boundedTextBytes(path, maxBytes).map((chunk) {
-    if (sourceFingerprint == null) rawHash.add(chunk);
-    return chunk;
-  });
+  final bytes = _boundedTextBytes(path, maxBytes ?? localTextMaxDecodedBytes)
+      .map((chunk) {
+        if (sourceFingerprint == null) rawHash.add(chunk);
+        return chunk;
+      });
   var chunks = _decodeTextChunks(bytes, preserveBom || normalize).map((chunk) {
     inputLength += chunk.length;
     return chunk;
@@ -192,16 +277,21 @@ Future<_TextMetadata> _analyzeTextFile(
     }
     await for (final chunk in chunks) {
       analysis.add(chunk);
-      hashing.add(utf8.encode(chunk));
+      final encoded = utf8.encode(chunk);
+      outputBytes += encoded.length;
+      if (outputBytes > localTextMaxDecodedBytes) {
+        throw const FormatException('TXT 解码后文件过大：超过 768 MiB 上限');
+      }
+      hashing.add(encoded);
       // Await each write, instead of accumulating an unbounded IOSink queue.
-      if (output != null) await output.writeString(chunk);
+      if (output != null) await output.writeFrom(encoded);
     }
     await output?.close();
     output = null;
     hashing.close();
     rawHash.close();
     final result = analysis.finish();
-    if (temporary != null && inputLength > 0) {
+    if (temporary != null && result.length > 0) {
       await temporary.rename(outputPath!);
     }
     return _TextMetadata(

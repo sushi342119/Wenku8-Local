@@ -57,6 +57,17 @@ class _RetryDetail extends DemoNovelRepository {
   }
 }
 
+class _BlockedRememberState extends LibraryState {
+  _BlockedRememberState(super.prefs);
+  final saved = Completer<void>();
+  var calls = 0;
+  @override
+  Future<void> rememberNovel(Novel novel) {
+    calls++;
+    return saved.future;
+  }
+}
+
 void main({
   Future<void> Function(WidgetTester tester, GlobalKey key, String name)?
   capture,
@@ -113,6 +124,27 @@ void main({
     expect(tester.widget<DetailPage>(find.byType(DetailPage)).novel.chapters, novel.chapters);
     await tester.pumpWidget(const SizedBox.shrink());
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a stalled metadata save does not block usable details', (tester) async {
+    phoneViewport(tester);
+    final blocked = _BlockedRememberState(await SharedPreferences.getInstance());
+    addTearDown(blocked.dispose);
+    final repository = _RetryDetail(novel);
+    repository.first.complete(novel);
+    await tester.pumpWidget(_app(DetailLoaderPage(
+      novel: novel.withChapters(const []), state: blocked, repository: repository,
+      loadTimeout: const Duration(seconds: 1),
+    )));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(seconds: 2));
+    final ready = tester.widget<DetailPage>(find.byType(DetailPage));
+    expect(ready.isLoading, isFalse);
+    expect(ready.loadError, isNull);
+    expect(ready.novel.chapters, novel.chapters);
+    expect(blocked.calls, 1);
+    blocked.saved.complete();
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets(

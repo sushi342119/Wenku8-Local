@@ -42,7 +42,8 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         private const val REQUEST_FONT = 8023
         private const val MAX_FONT_BYTES = 100 * 1024 * 1024
         private const val MAX_BYTES = 4 * 1024 * 1024
-        private const val MAX_TEXT_BYTES = 16 * 1024 * 1024
+        private const val MAX_TEXT_BYTES = 256 * 1024 * 1024
+        private const val MAX_TEXT_BUFFER_BYTES = 4 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
         private const val IO_TIMEOUT_MS = 20000L
     }
@@ -172,8 +173,9 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             "scanLocalFolder", "readLocalText", "fingerprintLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
             "deleteLocalDocument", "renameLocalDocument", "queryTreePermission" -> {
                 val timeout = when (call.method) {
-                    "scanLocalFolder", "queryTreePermission", "readLocalText", "fingerprintLocalText",
-                    "prepareLocalText", "pdfPageCount", "writeLibraryPreferences" -> IO_TIMEOUT_MS
+                    "prepareLocalText", "fingerprintLocalText" -> 120000L
+                    "scanLocalFolder", "queryTreePermission", "readLocalText",
+                    "pdfPageCount", "writeLibraryPreferences" -> IO_TIMEOUT_MS
                     else -> null
                 }
                 if (!requests.begin(result, timeout)) return true
@@ -465,7 +467,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 val count = input.read(buffer)
                 if (count < 0) break
                 total += count
-                require(total <= MAX_TEXT_BYTES) { "Text file exceeds 16 MB" }
+                require(total <= MAX_TEXT_BYTES) { "TXT 文件过大：超过 256 MiB 导入上限" }
                 digest.update(buffer, 0, count)
             }
         } ?: throw IllegalStateException("File is not readable")
@@ -488,18 +490,18 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                         val count = input.read(buffer)
                         if (count < 0) break
                         total += count
-                        require(total <= MAX_TEXT_BYTES) { "Text file exceeds 16 MB" }
+                        require(total <= MAX_TEXT_BYTES) { "TXT 文件过大：超过 256 MiB 导入上限" }
                         digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
                     }
                 }
             } ?: throw IllegalStateException("File is not readable")
-            val encodings = listOf(Charsets.UTF_8, charset("GB18030"), Charsets.UTF_8)
-            for ((index, encoding) in encodings.withIndex()) {
-                val action = if (index == 2) CodingErrorAction.REPLACE else CodingErrorAction.REPORT
+            val encodings = listOf(Charsets.UTF_8, charset("GB18030"))
+            for (encoding in encodings) {
                 try {
                     InputStreamReader(raw.inputStream(), encoding.newDecoder()
-                        .onMalformedInput(action).onUnmappableCharacter(action)).use { reader ->
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT)).use { reader ->
                         decoded.bufferedWriter(Charsets.UTF_8).use { writer ->
                             reader.copyTo(writer, 32768)
                         }
@@ -508,11 +510,9 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                         "path" to decoded.absolutePath,
                         "fingerprint" to digest.digest().joinToString("") { "%02x".format(it) },
                     ) else decoded.absolutePath
-                } catch (error: CharacterCodingException) {
-                    if (index == 2) throw error
-                }
+                } catch (_: CharacterCodingException) { }
             }
-            throw IllegalStateException("Text decoding failed")
+            throw IllegalArgumentException("TXT 解码失败：不是有效的 UTF-8 或 GB18030 文本")
         } catch (error: Exception) {
             decoded.delete()
             throw error
@@ -530,7 +530,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 if (Thread.currentThread().isInterrupted) throw InterruptedException()
                 val count = input.read(buffer)
                 if (count < 0) break
-                if (bytes.size() + count > MAX_TEXT_BYTES) throw IllegalArgumentException("Text file exceeds 16 MB")
+                if (bytes.size() + count > MAX_TEXT_BUFFER_BYTES) throw IllegalArgumentException("文本缓冲区超过 4 MiB，请使用流式导入")
                 bytes.write(buffer, 0, count)
             }
         } ?: throw IllegalStateException("File is not readable")
@@ -554,7 +554,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 解码 Dart 传来的原始字节，支持自动识别 UTF-8/GB18030。 */
     private fun decodeLocalText(bytes: ByteArray?, encoding: String): String {
         if (bytes == null) throw IllegalArgumentException("缺少 bytes 参数")
-        if (bytes.size > MAX_TEXT_BYTES) throw IllegalArgumentException("Text file exceeds 16 MB")
+        if (bytes.size > MAX_TEXT_BUFFER_BYTES) throw IllegalArgumentException("文本缓冲区超过 4 MiB，请使用流式导入")
         return when (encoding) {
             "gb18030" -> {
                 // 强制 GB18030 解码（兼容 GBK）

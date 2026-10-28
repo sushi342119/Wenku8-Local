@@ -15,6 +15,7 @@ import 'app_typography.dart';
 import 'local_platform.dart';
 import 'local_library.dart';
 import 'text_anchor.dart';
+import 'file_text_anchor.dart';
 
 const _libraryWriteTimeout = Duration(seconds: 8);
 
@@ -675,8 +676,9 @@ class LibraryState extends ChangeNotifier {
         return;
       }
       if (journal == null) {
-        final oldText = await File(task.oldTextPath).readAsString();
-        final newText = await File(task.newTextPath).readAsString();
+        final oldText = await FileTextAnchor.open(task.oldTextPath);
+        final newText = task.newTextPath == task.oldTextPath
+            ? oldText : await FileTextAnchor.open(task.newTextPath);
         final chapters = [
           for (var i = 0; i < task.newChapters.length; i++)
             LocalChapterIndex(
@@ -685,10 +687,10 @@ class LibraryState extends ChangeNotifier {
               task.newChapters[i].length,
             ),
         ];
-        ReadingPosition migrate(
+        Future<ReadingPosition> migrate(
           ReadingPosition position, {
           int withinParagraph = 0,
-        }) {
+        }) async {
           if (position.revision == task.newRevision) return position;
           if (task.oldRevision.isNotEmpty && position.revision.isNotEmpty &&
               position.revision != task.oldRevision) {
@@ -701,7 +703,7 @@ class LibraryState extends ChangeNotifier {
           final old = task.oldChapters[position.chapter];
           final start = old.offset.clamp(0, oldText.length);
           final end = (old.offset + old.length).clamp(start, oldText.length);
-          final raw = oldText.substring(start, end);
+          final raw = await oldText.slice(start, end);
           final body = raw.trim();
           final trim = raw.length - raw.trimLeft().length;
           final local =
@@ -713,12 +715,11 @@ class LibraryState extends ChangeNotifier {
                         ) +
                         withinParagraph
                   : (position.fraction * body.length).floor());
-          final global = relocateTextOffset(
+          final global = await newText.relocateFrom(
             oldText,
-            newText,
             start + trim + local.clamp(0, body.length),
           );
-          final target = locateTextAnchor(newText, chapters, global);
+          final target = await newText.locate(chapters, global);
           return ReadingPosition(
             chapter: target.chapter,
             chapterId: target.chapter,
@@ -752,16 +753,16 @@ class LibraryState extends ChangeNotifier {
                   )
                 : null);
         if (current != null) {
-          ReadingPosition migrateCurrentPosition() {
+          Future<ReadingPosition> migrateCurrentPosition() async {
             if (!readingAlreadyMigrated) return migrate(current);
             final c = chapters[current.chapter];
-            final target = locateTextAnchor(newText, chapters,
+            final target = await newText.locate(chapters,
               c.offset + (current.fraction * c.length).floor());
             return ReadingPosition.fromJson({...current.toJson(),
               'revision': task.newRevision, 'textOffset': target.textOffset,
               'paragraphIndex': target.paragraph, 'width': 0, 'offset': 0});
           }
-          final position = migrateCurrentPosition();
+          final position = await migrateCurrentPosition();
           records['reading_position_$id'] = jsonEncode(position.toJson());
           records['chapter_$id'] = position.chapter;
           records[_chapterProgressAnchorKey(id)] = null;
@@ -770,8 +771,8 @@ class LibraryState extends ChangeNotifier {
         if (marks != null) {
           records['reader_bookmarks_$id'] = jsonEncode([
             for (final mark in marks)
-              (() {
-                final p = migrate(mark.position);
+              await (() async {
+                final p = await migrate(mark.position);
                 return ReaderBookmark(
                   id: mark.id,
                   chapterTitle: chapters[p.chapter].title,
@@ -783,7 +784,7 @@ class LibraryState extends ChangeNotifier {
         final cursorKey = 'listening.cursor.v1.$id';
         final cursor = _readJsonObjectPreference(cursorKey);
         if (cursor != null) {
-          final p = migrate(
+          final p = await migrate(
             ReadingPosition(
               chapter: cursor['chapter'] as int? ?? 0,
               chapterId: cursor['chapterId'] as int? ?? 0,
@@ -799,7 +800,7 @@ class LibraryState extends ChangeNotifier {
             withinParagraph: cursor['start'] as int? ?? 0,
           );
           final c = chapters[p.chapter];
-          final body = newText.substring(c.offset, c.offset + c.length).trim();
+          final body = (await newText.slice(c.offset, c.offset + c.length)).trim();
           records[cursorKey] = jsonEncode({
             ...cursor,
             'chapter': p.chapter,
