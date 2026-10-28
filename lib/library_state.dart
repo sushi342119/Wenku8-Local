@@ -14,6 +14,8 @@ import 'book_tags.dart';
 import 'performance_preferences.dart';
 import 'app_typography.dart';
 import 'local_platform.dart';
+import 'local_library.dart';
+import 'text_anchor.dart';
 
 class ReadingPosition {
   const ReadingPosition({
@@ -29,6 +31,8 @@ class ReadingPosition {
     this.paragraphFraction = 0,
     this.textScale = 1,
     this.typeface = 'system',
+    this.revision = '',
+    this.textOffset,
   });
   final int chapter;
   final int chapterId;
@@ -42,6 +46,8 @@ class ReadingPosition {
   final double paragraphFraction;
   final double textScale;
   final String typeface;
+  final String revision;
+  final int? textOffset;
 
   Map<String, Object> toJson() => {
     'chapter': chapter,
@@ -56,6 +62,8 @@ class ReadingPosition {
     'paragraphFraction': paragraphFraction,
     'textScale': textScale,
     'typeface': typeface,
+    'revision': revision,
+    'textOffset': ?textOffset,
   };
 
   factory ReadingPosition.fromJson(Map<String, dynamic> value) {
@@ -65,6 +73,8 @@ class ReadingPosition {
     }
 
     return ReadingPosition(
+      revision: value['revision'] as String? ?? '',
+      textOffset: value['textOffset'] as int?,
       chapter: value['chapter'] is int
           ? (value['chapter'] as int).clamp(0, 100000)
           : 0,
@@ -361,11 +371,30 @@ class LibraryState extends ChangeNotifier {
   bool contains(int id) => _shelf.contains(id);
   int chapterFor(int id) => _chapters[id] ?? _positions[id]?.chapter ?? 0;
   Novel? cachedNovel(int id) => _known[id];
-  ReadingPosition? positionFor(int id) => _positions[id];
+  ReadingPosition? positionFor(int id) {
+    if (_positions[id] case final position?) return position;
+    final anchor = _readJsonObjectPreference(_chapterProgressAnchorKey(id));
+    if (anchor == null || anchor['chapter'] != _chapters[id]) return null;
+    return ReadingPosition(
+      chapter: _chapters[id]!,
+      chapterId: _chapters[id]!,
+      offset: 0,
+      fraction: (anchor['fraction'] as num?)?.toDouble() ?? 0,
+      fontSize: fontSize,
+      width: 0,
+      updatedAt: 0,
+    );
+  }
+
   List<ReaderBookmark> bookmarksFor(int id) =>
       List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
 
   int? chapterForPosition(Novel novel, ReadingPosition position) {
+    if (position.revision.isNotEmpty &&
+        novel.chapters.isNotEmpty &&
+        position.revision != novel.chapters.first.revision) {
+      return null;
+    }
     if (position.chapterId > 0) {
       final index = novel.chapters.indexWhere(
         (chapter) => chapter.id == position.chapterId,
@@ -555,6 +584,255 @@ class LibraryState extends ChangeNotifier {
     });
   }
 
+  LocalLibraryStore? _localChapters;
+  void bindLocalChapters(LocalLibraryStore local) {
+    _localChapters = local;
+    local.migrateProgress = migrateLocalChapterTask;
+  }
+
+  bool _acceptLocalPosition(Novel novel, int chapter) =>
+      !isLocalNovelId(novel.id) ||
+      _localChapters == null ||
+      chapter >= 0 &&
+          chapter < novel.chapters.length &&
+          _localChapters!.acceptsChapter(novel.id, novel.chapters[chapter]);
+
+  /// All consumers are prepared together before any progress is overwritten.
+  /// Replay writes the journal's target records, never reinterprets new offsets.
+  Future<void> migrateLocalChapterTask(LocalChapterRemap task, {bool readingAlreadyMigrated = false}) {
+    if (task.newTextPath.isEmpty) {
+      final local = _localChapters;
+      final book = local?.bookFor(task.bookId);
+      if (book == null) {
+        return remapChapterProgress(task.bookId, oldChapters: task.oldChapters,
+          newChapters: task.newChapters, migrationId: task.migrationId);
+      }
+      // v2 journals contain ranges only: those tasks were always re-splits of
+      // the same normalized text. Enrich them before migrating all consumers.
+      final legacyJournal = _readJsonObjectPreference(_remapJournalKey(task.bookId, task.migrationId));
+      final finalTable = task.newChapters.length == book.chapters.length &&
+          List.generate(book.chapters.length, (i) =>
+            task.newChapters[i].offset == book.chapters[i].offset &&
+            task.newChapters[i].length == book.chapters[i].length).every((v) => v);
+      final enriched = LocalChapterRemap(
+        migrationId: '${task.migrationId}:anchors-v3', bookId: task.bookId,
+        oldChapters: task.oldChapters, newChapters: task.newChapters,
+        oldTextPath: local!.textPathFor(book), newTextPath: local.textPathFor(book),
+        newRevision: finalTable ? book.revision : 'legacy-${task.migrationId}',
+        newTitles: finalTable ? book.chapters.map((c) => c.title).toList() : const [],
+      );
+      if (legacyJournal != null) {
+        return remapChapterProgress(task.bookId, oldChapters: task.oldChapters,
+          newChapters: task.newChapters, migrationId: task.migrationId).then((_) =>
+            migrateLocalChapterTask(enriched, readingAlreadyMigrated: true));
+      }
+      return migrateLocalChapterTask(enriched);
+    }
+    return _queuePositionWrite(() async {
+      final id = task.bookId;
+      final key = _remapJournalKey(id, task.migrationId);
+      var journal = _readJsonObjectPreference(key);
+      if (journal?['status'] == 'done') return;
+      if (journal == null &&
+          positionFor(id) == null &&
+          !_chapters.containsKey(id) &&
+          (_bookmarks[id]?.isEmpty ?? true) &&
+          _prefs.getString('listening.cursor.v1.$id') == null) {
+        await writeLibraryPreference(
+          _prefs,
+          key,
+          jsonEncode({
+            'version': 2,
+            'bookId': id,
+            'status': 'done',
+            'records': {},
+          }),
+        );
+        return;
+      }
+      if (journal == null) {
+        final oldText = await File(task.oldTextPath).readAsString();
+        final newText = await File(task.newTextPath).readAsString();
+        final chapters = [
+          for (var i = 0; i < task.newChapters.length; i++)
+            LocalChapterIndex(
+              i < task.newTitles.length ? task.newTitles[i] : '正文',
+              task.newChapters[i].offset,
+              task.newChapters[i].length,
+            ),
+        ];
+        ReadingPosition migrate(
+          ReadingPosition position, {
+          int withinParagraph = 0,
+        }) {
+          if (position.revision == task.newRevision) return position;
+          if (task.oldRevision.isNotEmpty && position.revision.isNotEmpty &&
+              position.revision != task.oldRevision) {
+            throw StateError('阅读锚点属于其他目录修订：$id');
+          }
+          if (position.chapter < 0 ||
+              position.chapter >= task.oldChapters.length) {
+            throw StateError('旧阅读章节越界：$id');
+          }
+          final old = task.oldChapters[position.chapter];
+          final start = old.offset.clamp(0, oldText.length);
+          final end = (old.offset + old.length).clamp(start, oldText.length);
+          final raw = oldText.substring(start, end);
+          final body = raw.trim();
+          final trim = raw.length - raw.trimLeft().length;
+          final local =
+              position.textOffset ??
+              (position.paragraphIndex != null
+                  ? paragraphTextOffset(
+                          body.split('\n\n'),
+                          position.paragraphIndex!,
+                        ) +
+                        withinParagraph
+                  : (position.fraction * body.length).floor());
+          final global = relocateTextOffset(
+            oldText,
+            newText,
+            start + trim + local.clamp(0, body.length),
+          );
+          final target = locateTextAnchor(newText, chapters, global);
+          return ReadingPosition(
+            chapter: target.chapter,
+            chapterId: target.chapter,
+            offset: 0,
+            fraction: target.fraction,
+            fontSize: position.fontSize,
+            width: 0,
+            updatedAt: position.updatedAt,
+            lineHeight: position.lineHeight,
+            paragraphIndex: target.paragraph,
+            paragraphFraction: position.paragraphFraction,
+            textScale: position.textScale,
+            typeface: position.typeface,
+            textOffset: target.textOffset,
+            revision: task.newRevision,
+          );
+        }
+
+        final records = <String, Object?>{};
+        final current =
+            positionFor(id) ??
+            (_chapters.containsKey(id)
+                ? ReadingPosition(
+                    chapter: _chapters[id]!,
+                    chapterId: _chapters[id]!,
+                    offset: 0,
+                    fraction: 0,
+                    fontSize: fontSize,
+                    width: 0,
+                    updatedAt: 0,
+                  )
+                : null);
+        if (current != null) {
+          ReadingPosition migrateCurrentPosition() {
+            if (!readingAlreadyMigrated) return migrate(current);
+            final c = chapters[current.chapter];
+            final target = locateTextAnchor(newText, chapters,
+              c.offset + (current.fraction * c.length).floor());
+            return ReadingPosition.fromJson({...current.toJson(),
+              'revision': task.newRevision, 'textOffset': target.textOffset,
+              'paragraphIndex': target.paragraph, 'width': 0, 'offset': 0});
+          }
+          final position = migrateCurrentPosition();
+          records['reading_position_$id'] = jsonEncode(position.toJson());
+          records['chapter_$id'] = position.chapter;
+          records[_chapterProgressAnchorKey(id)] = null;
+        }
+        final marks = _bookmarks[id];
+        if (marks != null) {
+          records['reader_bookmarks_$id'] = jsonEncode([
+            for (final mark in marks)
+              (() {
+                final p = migrate(mark.position);
+                return ReaderBookmark(
+                  id: mark.id,
+                  chapterTitle: chapters[p.chapter].title,
+                  position: p,
+                ).toJson();
+              })(),
+          ]);
+        }
+        final cursorKey = 'listening.cursor.v1.$id';
+        final cursor = _readJsonObjectPreference(cursorKey);
+        if (cursor != null) {
+          final p = migrate(
+            ReadingPosition(
+              chapter: cursor['chapter'] as int? ?? 0,
+              chapterId: cursor['chapterId'] as int? ?? 0,
+              offset: 0,
+              fraction: 0,
+              fontSize: fontSize,
+              width: 0,
+              updatedAt: 0,
+              revision: cursor['revision'] as String? ?? '',
+              textOffset: cursor['textOffset'] as int?,
+              paragraphIndex: cursor['paragraph'] as int? ?? 0,
+            ),
+            withinParagraph: cursor['start'] as int? ?? 0,
+          );
+          final c = chapters[p.chapter];
+          final body = newText.substring(c.offset, c.offset + c.length).trim();
+          records[cursorKey] = jsonEncode({
+            ...cursor,
+            'chapter': p.chapter,
+            'chapterId': p.chapterId,
+            'paragraph': p.paragraphIndex,
+            'start':
+                p.textOffset! -
+                paragraphTextOffset(body.split('\n\n'), p.paragraphIndex!),
+            'textOffset': p.textOffset,
+            'revision': task.newRevision,
+            'positionMs': 0,
+            'segmentHash': '',
+          });
+        }
+        journal = {
+          'version': 2,
+          'bookId': id,
+          'status': 'prepared',
+          'records': records,
+        };
+        await writeLibraryPreference(_prefs, key, jsonEncode(journal));
+      }
+      if (journal['bookId'] != id || journal['records'] is! Map) {
+        throw StateError('章节迁移日志损坏：$id');
+      }
+      final records = Map<String, dynamic>.from(journal['records'] as Map);
+      for (final record in records.entries) {
+        if (record.value == null) {
+          if (!await _prefs.remove(record.key)) {
+            throw StateError('迁移保存失败：${record.key}');
+          }
+        } else {
+          await writeLibraryPreference(_prefs, record.key, record.value);
+        }
+      }
+      await writeLibraryPreference(
+        _prefs,
+        key,
+        jsonEncode({...journal, 'status': 'done'}),
+      );
+      if (records['reading_position_$id'] case final String raw) {
+        _positions[id] = ReadingPosition.fromJson(
+          jsonDecode(raw) as Map<String, dynamic>,
+        );
+        _chapters[id] = _positions[id]!.chapter;
+      }
+      if (records['reader_bookmarks_$id'] case final String raw) {
+        _bookmarks[id] = [
+          for (final item in jsonDecode(raw) as List)
+            ReaderBookmark.fromJson(Map<String, dynamic>.from(item as Map)),
+        ];
+        _bookmarkChanges.notifyListeners();
+      }
+      notifyListeners();
+    });
+  }
+
   String _chapterProgressAnchorKey(int id) {
     return 'reading_anchor_$id';
   }
@@ -734,9 +1012,7 @@ class LibraryState extends ChangeNotifier {
         if (storedIndex is! num ||
             storedFraction is! num ||
             storedGlobal is! num) {
-          throw FormatException(
-            'invalid remap journal: $journalKey',
-          );
+          throw FormatException('invalid remap journal: $journalKey');
         }
         newIndex = storedIndex.toInt();
         newFraction = storedFraction.toDouble().clamp(0.0, 1.0).toDouble();
@@ -787,10 +1063,7 @@ class LibraryState extends ChangeNotifier {
           fallbackIndex: oldIndex,
         );
         final newChapter = newChapters[newIndex];
-        newFraction = _fractionForGlobalOffset(
-          newChapter,
-          globalOffset,
-        );
+        newFraction = _fractionForGlobalOffset(newChapter, globalOffset);
         hasPosition = pos != null;
         // 先写 prepared journal。后续任一步失败，下一次重放都使用
         // 同一个目标位置，不会根据已经部分写入的新状态重新计算。
@@ -858,11 +1131,7 @@ class LibraryState extends ChangeNotifier {
       }
       _chapters[id] = newIndex;
       // 位置或锚点写成功后再写章节键。
-      await writeLibraryPreference(
-        _prefs,
-        'chapter_$id',
-        newIndex,
-      );
+      await writeLibraryPreference(_prefs, 'chapter_$id', newIndex);
       // journal 完成标记最后写。即使进程在这之前退出，下一次也会
       // 重复写入同一个目标，属于幂等重放。
       await writeLibraryPreference(
@@ -983,6 +1252,7 @@ class LibraryState extends ChangeNotifier {
         (_) => addBookmark(novel: novel, position: position),
       );
     }
+    if (!_acceptLocalPosition(novel, position.chapter)) return null;
     final index = chapterForPosition(novel, position);
     if (novel.id <= 0 ||
         index == null ||
@@ -998,6 +1268,7 @@ class LibraryState extends ChangeNotifier {
     }
     ReaderBookmark? result;
     await _queuePositionWrite(() async {
+      if (!_acceptLocalPosition(novel, position.chapter)) return;
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       for (final mark in marks) {
         if (chapterForPosition(novel, mark.position) == index &&
@@ -1186,6 +1457,7 @@ class LibraryState extends ChangeNotifier {
     double paragraphFraction = 0,
     double textScale = 1,
     String? typeface,
+    int? textOffset,
   }) {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
@@ -1200,9 +1472,11 @@ class LibraryState extends ChangeNotifier {
           paragraphFraction: paragraphFraction,
           textScale: textScale,
           typeface: typeface,
+          textOffset: textOffset,
         ),
       );
     }
+    if (!_acceptLocalPosition(novel, chapter)) return Future.value();
     if (novel.id <= 0 ||
         !offset.isFinite ||
         !maximum.isFinite ||
@@ -1216,6 +1490,8 @@ class LibraryState extends ChangeNotifier {
     final position = ReadingPosition(
       chapter: chapter,
       chapterId: novel.chapters[chapter].id,
+      revision: novel.chapters[chapter].revision,
+      textOffset: textOffset,
       offset: offset.clamp(0, double.infinity),
       fraction: maximum > 0 ? (offset / maximum).clamp(0, 1) : 0,
       fontSize: fontSize,
@@ -1240,6 +1516,7 @@ class LibraryState extends ChangeNotifier {
     final snapshot = _novelSnapshot(novel);
     final record = jsonEncode(position.toJson());
     return _queuePositionWrite(() async {
+      if (!_acceptLocalPosition(novel, chapter)) return;
       if (chapterChanged) {
         await writeLibraryPreference(_prefs, 'chapter_${novel.id}', chapter);
       }
@@ -1341,19 +1618,22 @@ class LibraryState extends ChangeNotifier {
     final inflight = _fontLoadInflight[family];
     if (inflight != null) return inflight;
     late final Future<bool> task;
-    task = _doLoadImportedFont(family, path).then((ok) {
-      // 仅当仍是当前任务时才清理映射（防御性，避免误删更新的任务）。
-      if (identical(_fontLoadInflight[family], task)) {
-        _fontLoadInflight.remove(family);
-      }
-      if (ok) _loadedFontFamilies.add(family);
-      return ok;
-    }, onError: (Object _) {
-      if (identical(_fontLoadInflight[family], task)) {
-        _fontLoadInflight.remove(family);
-      }
-      return false;
-    });
+    task = _doLoadImportedFont(family, path).then(
+      (ok) {
+        // 仅当仍是当前任务时才清理映射（防御性，避免误删更新的任务）。
+        if (identical(_fontLoadInflight[family], task)) {
+          _fontLoadInflight.remove(family);
+        }
+        if (ok) _loadedFontFamilies.add(family);
+        return ok;
+      },
+      onError: (Object _) {
+        if (identical(_fontLoadInflight[family], task)) {
+          _fontLoadInflight.remove(family);
+        }
+        return false;
+      },
+    );
     _fontLoadInflight[family] = task;
     return task;
   }
@@ -1436,7 +1716,10 @@ class LibraryState extends ChangeNotifier {
 
   /// 注册从手机导入的字体文件（文件已由原生层复制到私有目录）。
   /// 返回新字体的稳定 ID。
-  Future<String> registerImportedFont(String filePath, String displayName) async {
+  Future<String> registerImportedFont(
+    String filePath,
+    String displayName,
+  ) async {
     final file = File(filePath);
     if (!await file.exists()) throw StateError('字体文件不存在');
     final id =

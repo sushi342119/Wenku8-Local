@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/app_ui.dart';
+import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/offline_cache.dart';
@@ -53,6 +54,7 @@ void main({
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
     state = await LibraryState.load();
+    await TagStore.load();
     directory = await Directory.systemTemp.createTemp('novel8-detail-polish-');
     cache = OfflineCacheStore(directory);
   });

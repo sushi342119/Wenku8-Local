@@ -6,6 +6,7 @@ import 'models.dart';
 class ListeningStore {
   ListeningStore(this.preferences);
   final SharedPreferences preferences;
+  bool Function(ListeningCursor)? acceptsCursor;
   Future<void> _writes = Future.value();
   Future<void> _write(Future<bool> Function() action, String message) {
     final next = _writes.then((_) async {
@@ -66,10 +67,12 @@ class ListeningStore {
   }
 
   Future<void> saveCursor(ListeningCursor cursor) => _write(
-    () => preferences.setString(
-      'listening.cursor.v1.${cursor.novelId}',
-      jsonEncode(cursor.toJson()),
-    ),
+    () => acceptsCursor != null && !acceptsCursor!(cursor)
+        ? Future.value(true)
+        : preferences.setString(
+            'listening.cursor.v1.${cursor.novelId}',
+            jsonEncode(cursor.toJson()),
+          ),
     '续听位置保存失败',
   );
 }

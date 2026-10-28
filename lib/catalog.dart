@@ -83,7 +83,16 @@ class Novel {
 }
 
 class NovelChapter {
-  const NovelChapter(this.title, this.content, {this.id = 0});
+  const NovelChapter(
+    this.title,
+    this.content, {
+    this.id = 0,
+    this.revision = '',
+    this.volume = '',
+  });
+
+  final String revision;
+  final String volume;
 
   final String title;
   final String content;

@@ -40,7 +40,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     }
     return [
       for (var index = 0; index < chapters.length; index++)
-        if (chapters[index].title.toLowerCase().contains(text)) index,
+        if (chapters[index].title.toLowerCase().contains(text) || chapters[index].volume.toLowerCase().contains(text)) index,
     ];
   }
 
@@ -204,9 +204,13 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
               ),
               const SizedBox(width: 7),
               Expanded(
-                child: Text(
-                  chapter.title,
-                  style: const TextStyle(fontSize: 14, height: 1.45),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (chapter.volume.isNotEmpty)
+                      Text(chapter.volume, style: const TextStyle(fontSize: 11)),
+                    Text(chapter.title, style: const TextStyle(fontSize: 14, height: 1.45)),
+                  ],
                 ),
               ),
               const SizedBox(width: 8),

@@ -54,6 +54,9 @@ Future<void> main() async {
           ),
         )
       : const DemoNovelRepository();
+  if (repository is CompositeNovelRepository) {
+    state.bindLocalChapters(repository.local);
+  }
   final listening = defaultTargetPlatform == TargetPlatform.android
       ? ListeningController(
           repository: repository,

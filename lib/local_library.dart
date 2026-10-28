@@ -4,11 +4,13 @@ import 'dart:io';
 import 'dart:isolate';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show PlatformException;
+import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
+import 'chapter_splitter.dart';
+export 'chapter_splitter.dart' show LocalChapterIndex;
 import 'local_platform.dart';
 import 'book_tags.dart';
 import 'local_record_removal.dart';
@@ -43,22 +45,7 @@ class IncompleteScanException implements Exception {
 
 enum LocalBookKind { txt, pdf }
 
-class LocalChapterIndex {
-  const LocalChapterIndex(this.title, this.offset, this.length);
-  final String title;
-  final int offset;
-  final int length;
-
-  Map<String, Object?> toJson() =>
-      {'t': title, 'o': offset, 'l': length};
-
-  factory LocalChapterIndex.fromJson(Map<String, Object?> json) =>
-      LocalChapterIndex(
-        json['t'] is String ? json['t'] as String : '正文',
-        (json['o'] as num?)?.toInt() ?? 0,
-        (json['l'] as num?)?.toInt() ?? 0,
-      );
-}
+final _bookRevisionCache = Expando<String>();
 
 /// 是否为 Unicode 空白字符。
 bool _isUnicodeWhitespace(int rune) {
@@ -113,6 +100,7 @@ class LocalBook {
     // 来源内稳定的文件身份：SAF 用 documentUri，应用文件夹用规范化绝对路径。
     this.sourceKey = '',
     this.chapterSplitVersion = 0,
+    this.textFingerprint = '',
   });
 
   final int id;
@@ -134,6 +122,18 @@ class LocalBook {
 
   /// 该书最近一次成功应用的章节切分规则版本。
   final int chapterSplitVersion;
+  final String textFingerprint;
+  String get revision => _bookRevisionCache[this] ??= sha256
+      .convert(
+        utf8.encode(
+          jsonEncode([
+            textFingerprint,
+            chapterSplitVersion,
+            chapters.map((c) => c.toJson()).toList(),
+          ]),
+        ),
+      )
+      .toString();
 
   /// 用户手动覆盖的书名/作者，为空时用文件名解析结果。
   final String? customTitle;
@@ -159,6 +159,7 @@ class LocalBook {
     List<LocalChapterIndex>? chapters,
     String? sourceId,
     int? chapterSplitVersion,
+    String? textFingerprint,
   }) => LocalBook(
     id: id,
     title: title ?? this.title,
@@ -176,6 +177,7 @@ class LocalBook {
     sourceId: sourceId ?? this.sourceId,
     sourceKey: sourceKey ?? this.sourceKey,
     chapterSplitVersion: chapterSplitVersion ?? this.chapterSplitVersion,
+    textFingerprint: textFingerprint ?? this.textFingerprint,
   );
 
   Map<String, Object?> toJson() => {
@@ -195,6 +197,7 @@ class LocalBook {
     if (sourceId.isNotEmpty) 'sourceId': sourceId,
     if (sourceKey.isNotEmpty) 'sourceKey': sourceKey,
     'chapterSplitVersion': chapterSplitVersion,
+    'textFingerprint': textFingerprint,
   };
 
   factory LocalBook.fromJson(Map<String, Object?> json) {
@@ -221,6 +224,7 @@ class LocalBook {
       sourceId: json['sourceId'] as String? ?? '',
       sourceKey: json['sourceKey'] as String? ?? '',
       chapterSplitVersion: (json['chapterSplitVersion'] as num?)?.toInt() ?? 0,
+      textFingerprint: json['textFingerprint'] as String? ?? '',
     );
   }
 }
@@ -286,6 +290,11 @@ class LocalChapterRemap {
     required this.bookId,
     required this.oldChapters,
     required this.newChapters,
+    this.oldRevision = '',
+    this.newRevision = '',
+    this.oldTextPath = '',
+    this.newTextPath = '',
+    this.newTitles = const [],
     this.status = 'pending',
     this.attempts = 0,
     this.lastError,
@@ -293,16 +302,23 @@ class LocalChapterRemap {
   });
 
   factory LocalChapterRemap.create({
+    String oldRevision = '',
+    String newRevision = '',
+    String oldTextPath = '',
+    String newTextPath = '',
+    List<String> newTitles = const [],
     required int bookId,
     required List<({int offset, int length})> oldChapters,
     required List<({int offset, int length})> newChapters,
   }) {
     return LocalChapterRemap(
-      migrationId: _chapterRemapMigrationId(
-        bookId: bookId,
-        oldChapters: oldChapters,
-        newChapters: newChapters,
-      ),
+      oldRevision: oldRevision,
+      newRevision: newRevision,
+      oldTextPath: oldTextPath,
+      newTextPath: newTextPath,
+      newTitles: newTitles,
+      migrationId:
+          '${oldRevision.isEmpty ? '' : '$oldRevision-$newRevision-'}${_chapterRemapMigrationId(bookId: bookId, oldChapters: oldChapters, newChapters: newChapters)}',
       bookId: bookId,
       oldChapters: List.unmodifiable(oldChapters),
       newChapters: List.unmodifiable(newChapters),
@@ -346,10 +362,13 @@ class LocalChapterRemap {
     return LocalChapterRemap(
       migrationId: migrationId,
       bookId: rawBookId,
-      oldChapters:
-          List.unmodifiable(_decodeChapterRanges(map['oldChapters'])),
-      newChapters:
-          List.unmodifiable(_decodeChapterRanges(map['newChapters'])),
+      oldChapters: List.unmodifiable(_decodeChapterRanges(map['oldChapters'])),
+      newChapters: List.unmodifiable(_decodeChapterRanges(map['newChapters'])),
+      oldRevision: map['oldRevision'] as String? ?? '',
+      newRevision: map['newRevision'] as String? ?? '',
+      oldTextPath: map['oldTextPath'] as String? ?? '',
+      newTextPath: map['newTextPath'] as String? ?? '',
+      newTitles: (map['newTitles'] as List?)?.cast<String>() ?? const [],
       status: rawStatus as String? ?? 'pending',
       attempts: rawAttempts as int? ?? 0,
       lastError: rawLastError as String?,
@@ -361,6 +380,8 @@ class LocalChapterRemap {
   final int bookId;
   final List<({int offset, int length})> oldChapters;
   final List<({int offset, int length})> newChapters;
+  final String oldRevision, newRevision, oldTextPath, newTextPath;
+  final List<String> newTitles;
   final String status;
   final int attempts;
   final String? lastError;
@@ -378,6 +399,11 @@ class LocalChapterRemap {
         for (final chapter in newChapters)
           {'offset': chapter.offset, 'length': chapter.length},
       ],
+      'oldRevision': oldRevision,
+      'newRevision': newRevision,
+      'oldTextPath': oldTextPath,
+      'newTextPath': newTextPath,
+      'newTitles': newTitles,
       'status': status,
       'attempts': attempts,
       'lastError': lastError,
@@ -391,6 +417,11 @@ class LocalChapterRemap {
       bookId: bookId,
       oldChapters: oldChapters,
       newChapters: newChapters,
+      oldRevision: oldRevision,
+      newRevision: newRevision,
+      oldTextPath: oldTextPath,
+      newTextPath: newTextPath,
+      newTitles: newTitles,
       status: 'failed',
       attempts: attempts + 1,
       lastError: error.toString(),
@@ -407,6 +438,7 @@ class LocalScanResult {
     required this.total,
     required this.skipped,
     this.backfilled = 0,
+    this.failures = const {},
     this.switchedRemovedIds = const [],
     this.chapterRemaps = const [],
   });
@@ -418,6 +450,7 @@ class LocalScanResult {
 
   /// 静默补算了字数的旧书数量（不计入 added/refreshed，不弹提示）。
   final int backfilled;
+  final Map<String, String> failures;
 
   /// 文件夹切换时被清理的旧来源书籍 ID（调用方据此清理书架/标签/进度）。
   final List<int> switchedRemovedIds;
@@ -429,19 +462,8 @@ class LocalScanResult {
   final List<LocalChapterRemap> chapterRemaps;
 }
 
-/// 章节标题启发式：行首的"第X章/节/回"、Chapter N、序章/番外/后记等短行。
-/// 章节标题行（切分版本 2）。实测用户书库的漏检主因：
-/// 标题行常以多个全角空格（U+3000）缩进甚至居中（十余个），旧版行首只认
-/// 半角空白且最多 8 个；数字常为全角（第１章）；标题尾随文字可达近 40 字。
-/// 行首放宽到 32 个空白/括号字符、数字含全角、单位加「话/幕」，尾随放宽
-/// 到 40 字，配合 _splitChapters 的总长 64 字上限防正文行误报。
-final _chapterTitlePattern = RegExp(
-  r'^[ \t　【\[（(]{0,32}(第[一二三四五六七八九十百千零〇两\d０-９ \t　]+[章节回集卷部篇话幕]|卷[一二三四五六七八九十百千零〇两\d０-９]+|Chapter[ \t]*\d+|序章|序曲|楔子|终章|终曲|番外(?:[ \t]*\d+)?|后记|前言|引子|尾声)[^\n]{0,40}$',
-  multiLine: true,
-);
-
-/// 章节切分规则版本：规则变化时递增，scan 据此对存量书重切一次。
-const _chapterSplitVersion = 2;
+/// 章节切分规则版本；与应用版本独立。
+const _chapterSplitVersion = 3;
 
 const _shelfPalette = [
   [Color(0xFF5C4A3A), Color(0xFF8A6F55)],
@@ -567,6 +589,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   int _indexForBook(int id) => _bookPositions[id] ?? -1;
 
   void _replaceBook(int index, LocalBook book) {
+    if (_books[index].revision != book.revision) _invalidateTextCache(book.id);
     _books[index] = book;
     _bookPositions[book.id] = index;
     _dirtyBookIds.add(book.id);
@@ -623,9 +646,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final changedIds = Set<int>.of(_dirtyBookIds);
     final dir = _booksDir;
     if (!await dir.exists()) await dir.create(recursive: true);
-    final json = jsonEncode({
-      'books': _books.map((b) => b.toJson()).toList(),
-    });
+    final json = jsonEncode({'books': _books.map((b) => b.toJson()).toList()});
     // 原子写入：先写临时文件再重命名，避免崩溃丢索引（修复#5）。
     final tmp = File('${dir.path}/index.json.tmp');
     final target = File('${dir.path}/index.json');
@@ -648,7 +669,86 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       }
     }
     _dirtyBookIds.clear();
+    notifyListeners();
   }
+
+  Future<void> Function(LocalChapterRemap)? migrateProgress;
+
+  bool isMigrationPending(int id) =>
+      _dirtyBookIds.contains(id) ||
+      _readPendingChapterRemaps().any((r) => r.bookId == id);
+
+  bool acceptsChapter(int id, NovelChapter chapter) =>
+      !isMigrationPending(id) && bookFor(id)?.revision == chapter.revision;
+
+  LocalChapterRemap _remapFor(LocalBook old, LocalBook next) =>
+      LocalChapterRemap.create(
+        bookId: old.id,
+        oldRevision: old.revision,
+        newRevision: next.revision,
+        oldTextPath: textPathFor(old),
+        newTextPath: textPathFor(next),
+        newTitles: next.chapters.map((c) => c.title).toList(),
+        oldChapters: [
+          for (final c in old.chapters) (offset: c.offset, length: c.length),
+        ],
+        newChapters: [
+          for (final c in next.chapters) (offset: c.offset, length: c.length),
+        ],
+      );
+
+  Future<void> ensureReady(int id) => _synchronized(() async {
+    // A failed index rename leaves only staged candidates in memory. Commit
+    // them before exposing or migrating to that content revision.
+    if (_dirtyBookIds.contains(id)) await _saveIndex();
+    var book = bookFor(id);
+    if (book == null || book.kind != LocalBookKind.txt) return;
+    if (book.chapterSplitVersion != _chapterSplitVersion) {
+      final remaps = <LocalChapterRemap>[];
+      final updates = <int, LocalBook>{};
+      final outcome = await _refreshBookIfNeeded(
+        book,
+        chapterRemaps: remaps,
+        chapterUpdates: updates,
+        chaptersStale: true,
+      );
+      if (outcome.failed) throw StateError('章节重建失败：${book.displayTitle}');
+      await _stageChapterRemaps(remaps);
+      for (final update in updates.values) {
+        _replaceBook(_indexForBook(id), update);
+      }
+      await _saveIndex();
+    }
+    while (true) {
+      final tasks = pendingChapterRemaps.where((r) => r.bookId == id).toList();
+      if (tasks.isEmpty) {
+        final currentRevision = _savedBookRefs[id]?.revision;
+        final queued = _readPendingChapterRemaps();
+        final orphan = queued.where((r) => r.bookId == id && r.oldRevision == currentRevision &&
+            r.newRevision.isNotEmpty && r.newRevision != currentRevision).toList();
+        if (orphan.isNotEmpty) {
+          await _writePendingChapterRemaps(queued.where((r) => !orphan.contains(r)));
+        }
+        break;
+      }
+      final migrate = migrateProgress;
+      if (migrate == null) throw StateError('阅读进度待迁移，请完成书库刷新');
+      final task = tasks.first;
+      try { await migrate(task); }
+      catch (error) {
+        await _writePendingChapterRemaps(_readPendingChapterRemaps().map((r) =>
+          r.bookId == id && r.migrationId == task.migrationId ? r.withFailure(error) : r));
+        rethrow;
+      }
+      await _writePendingChapterRemaps(
+        _readPendingChapterRemaps().where(
+          (r) => r.bookId != id || r.migrationId != task.migrationId,
+        ),
+      );
+      notifyListeners();
+    }
+    if (isMigrationPending(id)) throw StateError('章节更新尚未提交');
+  });
 
   /// ---- 章节迁移任务（可恢复）----
   List<LocalChapterRemap> _readPendingChapterRemaps() {
@@ -656,13 +756,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     if (raw == null || raw.isEmpty) return const [];
     final decoded = jsonDecode(raw);
     if (decoded is! List) {
-      throw const FormatException(
-        'local chapter remap queue must be a list',
-      );
+      throw const FormatException('local chapter remap queue must be a list');
     }
-    return [
-      for (final item in decoded) LocalChapterRemap.fromJson(item),
-    ];
+    return [for (final item in decoded) LocalChapterRemap.fromJson(item)];
   }
 
   Future<void> _writePendingChapterRemaps(
@@ -673,9 +769,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     await _checkedSet(
       () => _prefs.setString(
         _pendingChapterRemapsKey,
-        jsonEncode([
-          for (final remap in remaps) remap.toJson(),
-        ]),
+        jsonEncode([for (final remap in remaps) remap.toJson()]),
       ),
       _pendingChapterRemapsKey,
     );
@@ -683,9 +777,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
 
   /// 把任务写成 journal。必须在 _saveIndex() 之前调用（扫描函数内部，
   /// 已在 _synchronized 保护内，不要再套一层锁）。
-  Future<void> _stageChapterRemaps(
-    Iterable<LocalChapterRemap> remaps,
-  ) async {
+  Future<void> _stageChapterRemaps(Iterable<LocalChapterRemap> remaps) async {
     final incoming = remaps.toList();
     if (incoming.isEmpty) return;
     final merged = <String, LocalChapterRemap>{
@@ -761,7 +853,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final chain = entry.value;
       var end = -1;
       for (var i = 0; i < chain.length; i++) {
-        if (_sameRemapRanges(chain[i].newChapters, saved)) end = i;
+        if (_sameRemapRanges(chain[i].newChapters, saved) &&
+            (chain[i].newRevision.isEmpty ||
+             chain[i].newRevision == _savedBookRefs[entry.key]?.revision)) {
+          end = i;
+        }
       }
       if (end < 0) continue;
       var start = end;
@@ -769,7 +865,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
           _sameRemapRanges(
             chain[start - 1].newChapters,
             chain[start].oldChapters,
-          )) {
+          ) && (chain[start - 1].newRevision.isEmpty || chain[start].oldRevision.isEmpty ||
+              chain[start - 1].newRevision == chain[start].oldRevision)) {
         start--;
       }
       for (var i = start; i <= end; i++) {
@@ -858,6 +955,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       } else {
         await _writePendingChapterRemaps(next);
       }
+      notifyListeners();
     });
   }
 
@@ -927,7 +1025,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             pending.add(oldUri);
             await _checkedSet(
               () => _prefs.setStringList(
-                  'local_library_pending_cleanups', pending),
+                'local_library_pending_cleanups',
+                pending,
+              ),
               'local_library_pending_cleanups',
             );
           }
@@ -1208,7 +1308,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }
 
   /// 扫描已选文件夹：新增导入、内容变化的重新导入、源文件已删的移除。
-  Future<LocalScanResult> scan() => _synchronized(() async {
+  Future<LocalScanResult> scan({bool force = false}) => _synchronized(() async {
     // 扫描入口必须先恢复，尤其不能先扫描导入、最后才恢复。
     await _recordRemovalJournal.recover();
     final treeUri = folderUri;
@@ -1221,6 +1321,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       throw IncompleteScanException(scanResult.reason ?? 'unknown');
     }
     final entries = scanResult.entries;
+    final failures = <String, String>{};
     final chapterRemaps = <LocalChapterRemap>[];
     final chapterUpdates = <int, LocalBook>{};
     // 忽略名单对账移除的书：先只移除记录，其内部副本等索引落盘后再删。
@@ -1229,12 +1330,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final byKey = {
       for (final book in _books)
         if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
-          book.sourceKey: book
+          book.sourceKey: book,
     };
     // 兼容旧数据：没有 sourceId 的书用 fileUri 匹配。
     final byUriLegacy = {
       for (final book in _books)
-        if (book.sourceId.isEmpty) book.fileUri: book
+        if (book.sourceId.isEmpty) book.fileUri: book,
     };
     final seen = <String>{};
     final ignored = _readIgnoredSources();
@@ -1275,34 +1376,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final modified = (entry['modified'] as num?)?.toInt() ?? 0;
       var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
-        if (existing.size == size && existing.modified == modified) {
-          // 旧数据回填来源标识：sourceId 为空的书在忽略名单等逻辑里需要
-          // 明确来源，按当前扫描来源补齐（sourceKey 同步为本次 uri）。
-          if (existing.sourceId.isEmpty) {
-            final idx = _indexForBook(existing.id);
-            if (idx >= 0) {
-              existing = existing.copyWith(
-                sourceId: sourceId,
-                sourceKey: sourceKey,
-                customTitle: existing.customTitle,
-                customAuthor: existing.customAuthor,
-              );
-              _replaceBook(idx, existing);
-            }
-          }
-          final outcome = await _refreshBookIfNeeded(
-            existing,
-            chapterRemaps: chapterRemaps,
-            chapterUpdates: chapterUpdates,
-            chaptersStale: existing.chapterSplitVersion != _chapterSplitVersion,
-          );
-          if (outcome.wordCountBackfilled) backfilled++;
-          if (outcome.chaptersRefreshed) refreshed++;
+        if (existing.kind == LocalBookKind.pdf && !force &&
+            existing.size == size && existing.modified == modified) {
           continue;
         }
-        // 先尝试导入，成功后再删除旧数据（修复#3：避免失败后丢失）。
         LocalBook? book;
         try {
+          await _preserveCachedSnapshot(existing);
           book = await _importEntry(
             uri: uri,
             name: name,
@@ -1312,32 +1392,47 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             sourceKey: sourceKey,
             existing: existing,
           );
-        } catch (_) {
+        } catch (error) {
+          failures['$name ($sourceKey)'] = error.toString();
           skipped++;
           continue;
         }
         if (book == null) {
+          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
           skipped++;
           continue;
         }
-        // 刷新时 ID 相同，_importEntry 已原地覆盖 book_$id.txt，无需再删除
-        // （否则会删掉刚写入的新文件）。只有 ID 变化时才清理旧数据。
-        if (book.id != existing.id) {
-          await _deleteBookData(existing);
+        if (!force && book.revision == existing.revision &&
+            book.size == existing.size &&
+            book.modified == existing.modified &&
+            book.wordCount == existing.wordCount) {
+          continue;
         }
-        _removeBook(existing);
-        _addBook(book);
+        if (book.kind == LocalBookKind.txt && existing.chapters.isNotEmpty &&
+            book.revision != existing.revision) {
+          chapterRemaps.add(_remapFor(existing, book));
+        }
+        if (existing.wordCount == null && book.wordCount != null) backfilled++;
+        chapterUpdates[book.id] = book;
         refreshed++;
       } else {
-        final book = await _importEntry(
-          uri: uri,
-          name: name,
-          size: size,
-          modified: modified,
-          sourceId: sourceId,
-          sourceKey: sourceKey,
-        );
+        LocalBook? book;
+        try {
+          book = await _importEntry(
+            uri: uri,
+            name: name,
+            size: size,
+            modified: modified,
+            sourceId: sourceId,
+            sourceKey: sourceKey,
+          );
+        } catch (error) {
+          failures['$name ($sourceKey)'] = error.toString();
+          skipped++;
+          continue;
+        }
         if (book == null) {
+          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
           skipped++;
           continue;
         }
@@ -1368,10 +1463,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     // 只清理当前来源的书籍，不碰其他来源（修复#1）。
     // 能到这里扫描一定是完整的（不完整已在开头抛错）。
     final removedBooks = _books
-        .where((b) =>
-            b.sourceId == sourceId &&
-            b.sourceKey.isNotEmpty &&
-            !seen.contains(b.sourceKey))
+        .where(
+          (b) =>
+              b.sourceId == sourceId &&
+              b.sourceKey.isNotEmpty &&
+              !seen.contains(b.sourceKey),
+        )
         .toList();
     // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
     if (removedBooks.isNotEmpty) {
@@ -1405,9 +1502,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final toDelete = <LocalBook>[];
     for (final oldUri in toClean) {
       final oldSourceId = 'saf:$oldUri';
-      toDelete.addAll(
-        _books.where((b) => b.sourceId == oldSourceId),
-      );
+      toDelete.addAll(_books.where((b) => b.sourceId == oldSourceId));
     }
     final switchedRemovedIds = toDelete.map((b) => b.id).toList();
     // 先暂存被删书籍的标签（供切回时恢复），再入关联清理队列。
@@ -1426,7 +1521,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       }
       await _checkedSet(
         () => _prefs.setStringList(
-            'local_library_associated_cleanup', merged.toList()),
+          'local_library_associated_cleanup',
+          merged.toList(),
+        ),
         'local_library_associated_cleanup',
       );
     }
@@ -1469,6 +1566,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       total: _books.length,
       skipped: skipped,
       backfilled: backfilled,
+      failures: failures,
       switchedRemovedIds: switchedRemovedIds,
       // 返回持久化队列而非仅本轮新发现的迁移：上轮已落盘新表、
       // 但进度未确认的任务，下次扫描仍要返回。
@@ -1486,7 +1584,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     return novels.path;
   }
 
-  Future<LocalScanResult> scanAppFolder() => _synchronized(() async {
+  Future<LocalScanResult> scanAppFolder({
+    bool force = false,
+  }) => _synchronized(() async {
     // 与 scan() 同规则：先恢复仅移出待办，再扫描导入。
     await _recordRemovalJournal.recover();
     final folderPath = await appFolderPath;
@@ -1495,15 +1595,16 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     final byKey = {
       for (final book in _books)
         if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
-          book.sourceKey: book
+          book.sourceKey: book,
     };
     final byUriLegacy = {
       for (final book in _books)
         if (book.sourceId.isEmpty && book.fileUri.startsWith('file://'))
-          book.fileUri: book
+          book.fileUri: book,
     };
     final seen = <String>{};
     final ignored = _readIgnoredSources();
+    final failures = <String, String>{};
     final chapterRemaps = <LocalChapterRemap>[];
     final chapterUpdates = <int, LocalBook>{};
     final reconciledData = <LocalBook>[];
@@ -1552,32 +1653,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final modified = stat.modified.millisecondsSinceEpoch;
       var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
-        if (existing.size == size && existing.modified == modified) {
-          // 旧数据回填来源标识（与 scan() 同规则）。
-          if (existing.sourceId.isEmpty) {
-            final idx = _indexForBook(existing.id);
-            if (idx >= 0) {
-              existing = existing.copyWith(
-                sourceId: sourceId,
-                sourceKey: sourceKey,
-                customTitle: existing.customTitle,
-                customAuthor: existing.customAuthor,
-              );
-              _replaceBook(idx, existing);
-            }
-          }
-          final outcome = await _refreshBookIfNeeded(
-            existing,
-            chapterRemaps: chapterRemaps,
-            chapterUpdates: chapterUpdates,
-            chaptersStale: existing.chapterSplitVersion != _chapterSplitVersion,
-          );
-          if (outcome.wordCountBackfilled) backfilled++;
-          if (outcome.chaptersRefreshed) refreshed++;
-          continue;
-        }
         LocalBook? book;
         try {
+          await _preserveCachedSnapshot(existing);
           book = await _importDirectFile(
             path: file.path,
             name: name,
@@ -1587,31 +1665,47 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             sourceKey: sourceKey,
             existing: existing,
           );
-        } catch (_) {
+        } catch (error) {
+          failures['$name ($sourceKey)'] = error.toString();
           skipped++;
           continue;
         }
         if (book == null) {
+          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
           skipped++;
           continue;
         }
-        // 刷新时 ID 相同，已原地覆盖，无需删除（否则删掉新文件）。
-        if (book.id != existing.id) {
-          await _deleteBookData(existing);
+        if (!force && book.revision == existing.revision &&
+            book.size == existing.size &&
+            book.modified == existing.modified &&
+            book.wordCount == existing.wordCount) {
+          continue;
         }
-        _removeBook(existing);
-        _addBook(book);
+        if (book.kind == LocalBookKind.txt && existing.chapters.isNotEmpty &&
+            book.revision != existing.revision) {
+          chapterRemaps.add(_remapFor(existing, book));
+        }
+        if (existing.wordCount == null && book.wordCount != null) backfilled++;
+        chapterUpdates[book.id] = book;
         refreshed++;
       } else {
-        final book = await _importDirectFile(
-          path: file.path,
-          name: name,
-          size: size,
-          modified: modified,
-          sourceId: sourceId,
-          sourceKey: sourceKey,
-        );
+        LocalBook? book;
+        try {
+          book = await _importDirectFile(
+            path: file.path,
+            name: name,
+            size: size,
+            modified: modified,
+            sourceId: sourceId,
+            sourceKey: sourceKey,
+          );
+        } catch (error) {
+          failures['$name ($sourceKey)'] = error.toString();
+          skipped++;
+          continue;
+        }
         if (book == null) {
+          failures['$name ($sourceKey)'] = '文件为空、无法解码或超过导入大小限制';
           skipped++;
           continue;
         }
@@ -1621,10 +1715,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
     // 只清理当前来源的书籍（修复#1）。
     final appRemovedBooks = _books
-        .where((b) =>
-            b.sourceId == sourceId &&
-            b.sourceKey.isNotEmpty &&
-            !seen.contains(b.sourceKey))
+        .where(
+          (b) =>
+              b.sourceId == sourceId &&
+              b.sourceKey.isNotEmpty &&
+              !seen.contains(b.sourceKey),
+        )
         .toList();
     // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
     if (appRemovedBooks.isNotEmpty) {
@@ -1673,6 +1769,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       total: _books.length,
       skipped: skipped,
       backfilled: backfilled,
+      failures: failures,
       // 返回持久化队列而非仅本轮新发现的迁移（与 scan() 同规则）。
       chapterRemaps: pendingChapterRemaps,
     );
@@ -1689,18 +1786,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     LocalBook? existing,
   }) async {
     const maxSize = 16 * 1024 * 1024;
-    if (size > maxSize) return null;
+    if (size > maxSize) throw const FormatException('TXT 超过 16 MiB 导入上限');
     final id = existing?.id ?? _nextId();
-    _TextMetadata processed;
-    try {
-      processed = await _importText(path, id, direct: true);
-    } on _TextSourceException {
-      return null;
-    } on FormatException {
-      return null;
-    } on PlatformException {
-      return null;
-    }
+    final processed = await _importText(path, id, direct: true);
     if (processed.inputLength == 0) return null;
     return LocalBook(
       id: id,
@@ -1711,6 +1799,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       kind: LocalBookKind.txt,
       size: size,
       modified: modified,
+      textFingerprint: processed.fingerprint,
       chapters: processed.chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
@@ -1780,16 +1869,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       } catch (_) {
         // 来源无法确认时拒绝此次移出，不能先删记录再让下次扫描
         // 重新导入：记录保留，用户先扫描原目录回填来源后再移出。
-        throw const BookCleanupFailed(
-          '无法确认源文件身份，请先扫描原目录后重试',
-        );
+        throw const BookCleanupFailed('无法确认源文件身份，请先扫描原目录后重试');
       }
     }
     try {
-      await _recordRemovalJournal.remove(
-        bookId: id,
-        ignoreKey: ignoreKey,
-      );
+      await _recordRemovalJournal.remove(bookId: id, ignoreKey: ignoreKey);
     } on RecordRemovalPending {
       rethrow;
     } catch (_) {
@@ -1938,7 +2022,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     _invalidateTextCache(book.id);
     var ok = true;
     try {
-      final textFile = File('${_booksDir.path}/book_${book.id}.txt');
+      final textFile = File(textPathFor(book));
       if (await textFile.exists()) await textFile.delete();
     } catch (_) {
       ok = false;
@@ -2001,6 +2085,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       kind: kind,
       size: size,
       modified: modified,
+      textFingerprint: processed.fingerprint,
       chapters: processed.chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
@@ -2035,28 +2120,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }
 
   /// 章节切分：标题行做章节名，正文从标题行下一行开始。
-  static List<LocalChapterIndex> _splitChapters(String text) {
-    final matches = _chapterTitlePattern.allMatches(text).toList();
-    final valid = <RegExpMatch>[];
-    for (final match in matches) {
-      final title = match.group(0)!.trim();
-      if (title.isNotEmpty && title.length <= 64) valid.add(match);
-    }
-    if (valid.length < 2) {
-      return [LocalChapterIndex('正文', 0, text.length)];
-    }
-    final chapters = <LocalChapterIndex>[];
-    for (var i = 0; i < valid.length; i++) {
-      final title = valid[i].group(0)!.trim();
-      final lineEnd = text.indexOf('\n', valid[i].end);
-      final contentStart = lineEnd < 0 ? text.length : lineEnd + 1;
-      final end = i + 1 < valid.length ? valid[i + 1].start : text.length;
-      chapters.add(
-        LocalChapterIndex(title, contentStart, (end - contentStart).clamp(0, text.length)),
-      );
-    }
-    return chapters;
-  }
+  static List<LocalChapterIndex> _splitChapters(String text) =>
+      splitLocalChapters(text);
 
   @visibleForTesting
   static List<LocalChapterIndex> splitChaptersForTest(String text) =>
@@ -2082,12 +2147,20 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             );
       final result = await _textWorker.analyze(
         path,
-        outputPath: '${_booksDir.path}/book_$id.txt',
+        outputPath: '${_booksDir.path}/book_$id.staging',
         normalize: true,
         maxBytes: temporary == null ? 16 * 1024 * 1024 : null,
         preserveBom: temporary != null,
       );
-      if (result.inputLength > 0) _invalidateTextCache(id);
+      if (result.inputLength > 0) {
+        final staged = File('${_booksDir.path}/book_$id.staging');
+        final target = '${_booksDir.path}/book_${id}_${result.fingerprint}.txt';
+        if (!await File(target).exists()) {
+          await staged.rename(target);
+        } else {
+          await staged.delete();
+        }
+      }
       return result;
     } finally {
       if (temporary != null) {
@@ -2100,22 +2173,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
   }
 
+  Future<void> _preserveCachedSnapshot(LocalBook book) async {
+    final cached = _textCache[book.id];
+    if (cached == null) return;
+    final file = File(textPathFor(book));
+    if (!await file.exists()) await file.writeAsString(cached, flush: true);
+  }
+
+  String textPathFor(LocalBook book) => book.textFingerprint.isEmpty
+      ? '${_booksDir.path}/book_${book.id}.txt'
+      : '${_booksDir.path}/book_${book.id}_${book.textFingerprint}.txt';
+
   Future<({String path, bool recovered})> _ensureBookTextPath(
     LocalBook book,
   ) async {
-    final file = File('${_booksDir.path}/book_${book.id}.txt');
-    final recovered = !await file.exists();
-    if (recovered) {
-      // Preserve the existing recovery behavior for a removed internal copy.
-      final prepared = File(await LocalPlatform.prepareLocalText(book.fileUri));
-      try {
-        await file.parent.create(recursive: true);
-        await prepared.rename(file.path);
-      } finally {
-        if (await prepared.exists()) await prepared.delete();
-      }
+    final file = File(textPathFor(book));
+    if (await file.exists()) return (path: file.path, recovered: false);
+    final result = await _importText(
+      book.sourceId == 'appFolder:novels' ? book.sourceKey : book.fileUri,
+      book.id,
+      direct: book.sourceId == 'appFolder:novels',
+    );
+    if (book.textFingerprint.isNotEmpty &&
+        result.fingerprint != book.textFingerprint) {
+      throw StateError('源文件内容已变化，请重新扫描：${book.displayTitle}');
     }
-    return (path: file.path, recovered: recovered);
+    final path = '${_booksDir.path}/book_${book.id}_${result.fingerprint}.txt';
+    if (book.textFingerprint.isEmpty) await File(path).copy(file.path);
+    return (path: file.path, recovered: true);
   }
 
   Future<String> _readBookText(LocalBook book) {
@@ -2133,16 +2218,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
           final current = bookFor(book.id);
           if (current == null) return '';
           final source = await _ensureBookTextPath(current);
-          final text = await _textWorker.read(
-            source.path,
-            preserveBom: source.recovered,
-          );
+          final text = await _textWorker.read(source.path, preserveBom: true);
           if (identical(_textReads[book.id], future)) {
-            // A recovered native string keeps its BOM on the first return;
-            // later reads of its UTF-8 copy consume it, as File.readAsString did.
-            final cached = source.recovered && text.startsWith('\uFEFF')
-                ? text.substring(1) : text;
-            _cacheText(book.id, cached);
+            _cacheText(book.id, text);
           }
           return text;
         }).whenComplete(() {
@@ -2164,6 +2242,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     });
     super.dispose();
   }
+
+  final _refreshErrors = <int, String>{};
 
   /// 章节切分规则升级或旧数据缺字数时，一次读取并处理正文，复用结果。
   Future<({bool wordCountBackfilled, bool chaptersRefreshed, bool failed})>
@@ -2210,11 +2290,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final source = await _ensureBookTextPath(current);
       final processed = await _textWorker.analyze(
         source.path,
-        preserveBom: source.recovered,
-        // Previously word-count backfill restored the copy before re-splitting
-        // read it a second time. Reproduce that BOM view within the same read.
-        stripBomForChapters: source.recovered && needsWordCount && chaptersStale,
+        normalize: true,
+        outputPath: '${_booksDir.path}/book_${current.id}.upgrading',
       );
+      final normalized = File(
+        '${_booksDir.path}/book_${current.id}_${processed.fingerprint}.txt',
+      );
+      await File(
+        '${_booksDir.path}/book_${current.id}.upgrading',
+      ).rename(normalized.path);
       if (processed.inputLength == 0) {
         return (
           wordCountBackfilled: false,
@@ -2231,28 +2315,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         } else {
           for (var i = 0; i < old.length; i++) {
             if (processed.chapters[i].title != old[i].title ||
-                processed.chapters[i].offset != old[i].offset) {
+                processed.chapters[i].offset != old[i].offset ||
+                processed.chapters[i].length != old[i].length ||
+                processed.chapters[i].volume != old[i].volume) {
               chaptersChanged = true;
               break;
             }
           }
         }
       }
-      if (chaptersChanged) {
-        final remap = LocalChapterRemap.create(
-          bookId: current.id,
-          oldChapters: [
-            for (final c in old) (offset: c.offset, length: c.length),
-          ],
-          newChapters: [
-            for (final c in processed.chapters)
-              (offset: c.offset, length: c.length),
-          ],
-        );
-        chapterRemaps.add(remap);
-      }
       final updated = current.copyWith(
-        wordCount: current.wordCount ?? processed.wordCount,
+        wordCount: processed.wordCount,
+        textFingerprint: processed.fingerprint,
         chapters: chaptersChanged ? processed.chapters : current.chapters,
         chapterSplitVersion: canSplit
             ? _chapterSplitVersion
@@ -2260,7 +2334,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         customTitle: current.customTitle,
         customAuthor: current.customAuthor,
       );
-      if (chaptersChanged) {
+      if (chaptersChanged || current.revision != updated.revision) {
+        chapterRemaps.add(_remapFor(current, updated));
         // Candidate tables stay private until the whole remap journal commits.
         chapterUpdates[current.id] = updated;
       } else {
@@ -2271,7 +2346,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         chaptersRefreshed: chaptersChanged,
         failed: false,
       );
-    } catch (_) {
+    } catch (error) {
+      _refreshErrors[existing.id] = error.toString();
       return (
         wordCountBackfilled: false,
         chaptersRefreshed: false,
@@ -2361,6 +2437,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
 
   @override
   Future<List<NovelChapter>> chapters(int id) async {
+    await ensureReady(id);
     final book = bookFor(id);
     if (book == null) return const [];
     if (book.kind == LocalBookKind.pdf) {
@@ -2371,7 +2448,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
     }
     return [
       for (var i = 0; i < book.chapters.length; i++)
-        NovelChapter(book.chapters[i].title, '', id: i),
+        NovelChapter(
+          book.chapters[i].title,
+          '',
+          id: i,
+          revision: book.revision,
+          volume: book.chapters[i].volume,
+        ),
     ];
   }
 
@@ -2383,18 +2466,33 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         book.chapters.isEmpty) {
       return '';
     }
-    final index = chapter.id.clamp(0, book.chapters.length - 1);
+    if (isMigrationPending(novelId) ||
+        chapter.revision != book.revision ||
+        chapter.id < 0 ||
+        chapter.id >= book.chapters.length) {
+      throw const StaleLocalChapterException();
+    }
+    final index = chapter.id;
     final ref = book.chapters[index];
     final text = await _readBookText(book);
-    final end = (ref.offset + ref.length).clamp(0, text.length);
-    final start = ref.offset.clamp(0, end);
-    return text.substring(start, end).trim();
+    if (bookFor(novelId)?.revision != chapter.revision ||
+        isMigrationPending(novelId)) {
+      throw const StaleLocalChapterException();
+    }
+    if (!validChapterRanges(book.chapters, text.length)) {
+      throw StateError('章节范围损坏，请重新扫描');
+    }
+    return text.substring(ref.offset, ref.offset + ref.length).trim();
   }
 }
 
 /// 从仓库中取出本地书库；仓库不是复合仓库时返回 null。
 LocalLibraryStore? localLibraryOf(NovelRepository? repository) =>
-    repository is CompositeNovelRepository ? repository.local : null;
+    repository is LocalLibraryStore
+    ? repository
+    : repository is CompositeNovelRepository
+    ? repository.local
+    : null;
 
 /// 本地优先的复合仓库：本地 id 走 [LocalLibraryStore]，其余走在线仓库。
 class CompositeNovelRepository extends NovelRepository {
@@ -2432,6 +2530,12 @@ class CompositeNovelRepository extends NovelRepository {
   @override
   Future<String> chapterContent(int novelId, NovelChapter chapter) =>
       isLocalNovelId(novelId)
-          ? local.chapterContent(novelId, chapter)
-          : remote.chapterContent(novelId, chapter);
+      ? local.chapterContent(novelId, chapter)
+      : remote.chapterContent(novelId, chapter);
+}
+
+class StaleLocalChapterException implements Exception {
+  const StaleLocalChapterException();
+  @override
+  String toString() => '章节目录已更新，请等待进度迁移后重新载入';
 }

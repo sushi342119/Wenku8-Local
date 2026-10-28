@@ -43,6 +43,7 @@ import 'local_record_removal.dart';
 import 'local_scan_follow_up.dart';
 import 'local_library_page.dart';
 import 'local_pdf_reader.dart';
+import 'text_anchor.dart';
 import 'tag_pages.dart';
 import 'updates/update_page.dart';
 import 'updates/app_updates.dart';
@@ -71,12 +72,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       final followUp = await applyLocalScanFollowUp<LocalChapterRemap>(
         remaps: result.chapterRemaps,
         cleanupAssociations: () async {},
-        migrate: (remap) => widget.state.remapChapterProgress(
-          remap.bookId,
-          oldChapters: remap.oldChapters,
-          newChapters: remap.newChapters,
-          migrationId: remap.migrationId,
-        ),
+        migrate: (remap) => widget.state.migrateLocalChapterTask(remap),
         confirm: (_) async {},
         recordFailure: (_, _) async {},
         bookIdOf: (remap) => remap.bookId,
@@ -96,6 +92,12 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
         );
       }
       if (!mounted) return;
+      if (result.failures.isNotEmpty) {
+        showNovelFeedback(
+          context,
+          result.failures.entries.map((e) => '${e.key}：${e.value}').join('\n'),
+        );
+      }
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
       // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
       // 这里不接删除步骤，清理失败只中断本轮、静默失败后用户可
@@ -184,6 +186,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     final NovelRepository homeRepository;
     final repo = widget.repository;
     if (repo is CompositeNovelRepository) {
+      widget.state.bindLocalChapters(repo.local);
       homeRepository = repo.local;
     } else {
       homeRepository = repo;
@@ -944,13 +947,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     final title = selectedTag?.name ?? widget.categoryTitle ?? '全部';
     return Row(
       children: [
-        Expanded(
-          child: sectionHeader(
-            context,
-            title,
-            '',
-          ),
-        ),
+        Expanded(child: sectionHeader(context, title, '')),
         if (widget.feed != null)
           GlassMenuAnchor(
             child: Builder(
@@ -993,20 +990,18 @@ class _DiscoverPageState extends State<DiscoverPage> {
                     order: 0,
                     label: '全部',
                     selected: effectiveSelectedTagId == null,
-                    onPressed: () =>
-                        Navigator.of(menuContext).pop<_TagMenuChoice>(
-                      const _TagMenuChoice(null),
-                    ),
+                    onPressed: () => Navigator.of(
+                      menuContext,
+                    ).pop<_TagMenuChoice>(const _TagMenuChoice(null)),
                   ),
                   for (var index = 0; index < tags.length; index++)
                     GlassMenuItem(
                       order: index + 1,
                       label: tags[index].name,
                       selected: effectiveSelectedTagId == tags[index].id,
-                      onPressed: () =>
-                          Navigator.of(menuContext).pop<_TagMenuChoice>(
-                        _TagMenuChoice(tags[index].id),
-                      ),
+                      onPressed: () => Navigator.of(
+                        menuContext,
+                      ).pop<_TagMenuChoice>(_TagMenuChoice(tags[index].id)),
                     ),
                 ],
               ),
@@ -1292,10 +1287,7 @@ class NovelRow extends StatelessWidget {
                   ),
                 ),
                 // 标签紧接标题；无标签时不创建间距。
-                if (tagRow != null) ...[
-                  const SizedBox(height: 4),
-                  tagRow!,
-                ],
+                if (tagRow != null) ...[const SizedBox(height: 4), tagRow!],
                 // 本地书作者可能为空，不创建空作者行及其间距。
                 if (novel.author.trim().isNotEmpty) ...[
                   const SizedBox(height: 7),
@@ -1864,10 +1856,10 @@ class _ShelfPageState extends State<ShelfPage> {
                 child: const Text('取消'),
               ),
               TextButton(
-                onPressed: () => Navigator.pop(
-                  dialogContext,
-                  (titleController.text, authorController.text),
-                ),
+                onPressed: () => Navigator.pop(dialogContext, (
+                  titleController.text,
+                  authorController.text,
+                )),
                 child: const Text('保存'),
               ),
             ],
@@ -1984,6 +1976,7 @@ Future<LocalScanFollowUp> _applyLocalScanAfterReauth(
   LocalLibraryStore local,
   LibraryState? state,
 ) async {
+  state?.bindLocalChapters(local);
   final scanResult = await local.scan();
   return applyLocalScanFollowUp<LocalChapterRemap>(
     remaps: scanResult.chapterRemaps,
@@ -2015,12 +2008,7 @@ Future<LocalScanFollowUp> _applyLocalScanAfterReauth(
       if (state == null) {
         throw StateError('LibraryState is not available');
       }
-      await state.remapChapterProgress(
-        remap.bookId,
-        oldChapters: remap.oldChapters,
-        newChapters: remap.newChapters,
-        migrationId: remap.migrationId,
-      );
+      await state.migrateLocalChapterTask(remap);
     },
     confirm: (remap) =>
         local.confirmChapterRemap(remap.migrationId, bookId: remap.bookId),
@@ -2065,10 +2053,8 @@ Future<_UnconfirmedDeleteAction?> _showUnconfirmedDeleteDialog(
           child: const Text('仅移出书库'),
         ),
         TextButton(
-          onPressed: () => Navigator.pop(
-            dialogContext,
-            _UnconfirmedDeleteAction.retry,
-          ),
+          onPressed: () =>
+              Navigator.pop(dialogContext, _UnconfirmedDeleteAction.retry),
           child: const Text('重试'),
         ),
       ],
@@ -2146,10 +2132,7 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
           if (!context.mounted) return _DeleteFileResult.failed;
           if (!followUp.handled) {
             // 关联清理或失败记录本身未完成，不能误报“切换完成”就重试删除。
-            showNovelFeedback(
-              context,
-              '目录选择已返回，但扫描或后续整理未完成；本次未删除源文件，请重新扫描',
-            );
+            showNovelFeedback(context, '目录选择已返回，但扫描或后续整理未完成；本次未删除源文件，请重新扫描');
             return _DeleteFileResult.failed;
           }
           // 权限以实际查询为准，不凭“重授权成功”就断定写权限已拿到。
@@ -2159,14 +2142,9 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
             permission =
                 await LocalPlatform.queryTreePermission(picked);
           } catch (error, stackTrace) {
-            debugPrint(
-              'failed to query tree permission: $error\n$stackTrace',
-            );
+            debugPrint('failed to query tree permission: $error\n$stackTrace');
             if (context.mounted) {
-              showNovelFeedback(
-                context,
-                '无法确认文件夹写权限；为避免误删，本次不会重试删除，请检查授权后重试',
-              );
+              showNovelFeedback(context, '无法确认文件夹写权限；为避免误删，本次不会重试删除，请检查授权后重试');
             }
             return _DeleteFileResult.failed;
           }
@@ -2726,8 +2704,10 @@ class SettingsPage extends StatelessWidget {
                             children: [
                               if (font.source == AppFontSource.imported)
                                 IconButton(
-                                  icon:
-                                      const Icon(CupertinoIcons.delete, size: 20),
+                                  icon: const Icon(
+                                    CupertinoIcons.delete,
+                                    size: 20,
+                                  ),
                                   onPressed: () async {
                                     final confirm = await confirmNovelAction(
                                       sheetContext,
@@ -3104,10 +3084,33 @@ class DetailLoaderPage extends StatefulWidget {
 class _DetailLoaderPageState extends State<DetailLoaderPage> {
   late Future<Novel> _loaded = _load();
   Novel? _cached;
+  LocalLibraryStore? get _local => localLibraryOf(widget.repository);
+  String? _revision;
+  bool _loadingLocal = false;
+  void _localChanged() {
+    final book = _local?.bookFor(widget.novel.id);
+    if (!mounted || _loadingLocal || book == null || book.revision == _revision) {
+      return;
+    }
+    setState(() {
+      _cached = null;
+      _loaded = _load();
+    });
+  }
+
+  @override
+  void dispose() {
+    _local?.removeListener(_localChanged);
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
+    if (_local case final local?) {
+      widget.state.bindLocalChapters(local);
+      local.addListener(_localChanged);
+    }
     unawaited(_seedFromCache());
   }
 
@@ -3125,11 +3128,21 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
   }
 
   Future<Novel> _load() async {
-    final detail = await widget.repository.detail(widget.novel);
-    final chapters = await widget.repository.chapters(widget.novel.id);
-    final loaded = detail.withChapters(chapters);
-    await widget.state.rememberNovel(loaded);
-    return loaded;
+    _loadingLocal = true;
+    try {
+      if (_local case final local?) {
+        widget.state.bindLocalChapters(local);
+        await local.ensureReady(widget.novel.id);
+      }
+      final detail = await widget.repository.detail(widget.novel);
+      final chapters = await widget.repository.chapters(widget.novel.id);
+      final loaded = detail.withChapters(chapters);
+      await widget.state.rememberNovel(loaded);
+      _revision = _local?.bookFor(widget.novel.id)?.revision;
+      return loaded;
+    } finally {
+      _loadingLocal = false;
+    }
   }
 
   @override
@@ -3513,9 +3526,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                 ),
                                 const SizedBox(height: 32),
                                 RevealFromTop(
-                                  key: const ValueKey(
-                                    'detail-tags-reveal',
-                                  ),
+                                  key: const ValueKey('detail-tags-reveal'),
                                   animation: _contentIntro,
                                   start: .35,
                                   child: Column(
@@ -3536,15 +3547,22 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                               for (final tag in tags)
                                                 Chip(
                                                   label: Text(tag.name),
-                                                  backgroundColor: tagPalette[tag
-                                                          .colorIndex %
-                                                      tagPalette.length]
-                                                  .withValues(alpha: .18),
+                                                  backgroundColor:
+                                                      tagPalette[tag
+                                                                  .colorIndex %
+                                                              tagPalette.length]
+                                                          .withValues(
+                                                            alpha: .18,
+                                                          ),
                                                   side: BorderSide(
-                                                    color: tagPalette[tag
-                                                            .colorIndex %
-                                                        tagPalette.length]
-                                                    .withValues(alpha: .5),
+                                                    color:
+                                                        tagPalette[tag
+                                                                    .colorIndex %
+                                                                tagPalette
+                                                                    .length]
+                                                            .withValues(
+                                                              alpha: .5,
+                                                            ),
                                                   ),
                                                   visualDensity:
                                                       VisualDensity.compact,
@@ -3704,9 +3722,14 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
             ),
           ),
           Expanded(
-            child: Text(
-              novel.chapters[index].title,
-              style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (novel.chapters[index].volume.isNotEmpty)
+                  Text(novel.chapters[index].volume, style: const TextStyle(fontSize: 11)),
+                Text(novel.chapters[index].title,
+                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
+              ],
             ),
           ),
           if (index == _resumeChapter) ...[
@@ -3870,9 +3893,10 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                   child: const Text('取消'),
                 ),
                 TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(
-                    (titleController.text.trim(), authorController.text.trim()),
-                  ),
+                  onPressed: () => Navigator.of(dialogContext).pop((
+                    titleController.text.trim(),
+                    authorController.text.trim(),
+                  )),
                   child: const Text('保存'),
                 ),
               ],
@@ -3986,11 +4010,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       ?..hideCurrentSnackBar()
       ..clearSnackBars()
       ..showSnackBar(
-        SnackBar(
-          content: Text(
-            cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净',
-          ),
-        ),
+        SnackBar(content: Text(cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净')),
       );
   }
 
@@ -4041,9 +4061,65 @@ class ReaderPage extends StatefulWidget {
 
 class _ReaderPageState extends State<ReaderPage>
     with TickerProviderStateMixin, WidgetsBindingObserver {
-  late int _chapter = widget.novel.chapters.isEmpty
+  late Novel _novel = widget.novel;
+  LocalLibraryStore? get _local => localLibraryOf(widget.repository);
+  bool _reloadingLocal = false;
+
+  void _localChanged() {
+    final local = _local;
+    final book = local?.bookFor(_novel.id);
+    if (!mounted || local == null || book == null || _reloadingLocal) return;
+    if (!local.isMigrationPending(_novel.id) &&
+        _novel.chapters.isNotEmpty &&
+        _novel.chapters.first.revision == book.revision) {
+      return;
+    }
+    _idleSave?.cancel();
+    _ready = false;
+    _currentContent = null;
+    _contentGeneration++;
+    _restoreTicket++;
+    _followTicket++;
+    _followScroll.cancel();
+    _reloadingLocal = true;
+    setState(() {
+      _content = _reloadLocalContent();
+    });
+  }
+
+  Future<({ReaderContent? content, Object? error})>
+  _reloadLocalContent({bool initial = false}) async {
+    _reloadingLocal = true;
+    try {
+      final chapters = await widget.repository.chapters(_novel.id);
+      if (!mounted) {
+        return (content: null, error: const StaleLocalChapterException());
+      }
+      final saved = widget.state.positionFor(_novel.id);
+      final freshSelection = initial && _novel.chapters.isNotEmpty && chapters.isNotEmpty &&
+          _novel.chapters.first.revision == chapters.first.revision;
+      _novel = _novel.withChapters(chapters);
+      final savedIndex = saved == null ? null : widget.state.chapterForPosition(_novel, saved);
+      final index = freshSelection ? widget.initialChapter : savedIndex ?? 0;
+      if (index < 0 || index >= chapters.length) {
+        throw const StaleLocalChapterException();
+      }
+      _chapter = index;
+      _restorePending = savedIndex == index ? saved : null;
+      _restoreQueued = false;
+      _restoring = false;
+      _computeChapterWeights();
+      return await _loadContent();
+    } catch (error) {
+      return (content: null, error: error);
+    } finally {
+      _reloadingLocal = false;
+    }
+  }
+
+  late int _chapter = _novel.chapters.isEmpty
       ? 0
-      : widget.initialChapter.clamp(0, widget.novel.chapters.length - 1);
+      : widget.initialChapter.clamp(0, _novel.chapters.length - 1);
   late Future<({ReaderContent? content, Object? error})> _content;
   ReaderContent? _currentContent;
   bool _illustrationsRefreshing = false;
@@ -4099,6 +4175,10 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void initState() {
     super.initState();
+    if (_local case final local?) {
+      widget.state.bindLocalChapters(local);
+      local.addListener(_localChanged);
+    }
     _computeChapterWeights();
     _scroll.addListener(_updateProgressFromScroll);
     _chapterReveal = AnimationController(
@@ -4113,15 +4193,15 @@ class _ReaderPageState extends State<ReaderPage>
       value: 1,
     );
     WidgetsBinding.instance.addObserver(this);
-    final saved = widget.state.positionFor(widget.novel.id);
+    final saved = widget.state.positionFor(_novel.id);
     if (saved != null &&
-        widget.novel.chapters.isNotEmpty &&
+        _novel.chapters.isNotEmpty &&
         (saved.chapterId > 0
-            ? saved.chapterId == widget.novel.chapters[_chapter].id
+            ? saved.chapterId == _novel.chapters[_chapter].id
             : saved.chapter == _chapter)) {
       _restorePending = saved;
     }
-    _content = _loadContent();
+    _content = _local != null ? _reloadLocalContent(initial: true) : _loadContent();
   }
 
   @override
@@ -4137,6 +4217,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   @override
   void dispose() {
+    _local?.removeListener(_localChanged);
     _idleSave?.cancel();
     _savePosition(notify: false, finalSave: true);
     _highlightTimer?.cancel();
@@ -4198,7 +4279,7 @@ class _ReaderPageState extends State<ReaderPage>
       await showListeningPanel(
         context,
         controller: listening,
-        novel: widget.novel,
+        novel: _novel,
         chapter: _chapter,
         paragraph: _currentPosition()?.paragraphIndex ?? 0,
         reduceMotion: widget.state.reduceMotion,
@@ -4216,7 +4297,7 @@ class _ReaderPageState extends State<ReaderPage>
     _followScroll.cancel(userDrag: userDrag);
     if (listening != null &&
         listening.snapshot.value.active &&
-        listening.snapshot.value.novel?.id == widget.novel.id &&
+        listening.snapshot.value.novel?.id == _novel.id &&
         listening.snapshot.value.follow) {
       _followLocallyPaused = true;
       unawaited(listening.setFollow(false).catchError((Object _) {}));
@@ -4228,7 +4309,7 @@ class _ReaderPageState extends State<ReaderPage>
     final current = state?.current;
     if (state?.error == null) _listeningError = null;
     if (mounted &&
-        state?.novel?.id == widget.novel.id &&
+        state?.novel?.id == _novel.id &&
         state?.error != null &&
         state!.error != _listeningError) {
       final error = _listeningError = state.error;
@@ -4251,7 +4332,7 @@ class _ReaderPageState extends State<ReaderPage>
     }
     if (state == null ||
         !state.active ||
-        state.novel?.id != widget.novel.id ||
+        state.novel?.id != _novel.id ||
         !_listeningScrollSceneActive) {
       _listeningTarget = null;
       _followTicket++;
@@ -4267,12 +4348,7 @@ class _ReaderPageState extends State<ReaderPage>
       }
       return;
     }
-    final target = (
-      widget.novel.id,
-      state.chapter,
-      current.paragraph,
-      current.start,
-    );
+    final target = (_novel.id, state.chapter, current.paragraph, current.start);
     if (_listeningTarget == target) return;
     _listeningTarget = target;
     if (state.chapter != _chapter) _go(state.chapter, listeningFollow: true);
@@ -4312,7 +4388,7 @@ class _ReaderPageState extends State<ReaderPage>
           ticket == _followTicket &&
           _chapter == chapter &&
           _listening?.snapshot.value.active == true &&
-          _listening?.snapshot.value.novel?.id == widget.novel.id &&
+          _listening?.snapshot.value.novel?.id == _novel.id &&
           (!automatic ||
               (_listening?.snapshot.value.follow == true &&
                   !_followLocallyPaused));
@@ -4356,10 +4432,10 @@ class _ReaderPageState extends State<ReaderPage>
     final state = listening.snapshot.value;
     final other =
         state.active &&
-        state.novel?.id == widget.novel.id &&
+        state.novel?.id == _novel.id &&
         (state.chapter != _chapter || state.current?.paragraph != paragraph);
     final action = listening.paragraphDoubleTap(
-      novelId: widget.novel.id,
+      novelId: _novel.id,
       chapter: _chapter,
       paragraph: paragraph,
     );
@@ -4384,16 +4460,15 @@ class _ReaderPageState extends State<ReaderPage>
   void _computeChapterWeights() {
     // 本地书的 NovelChapter.content 为空（正文懒加载），不能用它算字数：
     // TXT 用章节索引的 length 做权重，PDF 按页等权；在线书才用 content 长度。
-    final local = localLibraryOf(widget.repository)?.bookFor(widget.novel.id);
+    final local = localLibraryOf(widget.repository)?.bookFor(_novel.id);
     if (local != null) {
       if (local.kind == LocalBookKind.pdf) {
-        _chapterWeights =
-            List.filled(widget.novel.chapters.length, 1);
+        _chapterWeights = List.filled(_novel.chapters.length, 1);
       } else {
         _chapterWeights = [for (final c in local.chapters) c.length];
       }
     } else {
-      final chapters = widget.novel.chapters;
+      final chapters = _novel.chapters;
       _chapterWeights = [
         for (final c in chapters)
           c.content.replaceAll(RegExp(r'\s'), '').length,
@@ -4420,8 +4495,10 @@ class _ReaderPageState extends State<ReaderPage>
     final current = _chapter < _chapterWeights.length
         ? _chapterWeights[_chapter]
         : 0;
-    return ((before + current * _chapterScrollRatio) / _totalWeight)
-        .clamp(0.0, 1.0);
+    return ((before + current * _chapterScrollRatio) / _totalWeight).clamp(
+      0.0,
+      1.0,
+    );
   }
 
   /// 滚动时更新进度条（拖动中不跟随，避免打架）。
@@ -4435,7 +4512,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 进度条是否显示：多章，或单章可滚动时显示。
   bool get _showProgressBar {
-    if (widget.novel.chapters.length > 1) return true;
+    if (_novel.chapters.length > 1) return true;
     return _scroll.hasClients && _scroll.position.maxScrollExtent > 0;
   }
 
@@ -4485,6 +4562,7 @@ class _ReaderPageState extends State<ReaderPage>
         SchedulerBinding.instance.scheduleFrame();
         WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
       }
+
       WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
       try {
         await done.future;
@@ -4508,7 +4586,7 @@ class _ReaderPageState extends State<ReaderPage>
   String _dragPreviewText(double progress) {
     final target = _progressToTarget(progress);
     final pct = (progress * 100).round();
-    return '第 ${target.chapter + 1} 章 · $pct%';
+    return '${isLocalNovelId(_novel.id) ? '目录项 ${target.chapter + 1}' : '第 ${target.chapter + 1} 章'} · $pct%';
   }
 
   void _go(
@@ -4517,7 +4595,7 @@ class _ReaderPageState extends State<ReaderPage>
     bool highlightBookmark = false,
     bool listeningFollow = false,
   }) {
-    if (index < 0 || index >= widget.novel.chapters.length) {
+    if (index < 0 || index >= _novel.chapters.length) {
       return;
     }
     if (!listeningFollow) _suspendListeningFollow();
@@ -4560,9 +4638,10 @@ class _ReaderPageState extends State<ReaderPage>
         _listeningOpen ||
         _toolsOpen ||
         _findOpen ||
-        widget.novel.chapters.isEmpty) {
+        _novel.chapters.isEmpty) {
       return;
     }
+    final catalogueRevision = _novel.chapters.first.revision;
     _catalogueOpen = true;
     _followTicket++;
     _followScroll.cancel();
@@ -4571,14 +4650,14 @@ class _ReaderPageState extends State<ReaderPage>
         context: context,
         reduceMotion: widget.state.reduceMotion,
         builder: (context) => ReaderCatalogue(
-          novel: widget.novel,
+          novel: _novel,
           currentChapter: _chapter,
           cache: widget.repository is OfflineNovelRepository
               ? (widget.repository as OfflineNovelRepository).cache
               : null,
         ),
       );
-      if (mounted && index != null) _go(index);
+      if (mounted && index != null && _novel.chapters.first.revision == catalogueRevision && !(_local?.isMigrationPending(_novel.id) ?? false)) _go(index);
     } finally {
       _catalogueOpen = false;
       _listeningTarget = null;
@@ -4698,20 +4777,14 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   Future<String> _requestContent(int index, {bool refresh = false}) async {
-    if (widget.novel.chapters.isEmpty) throw const FormatException('目录为空');
+    if (_novel.chapters.isEmpty) throw const FormatException('目录为空');
     if (widget.repository case final OfflineNovelRepository offline) {
-      await offline.rememberDirectory(widget.novel);
+      await offline.rememberDirectory(_novel);
       if (refresh) {
-        return offline.refreshChapterContent(
-          widget.novel.id,
-          widget.novel.chapters[index],
-        );
+        return offline.refreshChapterContent(_novel.id, _novel.chapters[index]);
       }
     }
-    return widget.repository.chapterContent(
-      widget.novel.id,
-      widget.novel.chapters[index],
-    );
+    return widget.repository.chapterContent(_novel.id, _novel.chapters[index]);
   }
 
   Future<void> _refreshIllustrations({bool automatic = false}) async {
@@ -4722,10 +4795,7 @@ class _ReaderPageState extends State<ReaderPage>
     try {
       final body = automatic
           ? await (widget.repository as OfflineNovelRepository)
-                .repairChapterIllustrations(
-                  widget.novel.id,
-                  widget.novel.chapters[chapter],
-                )
+                .repairChapterIllustrations(_novel.id, _novel.chapters[chapter])
           : await _requestContent(chapter, refresh: true);
       if (body == null) return;
       final content = await ReaderContent.parse(body);
@@ -4857,6 +4927,11 @@ class _ReaderPageState extends State<ReaderPage>
     // Explicit save/restore/exit supersedes any delayed copy of that position.
     _idleSave?.cancel();
     _idleSave = null;
+    if (_local != null &&
+        (_novel.chapters.isEmpty ||
+            !_local!.acceptsChapter(_novel.id, _novel.chapters[_chapter]))) {
+      return;
+    }
     if (!_ready ||
         _restoring ||
         !_scroll.hasClients ||
@@ -4882,12 +4957,13 @@ class _ReaderPageState extends State<ReaderPage>
     unawaited(
       widget.state
           .savePosition(
-            novel: widget.novel,
+            novel: _novel,
             chapter: _chapter,
             offset: position?.offset ?? _scroll.offset,
             maximum: _scroll.position.maxScrollExtent,
             width: _layoutWidth,
             notify: notify,
+            textOffset: position?.textOffset,
             paragraphIndex: position?.paragraphIndex,
             paragraphFraction: position?.paragraphFraction ?? 0,
             textScale: _textScale,
@@ -4906,7 +4982,7 @@ class _ReaderPageState extends State<ReaderPage>
     if (!_ready ||
         _restoring ||
         !_scroll.hasClients ||
-        widget.novel.chapters.isEmpty) {
+        _novel.chapters.isEmpty) {
       return null;
     }
     final maximum = _scroll.position.maxScrollExtent;
@@ -4914,22 +4990,18 @@ class _ReaderPageState extends State<ReaderPage>
       0.0,
       maximum.clamp(0.0, double.infinity),
     );
-    var paragraph =
-        includeParagraph && (bookmark || offset > .5 && offset < maximum - .5)
-        ? _paragraphRegistry.capture(
-            offset + _readingInset,
-            clampToLast: bookmark,
-          )
+    var paragraph = includeParagraph
+        ? _paragraphRegistry.capture(offset + _readingInset, clampToLast: true)
         : null;
     if (!includeParagraph) {
       // A route can be disposed inside layout, where reading RenderBox sizes
       // is invalid. Retain an already measured anchor only for the exact same
       // chapter, offset and geometry; otherwise keep the raw-offset fallback.
-      final previous = widget.state.positionFor(widget.novel.id);
+      final previous = widget.state.positionFor(_novel.id);
       if (previous != null &&
           previous.paragraphIndex != null &&
           previous.chapter == _chapter &&
-          previous.chapterId == widget.novel.chapters[_chapter].id &&
+          previous.chapterId == _novel.chapters[_chapter].id &&
           (previous.offset - offset).abs() < .5 &&
           previous.fontSize == widget.state.fontSize &&
           previous.lineHeight == widget.state.lineHeight &&
@@ -4944,7 +5016,14 @@ class _ReaderPageState extends State<ReaderPage>
     }
     return ReadingPosition(
       chapter: _chapter,
-      chapterId: widget.novel.chapters[_chapter].id,
+      chapterId: _novel.chapters[_chapter].id,
+      revision: _novel.chapters[_chapter].revision,
+      textOffset: _currentContent == null
+          ? null
+          : paragraphTextOffset(
+              _currentContent!.paragraphs,
+              paragraph?.index ?? 0,
+            ),
       offset: offset,
       fraction: maximum > 0 ? (offset / maximum).clamp(0, 1) : 0,
       fontSize: widget.state.fontSize,
@@ -5025,7 +5104,7 @@ class _ReaderPageState extends State<ReaderPage>
     final position = _currentPosition(bookmark: true);
     if (position == null) return null;
     _savePosition(notify: false);
-    return widget.state.addBookmark(novel: widget.novel, position: position);
+    return widget.state.addBookmark(novel: _novel, position: position);
   }
 
   Future<void> _seekProgress(double fraction) async {
@@ -5185,9 +5264,9 @@ class _ReaderPageState extends State<ReaderPage>
 
   @override
   Widget build(BuildContext context) {
-    final chapter = widget.novel.chapters.isEmpty
+    final chapter = _novel.chapters.isEmpty
         ? const NovelChapter('目录为空', '')
-        : widget.novel.chapters[_chapter];
+        : _novel.chapters[_chapter];
     _layoutWidth = MediaQuery.sizeOf(context).width;
     _layoutFontId = widget.state.appFontId;
     final dark = Theme.of(context).brightness == Brightness.dark;
@@ -5272,9 +5351,8 @@ class _ReaderPageState extends State<ReaderPage>
                       ),
                       Expanded(
                         child: ArchiveRouteTitle(
-                          title: widget.novel.title,
-                          code:
-                              'READ / ${ArchiveDesign.fileCode(widget.novel.id)}',
+                          title: _novel.title,
+                          code: 'READ / ${ArchiveDesign.fileCode(_novel.id)}',
                         ),
                       ),
                       GlassIconButton(
@@ -5323,7 +5401,10 @@ class _ReaderPageState extends State<ReaderPage>
                       if (_showProgressBar)
                         Padding(
                           padding: const EdgeInsets.only(
-                              left: 56, right: 56, bottom: 8),
+                            left: 56,
+                            right: 56,
+                            bottom: 8,
+                          ),
                           child: _ReaderProgressBar(
                             value: _progressDragging ? _dragValue : _progressValue,
                             dragging: _progressDragging,
@@ -5361,37 +5442,37 @@ class _ReaderPageState extends State<ReaderPage>
                           ),
                         ),
                       GlassDock(
-                    key: const ValueKey('reader-liquid-dock'),
-                    selectedIndex: 1,
-                    reduceMotion: widget.state.reduceMotion,
-                    items: [
-                      GlassDockItem(
-                        CupertinoIcons.arrow_left,
-                        '上一章',
-                        enabled: _chapter > 0,
+                        key: const ValueKey('reader-liquid-dock'),
+                        selectedIndex: 1,
+                        reduceMotion: widget.state.reduceMotion,
+                        items: [
+                          GlassDockItem(
+                            CupertinoIcons.arrow_left,
+                            '上一章',
+                            enabled: _chapter > 0,
+                          ),
+                          GlassDockItem(
+                            CupertinoIcons.book,
+                            '${_novel.chapters.isEmpty ? 0 : _chapter + 1} / ${_novel.chapters.length}',
+                            enabled: _novel.chapters.isNotEmpty,
+                            selectableOnDrag: false,
+                            semanticLabel:
+                                '目录，当前第 ${_novel.chapters.isEmpty ? 0 : _chapter + 1} 章，共 ${_novel.chapters.length} 章',
+                          ),
+                          GlassDockItem(
+                            CupertinoIcons.arrow_right,
+                            '下一章',
+                            enabled: _chapter + 1 < _novel.chapters.length,
+                          ),
+                        ],
+                        onSelected: (index) {
+                          if (index == 1) {
+                            _catalogue();
+                          } else {
+                            _go(_chapter + (index == 0 ? -1 : 1));
+                          }
+                        },
                       ),
-                      GlassDockItem(
-                        CupertinoIcons.book,
-                        '${widget.novel.chapters.isEmpty ? 0 : _chapter + 1} / ${widget.novel.chapters.length}',
-                        enabled: widget.novel.chapters.isNotEmpty,
-                        selectableOnDrag: false,
-                        semanticLabel:
-                            '目录，当前第 ${widget.novel.chapters.isEmpty ? 0 : _chapter + 1} 章，共 ${widget.novel.chapters.length} 章',
-                      ),
-                      GlassDockItem(
-                        CupertinoIcons.arrow_right,
-                        '下一章',
-                        enabled: _chapter + 1 < widget.novel.chapters.length,
-                      ),
-                    ],
-                    onSelected: (index) {
-                      if (index == 1) {
-                        _catalogue();
-                      } else {
-                        _go(_chapter + (index == 0 ? -1 : 1));
-                      }
-                    },
-                  ),
                     ],
                   ),
                 ),
@@ -5483,7 +5564,7 @@ class _ReaderPageState extends State<ReaderPage>
                           Row(
                             children: [
                               Text(
-                                '第 ${_chapter + 1} 章',
+                                isLocalNovelId(_novel.id) ? '目录项 ${_chapter + 1}' : '第 ${_chapter + 1} 章',
                                 style: TextStyle(
                                   color: Theme.of(
                                     context,
@@ -5562,7 +5643,7 @@ class _ReaderPageState extends State<ReaderPage>
                                       )
                                     : ListeningParagraphHighlight(
                                         controller: _listening!,
-                                        novelId: widget.novel.id,
+                                        novelId: _novel.id,
                                         chapter: _chapter,
                                         paragraph: index,
                                         onDoubleTap: () =>
@@ -5621,7 +5702,7 @@ class _ReaderPageState extends State<ReaderPage>
                               ),
                             ),
                             const SizedBox(height: 12),
-                            if (_chapter + 1 < widget.novel.chapters.length)
+                            if (_chapter + 1 < _novel.chapters.length)
                               GlassTextButton(
                                 key: const ValueKey('reader-end-next'),
                                 onPressed: () => _go(_chapter + 1),
@@ -5662,7 +5743,7 @@ class _ReaderPageState extends State<ReaderPage>
         reduceMotion: widget.state.reduceMotion,
         previewing: preview,
         builder: (context) => ReaderTools(
-          novel: widget.novel,
+          novel: _novel,
           state: widget.state,
           position: position,
           onAddBookmark: _addBookmark,
@@ -5688,7 +5769,7 @@ class _ReaderPageState extends State<ReaderPage>
           await _seekProgress(fraction);
         case ReaderOpenBookmark(:final bookmark):
           final chapter = widget.state.chapterForPosition(
-            widget.novel,
+            _novel,
             bookmark.position,
           );
           if (chapter != null) {
@@ -5833,10 +5914,7 @@ class _ReaderProgressBar extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 4),
             child: Text(
               previewText,
-              style: TextStyle(
-                fontSize: 12,
-                color: scheme.onSurfaceVariant,
-              ),
+              style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
             ),
           ),
         ),
@@ -5896,8 +5974,10 @@ class _ReaderProgressBar extends StatelessWidget {
                               // 滑块（拖动时显示）
                               if (dragging)
                                 Positioned(
-                                  left: (w * value.clamp(0.0, 1.0) - 7)
-                                      .clamp(0.0, w - 14),
+                                  left: (w * value.clamp(0.0, 1.0) - 7).clamp(
+                                    0.0,
+                                    w - 14,
+                                  ),
                                   top: -5,
                                   child: Container(
                                     width: 14,

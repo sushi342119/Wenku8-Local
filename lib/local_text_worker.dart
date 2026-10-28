@@ -48,7 +48,6 @@ class _LocalTextWorker {
     bool normalize = false,
     int? maxBytes,
     bool preserveBom = false,
-    bool stripBomForChapters = false,
   }) async =>
       await run({
             'path': path,
@@ -56,7 +55,6 @@ class _LocalTextWorker {
             'normalize': normalize,
             'maxBytes': maxBytes,
             'preserveBom': preserveBom,
-            'stripBomForChapters': stripBomForChapters,
           })
           as _TextMetadata;
 
@@ -88,7 +86,6 @@ void _textWorkerMain(SendPort ready) async {
               normalize: job['normalize'] == true,
               maxBytes: job['maxBytes'] as int?,
               preserveBom: job['preserveBom'] == true,
-              stripBomForChapters: job['stripBomForChapters'] == true,
             );
       reply.send([true, result]);
     } catch (error, stack) {
@@ -103,7 +100,9 @@ class _TextMetadata {
     this.wordCount,
     this.chapters, {
     this.inputLength = 0,
+    this.fingerprint = '',
   });
+  final String fingerprint;
   final int inputLength;
   final int length;
   final int wordCount;
@@ -113,6 +112,8 @@ class _TextMetadata {
 class _TextSourceException implements Exception {
   const _TextSourceException(this.cause);
   final Object cause;
+  @override
+  String toString() => cause.toString();
 }
 
 Stream<List<int>> _boundedTextBytes(String path, int? maxBytes) async* {
@@ -173,7 +174,9 @@ Stream<String> _normalizeText(Stream<String> chunks) async* {
     carriageReturn = chunk.endsWith('\r');
     if (carriageReturn) chunk = chunk.substring(0, chunk.length - 1);
     if (chunk.isNotEmpty) {
-      yield chunk.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+      yield chunk
+          .replaceAll('\r\n', '\n')
+          .replaceAll(RegExp(r'[\r\u2028\u2029]'), '\n');
     }
   }
   if (carriageReturn) yield '\n';
@@ -185,18 +188,17 @@ Future<_TextMetadata> _analyzeTextFile(
   String? outputPath,
   int? maxBytes,
   bool preserveBom = false,
-  bool stripBomForChapters = false,
 }) async {
   var inputLength = 0;
-  var chunks = _decodeTextChunks(_boundedTextBytes(path, maxBytes), preserveBom)
+  final digest = _DigestSink();
+  final hashing = sha256.startChunkedConversion(digest);
+  var chunks = _decodeTextChunks(_boundedTextBytes(path, maxBytes), preserveBom || normalize)
       .map((chunk) {
         inputLength += chunk.length;
         return chunk;
       });
   if (normalize) chunks = _normalizeText(chunks);
-  final analysis = _StreamingTextIndex(
-    stripBomForChapters: stripBomForChapters,
-  );
+  final analysis = _StreamingTextIndex();
   final temporary = outputPath == null ? null : File('$outputPath.importing');
   RandomAccessFile? output;
   try {
@@ -206,36 +208,23 @@ Future<_TextMetadata> _analyzeTextFile(
     }
     await for (final chunk in chunks) {
       analysis.add(chunk);
+      hashing.add(utf8.encode(chunk));
       // Await each write, instead of accumulating an unbounded IOSink queue.
       if (output != null) await output.writeString(chunk);
     }
     await output?.close();
     output = null;
+    hashing.close();
     final result = analysis.finish();
-    var chapters = result.chapters;
-    if (analysis.hasNonLfLineTerminators) {
-      // The legacy multiline regex also treats CR/Unicode separators as anchors,
-      // while its body ranges end at LF. Keep that rare case exactly compatible.
-      var text = await _decodeTextChunks(
-        _boundedTextBytes(temporary?.path ?? path, null),
-        temporary != null || preserveBom,
-      ).join();
-      if (normalize && temporary == null) {
-        text = await _normalizeText(Stream.value(text)).join();
-      }
-      if (stripBomForChapters && text.startsWith('\uFEFF')) {
-        text = text.substring(1);
-      }
-      chapters = List.unmodifiable(LocalLibraryStore._splitChapters(text));
-    }
     if (temporary != null && inputLength > 0) {
       await temporary.rename(outputPath!);
     }
     return _TextMetadata(
       result.length,
       result.wordCount,
-      chapters,
+      result.chapters,
       inputLength: inputLength,
+      fingerprint: digest.value.toString(),
     );
   } finally {
     await output?.close();
@@ -244,22 +233,10 @@ Future<_TextMetadata> _analyzeTextFile(
 }
 
 class _StreamingTextIndex {
-  _StreamingTextIndex({this.stripBomForChapters = false});
-  final bool stripBomForChapters;
-  bool _firstChunk = true;
-  var _length = 0;
-  bool hasNonLfLineTerminators = false;
+  final _index = ChapterTextIndex();
   var _words = 0;
-  var _lineStart = 0;
-  var _line = '';
-  var _longLine = false;
   int? _highSurrogate;
-  final _headings = <({String title, int start, int content})>[];
-
   void add(String chunk) {
-    hasNonLfLineTerminators =
-        hasNonLfLineTerminators || chunk.contains(RegExp(r'[\r\u2028\u2029]'));
-    // Rune counts must treat a surrogate pair crossing chunks as one character.
     var text = chunk;
     if (_highSurrogate case final high?) {
       text = '${String.fromCharCode(high)}$text';
@@ -273,67 +250,20 @@ class _StreamingTextIndex {
       }
     }
     _words += _countWords(text);
-    if (_firstChunk && chunk.isNotEmpty) {
-      _firstChunk = false;
-      if (stripBomForChapters && chunk.startsWith('\uFEFF')) {
-        chunk = chunk.substring(1);
-      }
-    }
-    var start = 0;
-    while (start < chunk.length) {
-      final newline = chunk.indexOf('\n', start);
-      final end = newline < 0 ? chunk.length : newline;
-      if (!_longLine) {
-        // A valid title trims to <=64 units, with at most 32 leading and 40
-        // trailing regex units. Longer body lines can be discarded immediately.
-        if (_line.length + end - start > 256) {
-          _line = '';
-          _longLine = true;
-        } else {
-          _line += chunk.substring(start, end);
-        }
-      }
-      if (newline < 0) break;
-      _finishLine(_length + newline + 1);
-      _lineStart = _length + newline + 1;
-      start = newline + 1;
-    }
-    _length += chunk.length;
+    _index.add(chunk);
   }
 
-  void _finishLine(int contentStart) {
-    if (!_longLine) {
-      final match = _chapterTitlePattern.firstMatch(_line);
-      if (match != null) {
-        final title = match.group(0)!.trim();
-        if (title.isNotEmpty && title.length <= 64) {
-          _headings.add((
-            title: title,
-            start: _lineStart + match.start,
-            content: contentStart,
-          ));
-        }
-      }
-    }
-    _line = '';
-    _longLine = false;
-  }
+  _TextMetadata finish() => _TextMetadata(
+    _index.length,
+    _words + (_highSurrogate == null ? 0 : 1),
+    _index.finish(),
+  );
+}
 
-  _TextMetadata finish() {
-    if (_highSurrogate != null) _words++;
-    _finishLine(_length);
-    final chapters = _headings.length < 2
-        ? [LocalChapterIndex('正文', 0, _length)]
-        : [
-            for (var i = 0; i < _headings.length; i++)
-              LocalChapterIndex(
-                _headings[i].title,
-                _headings[i].content,
-                ((i + 1 < _headings.length ? _headings[i + 1].start : _length) -
-                        _headings[i].content)
-                    .clamp(0, _length),
-              ),
-          ];
-    return _TextMetadata(_length, _words, List.unmodifiable(chapters));
-  }
+class _DigestSink implements Sink<Digest> {
+  Digest? value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
 }

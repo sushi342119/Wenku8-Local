@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 
 import '../catalog.dart';
+import '../local_library.dart';
+import '../text_anchor.dart';
 import '../offline_repository.dart';
 import '../reader_content.dart';
 import 'cache.dart';
@@ -114,12 +116,58 @@ class ListeningController {
     this.preparationTimeout = const Duration(seconds: 35),
     this.decoderTimeout = const Duration(seconds: 10),
   }) {
+    final local = localLibraryOf(repository);
+    if (local != null) {
+      store.acceptsCursor = (cursor) =>
+          !isLocalNovelId(cursor.novelId) ||
+          !local.isMigrationPending(cursor.novelId) &&
+              local.bookFor(cursor.novelId)?.revision == cursor.revision;
+      local.addListener(_localChanged);
+    }
     snapshot.value = ListeningSnapshot(
       voice: store.voice,
       speed: store.speed,
       follow: store.follow,
     );
   }
+  bool _updatingLocal = false;
+  List<String> _bodyParagraphs = const [];
+  void _localChanged() {
+    final novel = snapshot.value.novel;
+    final local = localLibraryOf(repository);
+    if (_disposed ||
+        _updatingLocal ||
+        novel == null ||
+        local == null ||
+        !isLocalNovelId(novel.id)) {
+      return;
+    }
+    if (!local.isMigrationPending(novel.id) &&
+        novel.chapters.isNotEmpty &&
+        novel.chapters.first.revision == local.bookFor(novel.id)?.revision) {
+      return;
+    }
+    _updatingLocal = true;
+    final autoplay = _desiredPlaying;
+    unawaited(() async {
+      try {
+        await stop();
+        final chapters = await repository.chapters(novel.id);
+        if (_disposed) return;
+        await start(
+          novel.withChapters(chapters),
+          chapter: 0,
+          resume: true,
+          autoplay: autoplay,
+        );
+      } catch (error) {
+        _fail(error, _generation);
+      } finally {
+        _updatingLocal = false;
+      }
+    }());
+  }
+
   final NovelRepository repository;
   final SpeechAudioSource audio;
   final ListeningStore store;
@@ -332,7 +380,7 @@ class ListeningController {
     _desiredPlaying = autoplay;
     _consecutiveFailures = 0;
     _loading = true;
-    final cursor = resume ? savedCursor(novel.id) : null;
+    var cursor = resume ? savedCursor(novel.id) : null;
     _emit(
       novel: novel,
       chapter: chapter,
@@ -349,7 +397,7 @@ class ListeningController {
         await _output?.suspend();
       });
       if (!_valid(generation)) return;
-      if (novel.chapters.isEmpty) {
+      if (novel.chapters.isEmpty || isLocalNovelId(novel.id)) {
         novel = novel.withChapters(await repository.chapters(novel.id));
         if (!_valid(generation)) return;
       }
@@ -358,14 +406,26 @@ class ListeningController {
         await offline.rememberDirectory(novel);
       }
       if (!_valid(generation)) return;
+      if (isLocalNovelId(novel.id)) {
+        cursor = resume ? savedCursor(novel.id) : null;
+      }
+      if (cursor != null &&
+          isLocalNovelId(novel.id) &&
+          cursor.revision != novel.chapters.first.revision) {
+        throw const StaleLocalChapterException();
+      }
       if (cursor != null) {
         final stable = cursor.chapterId > 0
-            ? novel.chapters.indexWhere((c) => c.id == cursor.chapterId)
+            ? novel.chapters.indexWhere((c) => c.id == cursor!.chapterId)
             : -1;
         chapter = stable >= 0 ? stable : cursor.chapter;
         paragraph = cursor.paragraph;
       }
       _emit(novel: novel);
+      if (isLocalNovelId(novel.id) &&
+          (chapter < 0 || chapter >= novel.chapters.length)) {
+        throw const StaleLocalChapterException();
+      }
       await _loadChapter(
         chapter.clamp(0, novel.chapters.length - 1),
         generation,
@@ -403,6 +463,7 @@ class ListeningController {
           ? const ReaderContent([])
           : await ReaderContent.parse(source);
       if (!_valid(generation)) return;
+      _bodyParagraphs = content.paragraphs;
       var segments = source.length > 64 * 1024
           ? await compute(speechSegments, content.paragraphs)
           : speechSegments(content.paragraphs);
@@ -1048,6 +1109,10 @@ class ListeningController {
         ListeningCursor(
           novelId: state.novel!.id,
           chapterId: state.novel!.chapters[state.chapter].id,
+          revision: state.novel!.chapters[state.chapter].revision,
+          textOffset:
+              paragraphTextOffset(_bodyParagraphs, current.paragraph) +
+              current.start,
           chapter: state.chapter,
           paragraph: current.paragraph,
           start: current.start,
@@ -1062,6 +1127,7 @@ class ListeningController {
 
   Future<void> dispose() => _disposing ??= _dispose();
   Future<void> _dispose() async {
+    localLibraryOf(repository)?.removeListener(_localChanged);
     await stop();
     _disposed = true;
     await _positions?.cancel();

@@ -35,6 +35,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   void initState() {
     super.initState();
+    widget.state.bindLocalChapters(widget.local);
     _folderUri = widget.local.folderUri;
   }
 
@@ -86,12 +87,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       final followUp = await applyLocalScanFollowUp<LocalChapterRemap>(
         remaps: result.chapterRemaps,
         cleanupAssociations: () async {},
-        migrate: (remap) => widget.state.remapChapterProgress(
-          remap.bookId,
-          oldChapters: remap.oldChapters,
-          newChapters: remap.newChapters,
-          migrationId: remap.migrationId,
-        ),
+        migrate: (remap) => widget.state.migrateLocalChapterTask(remap),
         confirm: (_) async {},
         recordFailure: (_, _) async {},
         bookIdOf: (remap) => remap.bookId,
@@ -132,7 +128,16 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       ]);
       if (!mounted) return;
       setState(() {});
+      if (result.failures.isNotEmpty) {
+        _showDebugDialog(
+          '部分书籍扫描失败',
+          result.failures.entries.map((e) => '${e.key}：${e.value}').join('\n'),
+        );
+      }
       final parts = <String>[];
+      if (result.failures.isNotEmpty) {
+        parts.add('失败 ${result.failures.length} 本');
+      }
       if (result.added > 0) parts.add('新增 ${result.added} 本');
       if (result.refreshed > 0) parts.add('更新 ${result.refreshed} 本');
       if (result.removed > 0) parts.add('移除 ${result.removed} 本');

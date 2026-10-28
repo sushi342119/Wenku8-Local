@@ -291,9 +291,13 @@ class ListeningCursor {
     required this.start,
     required this.positionMs,
     required this.segmentHash,
+    this.revision = '',
+    this.textOffset,
   });
   final int novelId, chapterId, chapter, paragraph, start, positionMs;
   final String segmentHash;
+  final String revision;
+  final int? textOffset;
   Map<String, Object> toJson() => {
     'novelId': novelId,
     'chapterId': chapterId,
@@ -302,11 +306,15 @@ class ListeningCursor {
     'start': start,
     'positionMs': positionMs,
     'segmentHash': segmentHash,
+    'revision': revision,
+    'textOffset': ?textOffset,
   };
   factory ListeningCursor.fromJson(Map<String, dynamic> json) {
     int number(String key) =>
         json[key] is int ? (json[key] as int).clamp(0, 1 << 30) : 0;
     return ListeningCursor(
+      revision: json['revision'] as String? ?? '',
+      textOffset: json['textOffset'] as int?,
       novelId: number('novelId'),
       chapterId: number('chapterId'),
       chapter: number('chapter'),
