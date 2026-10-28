@@ -14,6 +14,7 @@ import 'chapter_splitter.dart';
 export 'chapter_splitter.dart' show LocalChapterIndex;
 import 'local_platform.dart';
 import 'book_tags.dart';
+import 'filename_tags.dart';
 import 'local_record_removal.dart';
 import 'local_source_identity.dart';
 import 'local_text_worker_client.dart';
@@ -527,6 +528,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   int _nextIdCursor = localNovelIdBase;
   int _reservedIdEnd = localNovelIdBase;
   final Set<int> _dirtyBookIds = {};
+  final Map<String, String> _tagMigrationFailures = {};
 
   /// 串行化所有变更操作，防止扫描/删除/编辑竞态（修复#4）。
   Future<void> _mutationLock = Future.value();
@@ -577,6 +579,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     // 再向 UI 发布书库前恢复仅移出待办。
     store._captureSavedRemapRanges();
     await store._recordRemovalJournal.recover();
+    await store._saveIndex();
+    await store._migrateInternalTagsToFilenames();
     return store;
   }
 
@@ -586,6 +590,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   String? get folderUri => _prefs.getString('local_library_folder');
 
   List<LocalBook> get books => List.unmodifiable(_books);
+
+  /// Last per-book failures while copying internal tags into source filenames.
+  Map<String, String> get tagMigrationFailures =>
+      Map.unmodifiable(_tagMigrationFailures);
 
   LocalBook? bookFor(int id) {
     final index = _indexForBook(id);
@@ -605,8 +613,16 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       if (json is Map<String, Object?> && json['books'] is List) {
         for (final entry in (json['books'] as List).whereType<Map<String, Object?>>()) {
           try {
-            final book = LocalBook.fromJson(entry);
-            if (isLocalNovelId(book.id)) _books.add(book);
+            final loaded = LocalBook.fromJson(entry);
+            final book = parseFilenameTags(loaded.fileName).tags.isEmpty
+                ? loaded
+                : _withFilenameMetadata(loaded, loaded.fileName);
+            if (isLocalNovelId(book.id)) {
+              _books.add(book);
+              if (book.title != loaded.title || book.author != loaded.author) {
+                _dirtyBookIds.add(book.id);
+              }
+            }
           } catch (_) {}
         }
       }
@@ -693,6 +709,159 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final first = _textCache.entries.first;
       _textCache.remove(first.key);
       _textCacheBytes -= first.value.length * 2;
+    }
+  }
+
+  LocalBook _withFilenameMetadata(
+    LocalBook book,
+    String fileName, {
+    String? fileUri,
+    String? sourceKey,
+  }) {
+    return book.copyWith(
+      title: _titleFromName(fileName),
+      author: _authorFromName(fileName),
+      fileUri: fileUri ?? book.fileUri,
+      fileName: fileName,
+      sourceKey: sourceKey ?? book.sourceKey,
+      customTitle: book.customTitle,
+      customAuthor: book.customAuthor,
+    );
+  }
+
+  Future<LocalBook> _renameSourceFile(
+    LocalBook book,
+    String targetName,
+  ) async {
+    if (targetName == book.fileName) return book;
+    if (targetName.isEmpty || targetName.contains(RegExp(r'[/\\\x00]')) ||
+        targetName == '.' || targetName == '..') {
+      throw ArgumentError('标签无法写入文件名：包含路径分隔符或空字符');
+    }
+    if (book.fileUri.startsWith('content:')) {
+      try {
+        final result = await LocalPlatform.renameLocalDocument(
+          book.fileUri, targetName, expectedFileName: book.fileName,
+        );
+        return _withFilenameMetadata(book, result.fileName,
+          fileUri: result.fileUri, sourceKey: result.sourceKey,
+        );
+      } on LocalRenameException catch (error) {
+        // A successful native rollback may issue a different URI. Preserve
+        // that confirmed location even though the tag edit itself failed.
+        if (error.fileUri != null && error.fileName != null &&
+            (error.fileUri != book.fileUri || error.fileName != book.fileName)) {
+          _replaceBook(_indexForBook(book.id), _withFilenameMetadata(
+            book, error.fileName!, fileUri: error.fileUri, sourceKey: error.fileUri,
+          ));
+          try { await _saveIndex(); } catch (_) { /* Keep dirty location for retry. */ }
+        }
+        rethrow;
+      }
+    }
+
+    final source = _sourceFile(book);
+    final parent = source.parent;
+    final target = File('${parent.path}/$targetName');
+    if (target.path != source.path && await target.exists()) {
+      throw StateError('同名文件已存在');
+    }
+    final renamed = await source.rename(target.path);
+    return _withFilenameMetadata(
+      book,
+      targetName,
+      fileUri: Uri.file(renamed.path).toString(),
+      sourceKey: renamed.path,
+    );
+  }
+
+  File _sourceFile(LocalBook book) {
+    final locator = book.sourceKey.isNotEmpty ? book.sourceKey : book.fileUri;
+    if (locator.isEmpty) throw StateError('文件路径无效');
+    return locator.startsWith('file:') ? File.fromUri(Uri.parse(locator)) : File(locator);
+  }
+
+  /// Saves a renamed source location before committing its tag mapping. A
+  /// rejected source rename never changes the index or internal tags.
+  Future<LocalBook> _commitFilename(
+    LocalBook original,
+    String targetName, {
+    Future<void> Function()? commitTags,
+  }) async {
+    final updated = await _renameSourceFile(original, targetName);
+    try {
+      if (!identical(original, updated)) {
+        _replaceBook(_indexForBook(original.id), updated);
+        await _saveIndex();
+      }
+      if (commitTags != null) {
+        // A previous folder-switch fallback must not resurrect deselected
+        // tags when the next scan restores stashed records for this filename.
+        await _clearTagStashKeys([original], clearBookTags: false);
+        await commitTags();
+      }
+      return updated;
+    } catch (error, stack) {
+      if (!identical(original, updated)) {
+        await _restoreRenamedBooks([original], cause: error);
+      }
+      Error.throwWithStackTrace(error, stack);
+    }
+  }
+
+  Future<void> _restoreRenamedBooks(
+    Iterable<LocalBook> originals, {
+    required Object cause,
+  }) async {
+    final failures = <String>[];
+    for (final original in originals.toList().reversed) {
+      final current = bookFor(original.id);
+      if (current == null) continue;
+      try {
+        final restored = await _renameBack(original, current);
+        _replaceBook(_indexForBook(original.id), restored);
+      } catch (error) {
+        // Keep the actual new URI available if the provider rejects rollback.
+        failures.add('${original.displayTitle}：$error');
+      }
+    }
+    try { await _saveIndex(); } catch (error) {
+      failures.add('恢复后的索引保存失败：$error');
+    }
+    if (failures.isNotEmpty) {
+      throw StateError('$cause；回滚未完成：${failures.join('；')}');
+    }
+  }
+
+  /// No global "done" bit: matching filenames are already migrated; failed
+  /// books retain their internal tags and are retried on the next scan/load.
+  Future<void> _migrateInternalTagsToFilenames({
+    String? sourceId,
+    Map<String, String>? failures,
+  }) async {
+    final tagStore = TagStore.maybeShared;
+    if (tagStore == null) return;
+    _tagMigrationFailures.clear();
+    for (final original in _books.toList()) {
+      if (sourceId != null && original.sourceId != sourceId) continue;
+      final current = bookFor(original.id);
+      if (current == null) continue;
+      try {
+        await tagStore.mergeTagNamesForBook(
+          current.id, parseFilenameTags(current.fileName).tags,
+        );
+        final names = tagStore.tagNamesForBook(current.id);
+        final parsedNames = parseFilenameTags(current.fileName).tags.toSet();
+        // Avoid touching already migrated filenames or reordering their tags.
+        if (names.every(parsedNames.contains)) continue;
+        final targetName = appendFilenameTags(current.fileName, names);
+        await _commitFilename(current, targetName);
+      } catch (error) {
+        final key = '${current.displayTitle} (${current.fileName})';
+        final message = '标签迁移失败：$error';
+        _tagMigrationFailures[key] = message;
+        failures?[key] = message;
+      }
     }
   }
 
@@ -1229,19 +1398,33 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   /// 清除指定书籍对应的暂存条目（文件被删 / 用户明确删除书籍时）。
   /// 不创建新暂存，只清理，避免同名新文件误恢复旧标签。
-  Future<void> _clearTagStashKeys(Iterable<LocalBook> books) async {
+  Future<void> _clearTagStashKeys(
+    Iterable<LocalBook> books, {bool clearBookTags = true}
+  ) async {
     final stash = _readTagStash();
-    if (stash.isEmpty) return;
     var changed = false;
     for (final book in books) {
-      if (stash.remove(_tagStashKeyFor(book)) != null) changed = true;
+      final keys = stash.keys.where((key) {
+        try {
+          final parts = jsonDecode(key);
+          return parts is List && parts.length == 2 &&
+              parts[0] == book.sourceId && parts[1] is String &&
+              stripFilenameTags(parts[1] as String) == stripFilenameTags(book.fileName);
+        } catch (_) { return key == _tagStashKeyFor(book); }
+      }).toList();
+      for (final key in keys) {
+        stash.remove(key);
+        changed = true;
+      }
+      if (clearBookTags) {
+        await TagStore.maybeShared?.setTagsForBook(book.id, const []);
+      }
     }
     if (changed) await _writeTagStash(stash);
   }
 
   /// 扫描成功后恢复暂存标签并清理失效条目（_synchronized 内，_saveIndex 之后）。
-  /// - 只恢复给当前无标签的书，避免覆盖用户手动编辑；
-  ///   无论是否恢复都消费条目（已恢复 / 用户已改过 / 标签已失效）。
+  /// - 和现有标签合并，恢复成功或标签已失效后消费条目。
   /// - 恢复前用现存标签定义过滤，过滤后为空也消费条目。
   /// - 完整扫描成功后，清理该来源下已不存在文件对应的条目，
   ///   避免以后新建同名文件时恢复旧标签。
@@ -1284,13 +1467,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         changed = true;
         continue;
       }
-      // 只有当前无标签才恢复，避免覆盖用户手动编辑；
-      // 有标签则视为用户已处理，直接消费条目。
       // 恢复成功后才删条目：setTagsForBook 抛错时异常向上传播，
       // _writeTagStash 不会执行，prefs 里的条目保留，下次扫描可重试。
-      if (tagStore.tagsForBook(book.id).isEmpty) {
-        await tagStore.setTagsForBook(book.id, validIds);
-      }
+      await tagStore.setTagsForBook(book.id, {
+        ...tagStore.tagsForBook(book.id).map((tag) => tag.id), ...validIds,
+      });
       stash.remove(key);
       changed = true;
     }
@@ -1380,6 +1561,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         }
         _removeBook(book);
       }
+      await TagStore.maybeShared?.setTagsForBook(id, const []);
       // 保存失败会保留 dirty ID；已从内存移除的记录仍会在这里重试。
       // 已成功落盘的重复恢复无需再写索引。
       await _saveIndex();
@@ -1467,6 +1649,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final modified = (entry['modified'] as num?)?.toInt() ?? 0;
       var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
+        if (existing.fileName != name ||
+            existing.fileUri != uri ||
+            existing.sourceKey != sourceKey) {
+          existing = _withFilenameMetadata(
+            existing,
+            name,
+            fileUri: uri,
+            sourceKey: sourceKey,
+          );
+          chapterUpdates[existing.id] = existing;
+        }
         if (existing.kind == LocalBookKind.pdf && !force &&
             existing.size == size && existing.modified == modified) {
           continue;
@@ -1648,8 +1841,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       await _deleteBookData(book);
     }
     _removeBooks(toDelete);
-    // 先写迁移 journal，再写包含新章节表的 index。
-    // 如果进程在这两步之间退出，下次扫描会根据 journal 重建/确认新表。
+    // Journal must precede publishing any changed chapter table.
     await _stageChapterRemaps(chapterRemaps);
     for (final book in chapterUpdates.values) {
       final index = _indexForBook(book.id);
@@ -1675,6 +1867,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     // 完整扫描成功：恢复暂存标签（切回旧文件夹的场景），
     // 并清理该来源下已不存在文件对应的暂存条目。
     await _restoreStashedTags(sourceId);
+    await _migrateInternalTagsToFilenames(sourceId: sourceId, failures: failures);
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -1769,6 +1962,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       final modified = stat.modified.millisecondsSinceEpoch;
       var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
+        if (existing.fileName != name ||
+            existing.fileUri != uri ||
+            existing.sourceKey != sourceKey) {
+          existing = _withFilenameMetadata(
+            existing,
+            name,
+            fileUri: uri,
+            sourceKey: sourceKey,
+          );
+          chapterUpdates[existing.id] = existing;
+        }
         if (!force &&
             existing.size == size &&
             existing.modified == modified &&
@@ -1886,7 +2090,6 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         await _writeIgnoredSources(ignored);
       } catch (_) {}
     }
-    // 先写迁移 journal，再写包含新章节表的 index（与 scan() 同规则）。
     await _stageChapterRemaps(chapterRemaps);
     for (final book in chapterUpdates.values) {
       final index = _indexForBook(book.id);
@@ -1898,6 +2101,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     // 完整扫描成功：恢复暂存标签并清理失效条目（与 scan() 同规则）。
     await _restoreStashedTags(sourceId);
+    await _migrateInternalTagsToFilenames(sourceId: sourceId, failures: failures);
     return LocalScanResult(
       added: added,
       refreshed: refreshed,
@@ -1951,6 +2155,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<void> removeBook(int id) => _synchronized(() async {
     final book = bookFor(id);
     if (book == null) return;
+    await _clearTagStashKeys([book]);
     await _deleteBookData(book);
     _removeBook(book);
     await _saveIndex();
@@ -1962,10 +2167,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   Future<void> deleteBookFile(int id) => _synchronized(() async {
     final book = bookFor(id);
     if (book == null) return;
-    if (book.sourceId.startsWith('saf:')) {
+    if (book.fileUri.startsWith('content:')) {
       await LocalPlatform.deleteLocalDocument(book.fileUri);
     } else {
-      final file = File(book.sourceKey);
+      final file = _sourceFile(book);
       if (await file.exists()) await file.delete();
     }
     await _deleteBookData(book);
@@ -2039,12 +2244,73 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       if (keep <= 0) return null;
       name = '${stem.substring(0, keep)}$ext';
     }
-    return name;
+    return appendFilenameTags(name, parseFilenameTags(fileName).tags);
   }
 
-  /// 编辑书名/作者；书名变化时重命名源文件（保留原扩展名），book.id 不变。
-  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录
-  /// （重命名成功但索引保存失败时会尝试把文件名改回去）。
+  /// Changes source filename first; failed renames leave internal tags intact.
+  Future<LocalBook> setTagsForBook(int id, Iterable<String> tagIds) {
+    final ids = tagIds.toSet();
+    return _synchronized(() async {
+      final book = bookFor(id);
+      if (book == null) throw StateError('书籍不存在');
+      final store = TagStore.shared;
+      final names = <String>[];
+      for (final id in ids) {
+        final tag = store.tagById(id);
+        if (tag == null) throw StateError('标签已不存在，请重新选择');
+        names.add(tag.name);
+      }
+      final target = appendFilenameTags(stripFilenameTags(book.fileName), names);
+      return _commitFilename(book, target,
+        commitTags: () => store.setTagsForBook(id, ids),
+      );
+    });
+  }
+
+  Future<void> renameTag(String id, String name) => _synchronized(() async {
+    TagStore.validateTagName(name);
+    final tag = TagStore.shared.tagById(id);
+    if (tag == null || tag.name == name) return;
+    if (TagStore.shared.tags.any((t) => t.id != id && t.name == name)) {
+      throw ArgumentError('同名标签已存在');
+    }
+    await _editTagSources(id, name, () => TagStore.shared.renameTag(id, name));
+  });
+
+  Future<void> deleteTag(String id) => _synchronized(() async {
+    if (TagStore.shared.tagById(id) == null) return;
+    await _editTagSources(id, null, () => TagStore.shared.deleteTag(id));
+  });
+
+  Future<void> _editTagSources(
+    String tagId, String? replacement, Future<void> Function() commit,
+  ) async {
+    final changed = <LocalBook>[];
+    try {
+      for (final book in _books.toList()) {
+        final tags = TagStore.shared.tagsForBook(book.id);
+        if (!tags.any((tag) => tag.id == tagId)) continue;
+        final names = <String>{
+          for (final tag in tags)
+            if (tag.id != tagId) tag.name
+            else ?replacement,
+        };
+        final target = appendFilenameTags(stripFilenameTags(book.fileName), names);
+        final updated = await _renameSourceFile(book, target);
+        if (identical(updated, book)) continue;
+        changed.add(book);
+        _replaceBook(_indexForBook(book.id), updated);
+      }
+      await _saveIndex();
+      await commit();
+    } catch (error, stack) {
+      if (changed.isNotEmpty) await _restoreRenamedBooks(changed, cause: error);
+      Error.throwWithStackTrace(error, stack);
+    }
+  }
+
+  /// 编辑书名/作者；书名变化时重命名源文件（保留标签和扩展名），book.id 不变。
+  /// 成功返回更新后的 LocalBook；失败时抛错且不改动记录。
   Future<LocalBook> editBookFile(
     int id, {
     required String title,
@@ -2057,43 +2323,18 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final cleanAuthor = author.trim();
     if (cleanTitle.isEmpty) throw ArgumentError('书名不能为空');
 
-    // 只有书名真正变化时才重命名文件（只改作者时不动文件）。
     var updated = book;
     final renamed = cleanTitle != book.displayTitle;
     if (renamed) {
-      final targetName = safeFileNameForTitle(book.fileName, cleanTitle);
-      if (targetName == null) throw ArgumentError('书名无法用作文件名');
+      final baseName = safeFileNameForTitle(book.fileName, cleanTitle);
+      if (baseName == null) throw ArgumentError('书名无法用作文件名');
+      final tagNames = {
+        ...parseFilenameTags(book.fileName).tags,
+        ...?TagStore.maybeShared?.tagNamesForBook(book.id),
+      };
+      final targetName = appendFilenameTags(baseName, tagNames);
       if (targetName != book.fileName) {
-        if (book.sourceId.startsWith('saf:')) {
-          final r = await LocalPlatform.renameLocalDocument(
-            book.fileUri,
-            targetName,
-          );
-          updated = updated.copyWith(
-            title: cleanTitle,
-            fileUri: r.fileUri,
-            fileName: r.fileName,
-            sourceKey: r.sourceKey,
-          );
-        } else {
-          final dir = book.sourceKey.contains('/')
-              ? book.sourceKey.substring(0, book.sourceKey.lastIndexOf('/'))
-              : '';
-          if (dir.isEmpty) throw StateError('文件路径无效');
-          final targetPath = '$dir/$targetName';
-          if (targetPath != book.sourceKey) {
-            if (await File(targetPath).exists()) {
-              throw StateError('同名文件已存在');
-            }
-            final renamedFile = await File(book.sourceKey).rename(targetPath);
-            updated = updated.copyWith(
-              title: cleanTitle,
-              fileUri: Uri.file(renamedFile.path).toString(),
-              fileName: targetName,
-              sourceKey: renamedFile.path,
-            );
-          }
-        }
+        updated = await _renameSourceFile(book, targetName);
       }
     }
     updated = updated.copyWith(
@@ -2103,28 +2344,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     try {
       _replaceBook(index, updated);
       await _saveIndex();
-    } catch (e) {
-      // 索引保存失败：尝试把文件名改回去。
-      // - 回滚失败 → 内存恢复为原记录（磁盘索引未被修改过，与原记录一致）；
-      // - 回滚成功 → 内存保留回滚后实际返回的记录，并尽力持久化；
-      //   若持久化仍失败，内存为回滚后的真实状态，磁盘索引保持修改前的原记录。
-      if (renamed && updated.fileName != book.fileName) {
-        try {
-          final rolledBack = await _renameBack(book, updated);
-          _replaceBook(index, rolledBack);
-          try {
-            await _saveIndex();
-          } catch (_) {
-            // 回滚后的持久化仍失败：内存已是回滚后的真实状态，
-            // 磁盘索引保持修改前的原记录。
-          }
-        } catch (_) {
-          _replaceBook(index, book);
-        }
-      } else {
-        _replaceBook(index, book);
-      }
-      rethrow;
+    } catch (error, stack) {
+      await _restoreRenamedBooks([book], cause: error);
+      Error.throwWithStackTrace(error, stack);
     }
     notifyListeners();
     return updated;
@@ -2133,24 +2355,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   /// 把重命名后的文件改回原名（editBookFile 回滚用）。
   /// 返回回滚后的实际文件信息（SAF 回滚可能产生新 URI）。
   Future<LocalBook> _renameBack(LocalBook original, LocalBook current) async {
-    if (current.sourceId.startsWith('saf:')) {
-      final r = await LocalPlatform.renameLocalDocument(
-        current.fileUri,
-        original.fileName,
-      );
-      return original.copyWith(
-        fileUri: r.fileUri,
-        fileName: r.fileName,
-        sourceKey: r.sourceKey,
-      );
-    } else {
-      final f = await File(current.sourceKey).rename(original.sourceKey);
-      return original.copyWith(
-        fileUri: Uri.file(f.path).toString(),
-        fileName: original.fileName,
-        sourceKey: f.path,
-      );
-    }
+    final restored = await _renameSourceFile(current, original.fileName);
+    return original.copyWith(
+      fileUri: restored.fileUri,
+      sourceKey: restored.sourceKey,
+      customTitle: original.customTitle,
+      customAuthor: original.customAuthor,
+    );
   }
 
   /// 内部副本清理是否完整成功。其他调用方仍按尽力清理处理，
@@ -2236,7 +2447,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   static String _titleFromName(String name) {
-    var title = name;
+    var title = stripFilenameTags(name);
     final dot = title.lastIndexOf('.');
     if (dot > 0) title = title.substring(0, dot);
     final dash = title.lastIndexOf(' - ');
@@ -2246,7 +2457,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   static String _authorFromName(String name) {
-    var base = name;
+    var base = stripFilenameTags(name);
     final dot = base.lastIndexOf('.');
     if (dot > 0) base = base.substring(0, dot);
     final dash = base.lastIndexOf(' - ');
@@ -2583,7 +2794,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   @override
-  Future<Novel> detail(Novel novel) async => novel;
+  Future<Novel> detail(Novel novel) async {
+    final book = bookFor(novel.id);
+    return book == null ? novel : toNovel(book);
+  }
 
   @override
   Future<List<NovelChapter>> chapters(int id) async {

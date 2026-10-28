@@ -7,7 +7,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
 import 'app_licenses.dart';
-import 'app_typography.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'legacy_wenku_repository.dart';

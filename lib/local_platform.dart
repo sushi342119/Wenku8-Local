@@ -18,6 +18,17 @@ class LocalDeleteException implements Exception {
   String toString() => 'LocalDeleteException($code, $message)';
 }
 
+/// Failed source rename; a provider rollback can also change the document URI.
+class LocalRenameException implements Exception {
+  const LocalRenameException(this.code, this.message, {this.fileUri, this.fileName});
+  final String code;
+  final String message;
+  final String? fileUri;
+  final String? fileName;
+  @override
+  String toString() => '文件改名失败（$code）：$message';
+}
+
 /// 某 SAF 树目录的持久化权限：只作为是否重试删除的依据，
 /// 不承诺 provider 支持删除。
 class LocalTreePermission {
@@ -258,15 +269,31 @@ abstract final class LocalPlatform {
 
   /// SAF：重命名文档。返回新 URI 与 provider 确认的实际文件名。
   static Future<({String fileUri, String fileName, String sourceKey})>
-  renameLocalDocument(String documentUri, String newFileName) async {
-    final res = await channel.invokeMapMethod<String, dynamic>(
-      'renameLocalDocument',
-      {'docUri': documentUri, 'newFileName': newFileName},
-    );
-    final fileUri = res?['fileUri'] as String?;
-    final fileName = res?['fileName'] as String?;
-    if (fileUri == null || fileName == null) throw StateError('重命名文件失败');
-    return (fileUri: fileUri, fileName: fileName, sourceKey: fileUri);
+  renameLocalDocument(String documentUri, String newFileName, {String? expectedFileName}) async {
+    final Map<String, dynamic>? res;
+    try {
+      // Mutations must await their actual outcome; a Dart timeout cannot
+      // cancel a provider rename and must not report a false rollback.
+      res = await channel.invokeMapMethod<String, dynamic>(
+        'renameLocalDocument',
+        {'docUri': documentUri, 'newFileName': newFileName,
+          'expectedFileName': ?expectedFileName},
+      );
+    } on PlatformException catch (error) {
+      throw LocalRenameException(error.code, error.message ?? '请检查文件夹写权限');
+    }
+    final uri = res?['fileUri'];
+    final name = res?['fileName'];
+    if (res?['renamed'] != true || uri is! String ||
+        !uri.startsWith('content:') || name != newFileName) {
+      throw LocalRenameException(
+        res?['code'] as String? ?? 'unconfirmed',
+        res?['message'] as String? ?? '未收到可确认的改名结果',
+        fileUri: uri is String && uri.startsWith('content:') ? uri : null,
+        fileName: name is String ? name : null,
+      );
+    }
+    return (fileUri: uri, fileName: newFileName, sourceKey: uri);
   }
 
   /// SAF：选择字体文件（TTF/OTF），复制到应用私有目录后返回绝对路径；取消返回 null。

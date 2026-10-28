@@ -226,7 +226,7 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
         if (record is! Map || record.length > 20000) {
           throw const FormatException('标签归属过多或格式有误');
         }
-        for (final e in (record as Map).entries) {
+        for (final e in record.entries) {
           final bookId = int.tryParse('${e.key}');
           if (bookId == null || bookId <= 0 || bookId > 0x7fffffff) {
             throw const FormatException('标签书籍标识格式有误');
@@ -234,7 +234,7 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
           final ids = e.value;
           if (ids is! List ||
               ids.length > 1000 ||
-              ids.any((t) => t is! String || (t as String).isEmpty)) {
+              ids.any((t) => t is! String || t.isEmpty)) {
             throw const FormatException('标签归属格式有误');
           }
         }

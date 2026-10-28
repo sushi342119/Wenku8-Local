@@ -53,7 +53,7 @@ def main():
                     '--non-interactive', '--disable-vm-service', '--enable-checked-mode',
                     '--verify-entry-points', '--enable-software-rendering',
                     '--skia-deterministic-rendering', '--test-fonts',
-                    '--assets-dir=' + str(repo / 'build/unit_test_assets'), str(kernel),
+                    '--flutter-assets-dir=' + str(repo / 'build/unit_test_assets'), str(kernel),
                 ], cwd=repo, env=dict(os.environ, FLUTTER_TEST='true'),
                     stdout=log, stderr=subprocess.STDOUT, timeout=180)
             if result.returncode:

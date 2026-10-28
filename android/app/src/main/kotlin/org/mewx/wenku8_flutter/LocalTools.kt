@@ -13,6 +13,7 @@ import android.view.WindowManager
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import local.saf.localDeleteOutcome
+import local.saf.localRenameOutcome
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -193,6 +194,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                             "renameLocalDocument" -> renameLocalDocument(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
                                 call.argument<String>("newFileName") ?: "",
+                                call.argument<String>("expectedFileName"),
                             )
                             "decodeLocalText" -> decodeLocalText(
                                 call.argument<ByteArray>("bytes"),
@@ -670,24 +672,22 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     /** 重命名 SAF 文档。成功返回新 URI 与 provider 确认的实际文件名。 */
-    private fun renameLocalDocument(doc: Uri, newFileName: String): Map<String, Any?> {
-        require(newFileName.isNotBlank()) { "文件名不能为空" }
-        val resolver = activity.contentResolver
-        val newUri = DocumentsContract.renameDocument(resolver, doc, newFileName)
-            ?: throw IllegalStateException("文档不支持重命名")
-        var displayName: String? = null
-        try {
-            resolver.query(newUri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) displayName = cursor.getString(0)
-            }
-        } catch (_: Exception) {
-        }
-        return mapOf(
-            "fileUri" to newUri.toString(),
-            "fileName" to (displayName?.takeIf { it.isNotBlank() } ?: newFileName),
-            "sourceKey" to newUri.toString(),
+    private fun renameLocalDocument(doc: Uri, newFileName: String, expectedFileName: String?): Map<String, Any?> =
+        localRenameOutcome(
+            originalUri = doc,
+            newFileName = newFileName,
+            expectedFileName = expectedFileName,
+            readName = { uri ->
+                activity.contentResolver.query(
+                    uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
+            },
+            rename = { uri, name ->
+                DocumentsContract.renameDocument(activity.contentResolver, uri, name)
+            },
         )
-    }
 
     /** 从 SAF 选择字体文件，单流校验并复制到应用私有目录，返回绝对路径。
      * 校验 sfnt 签名与表目录结构；任何失败都删除临时文件，不留孤立文件。 */

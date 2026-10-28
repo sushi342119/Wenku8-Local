@@ -62,10 +62,14 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
   /// 冷启动自动扫描本地书库：已绑定文件夹时静默扫描，有变化才提示。
   Future<void> _autoScanLocal(LocalLibraryStore local) async {
-    if (local.folderUri == null) return;
     // 等首帧后再跑，避免阻塞启动。
     await Future<void>.delayed(const Duration(seconds: 2));
     if (!mounted) return;
+    if (local.tagMigrationFailures.isNotEmpty) {
+      showNovelFeedback(context, local.tagMigrationFailures.entries
+          .map((entry) => '${entry.key}：${entry.value}').join('\n'));
+    }
+    if (local.folderUri == null) return;
     try {
       final result = await local.scan();
       // 章节迁移按队列顺序执行，完成后一次提交确认和失败状态。
@@ -1358,6 +1362,7 @@ class _ShelfPageState extends State<ShelfPage> {
     state.historyChanges,
     state.shelfViewChanges,
     TagStore.shared,
+    localLibraryOf(widget.repository),
   ]);
 
   @override
@@ -1390,6 +1395,9 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Novel? _known(int id) {
+    final local = localLibraryOf(widget.repository);
+    final source = local?.bookFor(id);
+    if (source != null) return local!.toNovel(source);
     final cached = state.cachedNovel(id);
     if (cached != null) return cached;
     for (final book in widget.books) {
@@ -1763,7 +1771,7 @@ class _ShelfPageState extends State<ShelfPage> {
         ],
       ),
     );
-    if (!mounted || action == null) return;
+    if (!mounted || !context.mounted || action == null) return;
     switch (action) {
       case _ShelfBookAction.removeFromShelf:
         await _removeFromShelf(context, id, book: book);
@@ -1889,7 +1897,7 @@ class _ShelfPageState extends State<ShelfPage> {
         await state.rememberNovel(local.toNovel(updated));
       } catch (_) {}
     }
-    if (mounted) showNovelFeedback(context, '已保存');
+    if (context.mounted) showNovelFeedback(context, '已保存');
   }
 
   /// 二次确认后彻底删除本地书籍的源文件，并清理书架/标签/阅读进度。
@@ -1916,7 +1924,7 @@ class _ShelfPageState extends State<ShelfPage> {
       confirmLabel: '确认删除',
       reduceMotion: state.reduceMotion,
     );
-    if (!mounted || !second) return;
+    if (!mounted || !context.mounted || !second) return;
     // 删除失败的区分提示与兜底在 _deleteLocalBookWithFallback 内处理；
     // failed 时记录保留，直接返回。
     final deleteResult = await _deleteLocalBookWithFallback(
@@ -1949,7 +1957,7 @@ class _ShelfPageState extends State<ShelfPage> {
     } catch (_) {
       cleanupOk = false;
     }
-    if (!mounted) return;
+    if (!context.mounted) return;
     showNovelFeedback(
       context,
       cleanupOk ? successText : '书籍已移除，但部分关联数据未清干净，可重启后重试',
@@ -2579,7 +2587,10 @@ class SettingsPage extends StatelessWidget {
               subtitle: '新建、重命名或删除书架标签',
               onTap: () => pushNovelPage<void>(
                 context,
-                TagManagePage(state: state),
+                TagManagePage(
+                  state: state,
+                  local: localLibraryOf(repository),
+                ),
                 reduceMotion: state.reduceMotion,
               ),
             ),
@@ -3618,6 +3629,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                   context,
                                                   widget.state,
                                                   novel.id,
+                                                  local: localLibraryOf(repository),
                                                 ),
                                               ),
                                             ],
@@ -3869,7 +3881,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         ],
       ),
     );
-    if (!mounted || action == null) return;
+    if (!mounted || !context.mounted || action == null) return;
     if (action == 'edit') {
       await _editDetailBookInfo(context, local, novel.id);
     } else if (action == 'delete') {
@@ -3968,7 +3980,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
           await state.rememberNovel(local.toNovel(updated));
         } catch (_) {}
       }
-      if (mounted) {
+      if (mounted && context.mounted) {
         showNovelFeedback(context, '已保存');
         // 刷新详情页显示。
         setState(() => _novelOverride = local.toNovel(updated));
@@ -4007,7 +4019,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       confirmLabel: '确认删除',
       reduceMotion: state.reduceMotion,
     );
-    if (!mounted || !second) return;
+    if (!mounted || !context.mounted || !second) return;
     final deleteResult = await _deleteLocalBookWithFallback(
       context,
       local,
@@ -5997,7 +6009,7 @@ class _ReaderProgressBar extends StatelessWidget {
                                 width: w,
                                 height: 4,
                                 decoration: BoxDecoration(
-                                  color: scheme.onSurface.withOpacity(0.15),
+                                  color: scheme.onSurface.withValues(alpha: 0.15),
                                   borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
@@ -6026,7 +6038,7 @@ class _ReaderProgressBar extends StatelessWidget {
                                       shape: BoxShape.circle,
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black.withOpacity(0.2),
+                                          color: Colors.black.withValues(alpha: 0.2),
                                           blurRadius: 4,
                                         ),
                                       ],

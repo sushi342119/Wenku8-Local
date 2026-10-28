@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'filename_tags.dart';
+
 /// 书籍标签：标签库 + 每本书的标签归属，全部存在本机。
 class Tag {
   const Tag({required this.id, required this.name, required this.colorIndex});
@@ -10,14 +12,17 @@ class Tag {
   final String name;
   final int colorIndex;
 
-  Map<String, Object?> toJson() =>
-      {'id': id, 'name': name, 'color': colorIndex};
+  Map<String, Object?> toJson() => {
+    'id': id,
+    'name': name,
+    'color': colorIndex,
+  };
 
   factory Tag.fromJson(Map<String, Object?> json) => Tag(
-        id: json['id'] as String? ?? '',
-        name: json['name'] as String? ?? '',
-        colorIndex: (json['color'] as num?)?.toInt() ?? 0,
-      );
+    id: json['id'] as String? ?? '',
+    name: json['name'] as String? ?? '',
+    colorIndex: (json['color'] as num?)?.toInt() ?? 0,
+  );
 }
 
 const tagPalette = [
@@ -32,6 +37,13 @@ const tagPalette = [
 ];
 
 class TagStore extends ChangeNotifier {
+  static String validateTagName(String name) {
+    if (!isValidFilenameTag(name)) {
+      throw ArgumentError('标签名不得为空、包含空格或包含 ✦');
+    }
+    return name;
+  }
+
   TagStore._(this._prefs);
 
   static TagStore? _shared;
@@ -83,14 +95,53 @@ class TagStore extends ChangeNotifier {
   }
 
   Future<void> _persist() async {
-    await _prefs.setString(
-      'book_tags',
-      jsonEncode(_tags.map((t) => t.toJson()).toList()),
-    );
-    await _prefs.setString(
-      'book_tag_map',
-      jsonEncode(_bookTags.map((k, v) => MapEntry('$k', v.toList()))),
-    );
+    if (!await _prefs.setString(
+          'book_tags',
+          jsonEncode(_tags.map((t) => t.toJson()).toList()),
+        ) ||
+        !await _prefs.setString(
+          'book_tag_map',
+          jsonEncode(_bookTags.map((k, v) => MapEntry('$k', v.toList()))),
+        )) {
+      throw StateError('标签记录保存失败');
+    }
+  }
+
+  Future<void>? _writeLock;
+
+  Future<T> _change<T>(Future<T> Function() action) {
+    Future<T> run() async {
+      final oldTags = List<Tag>.of(_tags);
+      final oldMap = _bookTags.map(
+        (id, ids) => MapEntry(id, Set<String>.of(ids)),
+      );
+      try {
+        return await action();
+      } catch (error, stack) {
+        _tags
+          ..clear()
+          ..addAll(oldTags);
+        _bookTags
+          ..clear()
+          ..addAll(oldMap);
+        try {
+          await _persist();
+        } catch (_) {
+          /* Original failure wins. */
+        }
+        Error.throwWithStackTrace(error, stack);
+      }
+    }
+
+    // An idle store must start in the caller's zone. Retaining a completed
+    // Future created at load time stalls widget-test callers in FakeAsync.
+    final pending = _writeLock;
+    final next = pending == null ? run() : pending.then((_) => run());
+    final barrier = next.then<void>((_) {}, onError: (_) {});
+    _writeLock = barrier;
+    return next.whenComplete(() {
+      if (identical(_writeLock, barrier)) _writeLock = null;
+    });
   }
 
   Tag? tagById(String id) {
@@ -101,9 +152,8 @@ class TagStore extends ChangeNotifier {
   }
 
   /// 创建标签，返回 id；同名返回既有标签。
-  Future<String> createTag(String name) async {
-    final clean = name.trim();
-    if (clean.isEmpty) throw ArgumentError('标签名为空');
+  Future<String> createTag(String name) => _change(() async {
+    final clean = validateTagName(name);
     for (final tag in _tags) {
       if (tag.name == clean) return tag.id;
     }
@@ -118,20 +168,22 @@ class TagStore extends ChangeNotifier {
     await _persist();
     notifyListeners();
     return tag.id;
-  }
+  });
 
-  Future<void> renameTag(String id, String name) async {
-    final clean = name.trim();
-    if (clean.isEmpty) return;
+  Future<void> renameTag(String id, String name) => _change(() async {
+    final clean = validateTagName(name);
+    if (_tags.any((tag) => tag.id != id && tag.name == clean)) {
+      throw ArgumentError('同名标签已存在');
+    }
     final index = _tags.indexWhere((t) => t.id == id);
     if (index < 0) return;
     final old = _tags[index];
     _tags[index] = Tag(id: old.id, name: clean, colorIndex: old.colorIndex);
     await _persist();
     notifyListeners();
-  }
+  });
 
-  Future<void> deleteTag(String id) async {
+  Future<void> deleteTag(String id) => _change(() async {
     _tags.removeWhere((t) => t.id == id);
     for (final entry in _bookTags.values) {
       entry.remove(id);
@@ -139,86 +191,132 @@ class TagStore extends ChangeNotifier {
     _bookTags.removeWhere((_, ids) => ids.isEmpty);
     await _persist();
     notifyListeners();
-  }
+  });
 
   List<Tag> tagsForBook(int bookId) {
     final ids = _bookTags[bookId];
     if (ids == null) return const [];
-    return [for (final id in ids) tagById(id)].whereType<Tag>().toList();
+    final names = <String>{};
+    return [
+      for (final id in ids) tagById(id),
+    ].whereType<Tag>().where((tag) => names.add(tag.name)).toList();
   }
 
-  Future<void> setTagsForBook(int bookId, Iterable<String> tagIds) async {
-    final ids = tagIds.toSet();
-    if (ids.isEmpty) {
-      _bookTags.remove(bookId);
-    } else {
-      _bookTags[bookId] = ids;
+  Future<void> setTagsForBook(int bookId, Iterable<String> tagIds) =>
+      _change(() async {
+        final ids = tagIds.toSet();
+        if (ids.isEmpty) {
+          _bookTags.remove(bookId);
+        } else {
+          _bookTags[bookId] = ids;
+        }
+        await _persist();
+        notifyListeners();
+      });
+
+  /// Creates any missing definitions and merges filename tags into a book's
+  /// existing internal tags. An empty filename tag list never clears old tags.
+  Future<List<String>> mergeTagNamesForBook(
+    int bookId,
+    Iterable<String> names,
+  ) => _change(() async {
+    final cleanNames = <String>[];
+    for (final name in names) {
+      final clean = validateTagName(name);
+      if (!cleanNames.contains(clean)) cleanNames.add(clean);
     }
+    if (cleanNames.isEmpty) {
+      return tagsForBook(bookId).map((tag) => tag.name).toList();
+    }
+
+    final ids = <String>{...(_bookTags[bookId] ?? const <String>{})};
+    var changed = false;
+    for (final name in cleanNames) {
+      String? id;
+      for (final tag in _tags) {
+        if (tag.name == name) {
+          id = tag.id;
+          break;
+        }
+      }
+      if (id == null) {
+        id = 'tag_${DateTime.now().microsecondsSinceEpoch}_${_tags.length}';
+        _tags.add(
+          Tag(id: id, name: name, colorIndex: _tags.length % tagPalette.length),
+        );
+        changed = true;
+      }
+      changed = ids.add(id) || changed;
+    }
+    if (!changed) return tagsForBook(bookId).map((tag) => tag.name).toList();
+    _bookTags[bookId] = ids;
     await _persist();
     notifyListeners();
-  }
+    return tagsForBook(bookId).map((tag) => tag.name).toList();
+  });
+
+  List<String> tagNamesForBook(int bookId) =>
+      tagsForBook(bookId).map((tag) => tag.name).toList();
 
   int bookCountFor(String tagId) =>
       _bookTags.values.where((ids) => ids.contains(tagId)).length;
 
   /// 导出备份记录：标签定义 + 书籍归属，供 LibraryState 备份使用。
   Map<String, Object> exportTagRecords() => {
-        'tag_defs': jsonEncode(_tags.map((t) => t.toJson()).toList()),
-        'tag_map': jsonEncode(
-          _bookTags.map((k, v) => MapEntry('$k', v.toList())),
-        ),
-      };
+    'tag_defs': jsonEncode(_tags.map((t) => t.toJson()).toList()),
+    'tag_map': jsonEncode(_bookTags.map((k, v) => MapEntry('$k', v.toList()))),
+  };
 
   /// 从备份记录合并标签（只增不减，与书架合并语义一致）。
   /// 新装迁移时本地为空，等同于完整恢复。
-  Future<void> importTagRecords(Map<String, Object> records) async {
-    final defsRaw = records['tag_defs'];
-    if (defsRaw is String) {
-      try {
-        final list = jsonDecode(defsRaw);
-        if (list is List) {
-          for (final entry in list.whereType<Map<String, Object?>>()) {
-            final tag = Tag.fromJson(entry);
-            if (tag.id.isEmpty || tag.name.isEmpty) continue;
-            if (tag.name.length > 64) continue;
-            if (_tags.any((t) => t.id == tag.id)) continue;
-            _tags.add(tag);
-          }
-        }
-      } catch (_) {}
-    }
-    final mapRaw = records['tag_map'];
-    if (mapRaw is String) {
-      // 只保留有对应标签定义的归属（合并后的定义集合，含本机已有标签）。
-      final knownIds = _tags.map((t) => t.id).toSet();
-      try {
-        final map = jsonDecode(mapRaw);
-        if (map is Map<String, Object?>) {
-          map.forEach((key, value) {
-            final bookId = int.tryParse(key);
-            if (bookId == null ||
-                bookId <= 0 ||
-                bookId > 0x7fffffff ||
-                value is! List) {
-              return;
+  Future<void> importTagRecords(Map<String, Object> records) =>
+      _change(() async {
+        final defsRaw = records['tag_defs'];
+        if (defsRaw is String) {
+          try {
+            final list = jsonDecode(defsRaw);
+            if (list is List) {
+              for (final entry in list.whereType<Map<String, Object?>>()) {
+                final tag = Tag.fromJson(entry);
+                if (tag.id.isEmpty || tag.name.isEmpty) continue;
+                if (tag.name.length > 64) continue;
+                if (_tags.any((t) => t.id == tag.id)) continue;
+                _tags.add(tag);
+              }
             }
-            final ids = value
-                .whereType<String>()
-                .where(
-                    (id) => id.isNotEmpty && knownIds.contains(id))
-                .toSet();
-            if (ids.isEmpty) return;
-            final existing = _bookTags[bookId];
-            if (existing == null) {
-              _bookTags[bookId] = ids;
-            } else {
-              existing.addAll(ids);
-            }
-          });
+          } catch (_) {}
         }
-      } catch (_) {}
-    }
-    await _persist();
-    notifyListeners();
-  }
+        final mapRaw = records['tag_map'];
+        if (mapRaw is String) {
+          // 只保留有对应标签定义的归属（合并后的定义集合，含本机已有标签）。
+          final knownIds = _tags.map((t) => t.id).toSet();
+          try {
+            final map = jsonDecode(mapRaw);
+            if (map is Map<String, Object?>) {
+              map.forEach((key, value) {
+                final bookId = int.tryParse(key);
+                if (bookId == null ||
+                    bookId <= 0 ||
+                    bookId > 0x7fffffff ||
+                    value is! List) {
+                  return;
+                }
+                final ids = value
+                    .whereType<String>()
+                    .where((id) => id.isNotEmpty && knownIds.contains(id))
+                    .toSet();
+                if (ids.isEmpty) return;
+                final existing = _bookTags[bookId];
+                if (existing == null) {
+                  _bookTags[bookId] = ids;
+                } else {
+                  existing.addAll(ids);
+                }
+              });
+            }
+          } catch (_) {}
+        }
+        await _persist();
+        notifyListeners();
+      });
 }
