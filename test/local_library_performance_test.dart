@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'package:crypto/crypto.dart';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -8,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
+import 'package:shared_preferences_platform_interface/types.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/chapter_splitter.dart';
 import 'package:wenku8_flutter/library_state.dart';
@@ -29,11 +32,21 @@ class _Preferences extends InMemorySharedPreferencesStore {
   final writes = <String>[];
   String? failOnce;
   void Function(String)? beforeWrite;
+  String? blockedKey;
+  Completer<void>? writeGate;
+  Completer<void>? reloadGate;
+
+  @override
+  Future<Map<String, Object>> getAllWithParameters(GetAllParameters parameters) async {
+    if (reloadGate case final gate?) await gate.future;
+    return super.getAllWithParameters(parameters);
+  }
 
   @override
   Future<bool> setValue(String type, String key, Object value) async {
     writes.add(key);
     beforeWrite?.call(key);
+    if (key == blockedKey) await writeGate!.future;
     if (key == failOnce) {
       failOnce = null;
       return false;
@@ -73,6 +86,7 @@ void main() {
   final bodies = <String, String>{};
   final stores = <LocalLibraryStore>[];
   var prepares = 0;
+  var hashes = 0;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('local-performance-');
@@ -84,10 +98,17 @@ void main() {
     entries.clear();
     bodies.clear();
     prepares = 0;
+    hashes = 0;
     messenger.setMockMethodCallHandler(paths, (call) async => root.path);
     messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {
       if (call.method == 'scanLocalFolder') {
         return {'complete': true, 'entries': entries};
+      }
+      if (call.method == 'fingerprintLocalText') {
+        hashes++;
+        final text = bodies[(call.arguments as Map)['docUri']];
+        if (text == null) throw PlatformException(code: 'unreadable');
+        return sha256.convert(utf8.encode(text)).toString();
       }
       if (call.method == 'prepareLocalText') {
         prepares++;
@@ -96,7 +117,9 @@ void main() {
         if (text == null) throw PlatformException(code: 'unreadable');
         final file = File('${root.path}/prepared-$prepares.txt');
         await file.writeAsString(text);
-        return file.path;
+        return (call.arguments as Map)['withFingerprint'] == true
+            ? {'path': file.path, 'fingerprint': sha256.convert(utf8.encode(text)).toString()}
+            : file.path;
       }
       throw MissingPluginException();
     });
@@ -112,8 +135,8 @@ void main() {
     await root.delete(recursive: true);
   });
 
-  Future<LocalLibraryStore> load() async {
-    final store = await LocalLibraryStore.load();
+  Future<LocalLibraryStore> load({Duration operationTimeout = const Duration(seconds: 12)}) async {
+    final store = await LocalLibraryStore.load(operationTimeout: operationTimeout);
     stores.add(store);
     return store;
   }
@@ -162,6 +185,157 @@ void main() {
       jsonEncode({'books': books.map((book) => book.toJson()).toList()}),
     );
   }
+
+  test('scan lock times out ensureReady and expired queue entries never migrate', () async {
+    await seed(1);
+    final store = await load(operationTimeout: const Duration(milliseconds: 500));
+    final gate = Completer<Object?>();
+    final entered = Completer<void>();
+    messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) {
+      if (!entered.isCompleted) entered.complete();
+      return gate.future;
+    });
+    final scan = store.scan();
+    final scanResult = expectLater(scan, throwsA(isA<IncompleteScanException>()));
+    await entered.future;
+    var migrated = false;
+    store.migrateProgress = (_) async { migrated = true; };
+    await expectLater(store.ensureReady(localNovelIdBase).timeout(const Duration(seconds: 2)),
+      throwsA(isA<LocalOperationTimeoutException>()));
+    gate.complete({'complete': false});
+    await scanResult;
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(migrated, isFalse);
+    expect(store.books.single.chapterSplitVersion, 0);
+    await store.ensureReady(localNovelIdBase);
+    expect(migrated, isTrue);
+  });
+
+  test('migration timeout retains journal and a later open retries', () async {
+    await seed(1);
+    final store = await load(operationTimeout: const Duration(milliseconds: 120));
+    await store.scan();
+    final task = store.pendingChapterRemaps.single;
+    store.migrateProgress = (_) => Completer<void>().future;
+    await expectLater(store.ensureReady(task.bookId),
+      throwsA(isA<LocalOperationTimeoutException>()));
+    expect(store.pendingChapterRemaps.single.migrationId, task.migrationId);
+    expect(prefs.getString(_queueKey), contains(task.migrationId));
+    store.migrateProgress = (_) async {};
+    await store.ensureReady(task.bookId);
+    expect(store.pendingChapterRemaps, isEmpty);
+  });
+
+  test('rememberNovel wait times out but queued snapshots are saved after recovery', () async {
+    source(0);
+    source(1);
+    final store = await load();
+    await store.scan();
+    final state = LibraryState(prefs, writeWaitTimeout: const Duration(milliseconds: 60));
+    addTearDown(state.dispose);
+    final first = store.toNovel(store.books.first);
+    final second = store.toNovel(store.books.last);
+    storage.blockedKey = 'flutter.novel_meta_${first.id}';
+    storage.writeGate = Completer<void>();
+    final failedFirst = expectLater(state.rememberNovel(first), throwsA(isA<LocalOperationTimeoutException>()));
+    final failedSecond = expectLater(state.rememberNovel(second), throwsA(isA<LocalOperationTimeoutException>()));
+    await Future.wait([failedFirst, failedSecond]);
+    storage.writeGate!.complete();
+    await state.rememberNovel(second);
+    await prefs.reload();
+    expect(prefs.getString('novel_meta_${first.id}'), isNotNull);
+    expect(prefs.getString('novel_meta_${second.id}'), isNotNull);
+  });
+
+  test('migration behind a stalled save times out and keeps the durable retry task', () async {
+    await seed(1);
+    final store = await load();
+    await store.scan();
+    final task = store.pendingChapterRemaps.single;
+    final state = LibraryState(prefs, writeWaitTimeout: const Duration(milliseconds: 60));
+    addTearDown(state.dispose);
+    state.bindLocalChapters(store);
+    final novel = store.toNovel(store.books.single);
+    storage.blockedKey = 'flutter.novel_meta_${novel.id}';
+    storage.writeGate = Completer<void>();
+    final save = expectLater(state.rememberNovel(novel), throwsA(isA<LocalOperationTimeoutException>()));
+    await expectLater(store.ensureReady(task.bookId), throwsA(isA<LocalOperationTimeoutException>()));
+    await save;
+    expect(store.pendingChapterRemaps.single.migrationId, task.migrationId);
+    storage.writeGate!.complete();
+    await store.ensureReady(task.bookId);
+    expect(store.pendingChapterRemaps, isEmpty);
+  });
+
+  test('timed out confirmation keeps pending task visible until native commit', () async {
+    await seed(1);
+    final store = await load(operationTimeout: const Duration(milliseconds: 100));
+    await store.scan();
+    final task = store.pendingChapterRemaps.single;
+    store.migrateProgress = (_) async {};
+    storage.blockedKey = 'flutter.$_queueKey';
+    storage.writeGate = Completer<void>();
+    await expectLater(store.ensureReady(task.bookId), throwsA(isA<LocalOperationTimeoutException>()));
+    expect(store.isMigrationPending(task.bookId), isTrue);
+    expect(store.pendingChapterRemaps.single.migrationId, task.migrationId);
+    storage.writeGate!.complete();
+    await store.ensureReady(task.bookId);
+    expect(store.pendingChapterRemaps, isEmpty);
+  });
+
+  test('failed metadata write is not hidden by a permanently pending prefs reload', () async {
+    source(0);
+    final store = await load();
+    await store.scan();
+    final state = LibraryState(prefs, writeWaitTimeout: const Duration(seconds: 3));
+    addTearDown(state.dispose);
+    final novel = store.toNovel(store.books.single);
+    storage.failOnce = 'flutter.novel_meta_${novel.id}';
+    storage.reloadGate = Completer<void>();
+    await expectLater(state.rememberNovel(novel).timeout(const Duration(seconds: 2)), throwsStateError);
+    storage.reloadGate!.complete();
+    await state.rememberNovel(novel);
+    await prefs.reload();
+    expect(prefs.getString('novel_meta_${novel.id}'), isNotNull);
+  });
+
+  test('failed remap journal preserves write error even when reload stalls', () async {
+    await seed(1);
+    final store = await load();
+    storage.failOnce = 'flutter.$_queueKey';
+    storage.reloadGate = Completer<void>();
+    await expectLater(store.scan().timeout(const Duration(seconds: 3)), throwsStateError);
+    expect(store.books.single.chapterSplitVersion, 0);
+    storage.reloadGate!.complete();
+    await prefs.reload();
+    expect((await store.scan()).chapterRemaps, hasLength(1));
+  });
+
+  test('app folder skips analyze but detects same-size same-mtime overwrite', () async {
+    final oldPaths = PathProviderPlatform.instance;
+    PathProviderPlatform.instance = _TestPaths(root.path);
+    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    addTearDown(() { PathProviderPlatform.instance = oldPaths; debugDefaultTargetPlatformOverride = null; });
+    final directory = await Directory('${root.path}/novels').create();
+    final source = File('${directory.path}/book.txt');
+    await source.writeAsString('第一章 甲\n甲正文\n第二章 乙\n乙正文');
+    final stamp = DateTime.utc(2020);
+    await source.setLastModified(stamp);
+    final store = await load();
+    await store.scanAppFolder();
+    final book = store.books.single;
+    final blocker = await Directory('${root.path}/local_books/book_${book.id}.staging.importing').create();
+    final unchanged = await store.scanAppFolder();
+    expect(unchanged.refreshed, 0);
+    expect(unchanged.failures, isEmpty);
+    await blocker.delete();
+    await source.writeAsString('第一章 甲\n丙正文\n第二章 乙\n乙正文');
+    await source.setLastModified(stamp);
+    final changed = await store.scanAppFolder();
+    expect(changed.refreshed, 1);
+    expect(store.books.single.sourceFingerprint, isNot(book.sourceFingerprint));
+    expect(changed.chapterRemaps, hasLength(1));
+  });
 
   test(
     'direct imports stream UTF-8 and failed decoding preserves the old book',
@@ -246,10 +420,16 @@ void main() {
       final stamp = DateTime.utc(2000);
       await index.setLastModified(stamp);
       storage.writes.clear();
+      // An analyze job would try to open this path as a file and fail.
+      for (final book in store.books) {
+        await Directory('${root.path}/local_books/book_${book.id}.staging.importing').create();
+      }
       final second = await store.scan();
       expect(second.backfilled, 0);
       expect(second.refreshed, 0);
-      expect(prepares, 48);
+      expect(prepares, 24);
+      expect(hashes, 24);
+      expect(second.failures, isEmpty);
       expect((await index.lastModified()).toUtc(), stamp);
       expect(storage.writes, isEmpty);
       expect(
@@ -258,6 +438,11 @@ void main() {
       );
       expect((await store.browse(page: 9)).items, isEmpty);
       await expectLater(store.browse(page: 0), throwsArgumentError);
+      final restarted = await load();
+      expect((await restarted.scan()).failures, isEmpty);
+      expect(prepares, 24, reason: 'source fingerprints must survive restart');
+      expect(hashes, 48);
+      expect((await index.lastModified()).toUtc(), stamp);
     },
   );
 
@@ -354,7 +539,8 @@ void main() {
       bodies.remove('$_tree/document/0');
       prepares = 0;
       await store.scan();
-      expect(prepares, 2);
+      expect(prepares, 1);
+      expect(hashes, 1);
       expect(store.bookFor(localNovelIdBase)!.chapterSplitVersion, 3);
     },
   );

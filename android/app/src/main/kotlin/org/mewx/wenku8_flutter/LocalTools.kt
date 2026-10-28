@@ -29,11 +29,12 @@ import kotlin.math.roundToInt
 /** Explicit document/folder/share actions; never touches the Wenku8 bridge/session. */
 class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandler {
     private val io = Executors.newSingleThreadExecutor()
+    private val requests = LocalToolRequests { callback -> activity.runOnUiThread { callback() } }
     private data class Pending(val result: MethodChannel.Result, val export: String?, val legacy: Boolean = false)
     private var pending: Pending? = null
     private var pendingFolder: MethodChannel.Result? = null
     private var pendingFont: MethodChannel.Result? = null
-    private var closed = false
+    private val closed get() = requests.closed
     companion object {
         private const val REQUEST = 8019
         private const val REQUEST_FOLDER = 8021
@@ -42,6 +43,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         private const val MAX_BYTES = 4 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 16 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
+        private const val IO_TIMEOUT_MS = 20000L
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -89,13 +91,14 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                         else putExtra(Intent.EXTRA_TITLE, call.argument<String>("name") ?: "wenku8-backup.json")
                     }
                 }
+                if (!requests.begin(result)) return
                 pending = Pending(result, text, legacy)
                 try {
                     @Suppress("DEPRECATION")
                     activity.startActivityForResult(intent, REQUEST)
                 } catch (_: Exception) {
                     pending = null
-                    result.error("picker", "Document picker could not open", null)
+                    requests.error(result, "picker", "Document picker could not open")
                 }
             }
             else -> result.notImplemented()
@@ -105,7 +108,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 本地书库：SAF 文件夹选择 / 扫描 / 文本读取 / PDF 渲染。与上方文档操作互相独立。 */
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
-                "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage",
+                "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "fingerprintLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage",
                 "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
             )
         ) return false
@@ -119,6 +122,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     result.error("busy", "A folder picker is already active", null)
                     return true
                 }
+                if (!requests.begin(result)) return true
                 pendingFolder = result
                 try {
                     // 显式申请读写 + 可持久化：删除/重命名源文件需要写权限，
@@ -133,7 +137,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     activity.startActivityForResult(intent, REQUEST_FOLDER)
                 } catch (_: Exception) {
                     pendingFolder = null
-                    result.error("picker", "Folder picker could not open", null)
+                    requests.error(result, "picker", "Folder picker could not open")
                 }
                 return true
             }
@@ -142,6 +146,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     result.error("busy", "A font picker is already active", null)
                     return true
                 }
+                if (!requests.begin(result)) return true
                 pendingFont = result
                 try {
                     val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -159,19 +164,30 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     activity.startActivityForResult(intent, REQUEST_FONT)
                 } catch (_: Exception) {
                     pendingFont = null
-                    result.error("picker", "Font picker could not open", null)
+                    requests.error(result, "picker", "Font picker could not open")
                 }
                 return true
             }
-            "scanLocalFolder", "readLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
+            "scanLocalFolder", "readLocalText", "fingerprintLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
             "deleteLocalDocument", "renameLocalDocument", "queryTreePermission" -> {
-                io.execute {
+                val timeout = when (call.method) {
+                    "scanLocalFolder", "queryTreePermission", "readLocalText", "fingerprintLocalText",
+                    "prepareLocalText", "pdfPageCount", "writeLibraryPreferences" -> IO_TIMEOUT_MS
+                    else -> null
+                }
+                if (!requests.begin(result, timeout)) return true
+                val work = io.submit {
+                    if (!requests.active(result)) return@submit
                     try {
                         val response: Any = when (call.method) {
                             "scanLocalFolder" -> scanLocalFolder(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "queryTreePermission" -> queryTreePermission(Uri.parse(call.argument<String>("treeUri") ?: ""))
                             "readLocalText" -> readLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
-                            "prepareLocalText" -> prepareLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "fingerprintLocalText" -> fingerprintLocalText(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "prepareLocalText" -> prepareLocalText(
+                                Uri.parse(call.argument<String>("docUri") ?: ""),
+                                call.argument<Boolean>("withFingerprint") == true,
+                            )
                             "writeLibraryPreferences" -> writeLibraryPreferences(call.argument<Map<String, Any?>>("changes") ?: emptyMap())
                             "deleteLocalDocument" -> deleteLocalDocument(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "renameLocalDocument" -> renameLocalDocument(
@@ -191,15 +207,18 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                             )
                         }
                         activity.runOnUiThread {
-                            if (!closed) result.success(response)
-                            else if (call.method == "prepareLocalText" && response is String) File(response).delete()
+                            if (!requests.complete(result) { result.success(response) } && call.method == "prepareLocalText") {
+                                val path = if (response is String) response else (response as? Map<*, *>)?.get("path") as? String
+                                if (path != null) File(path).delete()
+                            }
                         }
                     } catch (e: SecurityException) {
-                        activity.runOnUiThread { if (!closed) result.error("permission", "Folder permission was revoked", null) }
+                        requests.error(result, "permission", "Folder permission was revoked")
                     } catch (e: Exception) {
-                        activity.runOnUiThread { if (!closed) result.error("local", e.message ?: "Local file operation failed", null) }
+                        requests.error(result, "local", e.message ?: "Local file operation failed")
                     }
                 }
+                requests.track(result, work)
                 return true
             }
         }
@@ -213,19 +232,21 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             if (result == null) return true
             val uri = data?.data
             if (code != Activity.RESULT_OK || uri == null) {
-                result.success(null)
+                requests.success(result, null)
                 return true
             }
-            io.execute {
+            val work = io.submit {
+                if (!requests.active(result)) return@submit
                 try {
                     val path = copyFontToPrivateDir(uri)
-                    activity.runOnUiThread { if (!closed) result.success(path) }
+                    requests.success(result, path)
                 } catch (e: SecurityException) {
-                    activity.runOnUiThread { if (!closed) result.error("permission", "Font permission was revoked", null) }
+                    requests.error(result, "permission", "Font permission was revoked")
                 } catch (e: Exception) {
-                    activity.runOnUiThread { if (!closed) result.error("font", e.message ?: "Font import failed", null) }
+                    requests.error(result, "font", e.message ?: "Font import failed")
                 }
             }
+            requests.track(result, work)
             return true
         }
         if (request == REQUEST_FOLDER) {
@@ -234,7 +255,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             if (result == null) return true
             val uri = data?.data
             if (code != Activity.RESULT_OK || uri == null) {
-                result.success(null)
+                requests.success(result, null)
                 return true
             }
             try {
@@ -248,9 +269,9 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 val takeFlags = if (granted != 0) granted
                 else Intent.FLAG_GRANT_READ_URI_PERMISSION
                 activity.contentResolver.takePersistableUriPermission(uri, takeFlags)
-                result.success(uri.toString())
+                requests.success(result, uri.toString())
             } catch (_: Exception) {
-                result.error("permission", "Folder permission was not granted", null)
+                requests.error(result, "permission", "Folder permission was not granted")
             }
             return true
         }
@@ -259,10 +280,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         val uri = data?.data
         if (code != Activity.RESULT_OK || uri == null) {
             pending = null
-            operation.result.success(if (operation.export == null) null else false)
+            requests.success(operation.result, if (operation.export == null) null else false)
             return true
         }
-        io.execute {
+        val work = io.submit {
+            if (!requests.active(operation.result)) return@submit
             try {
                 val response: Any = if (operation.legacy) {
                     readLegacyTree(uri)
@@ -287,20 +309,21 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                         .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes.toByteArray())).toString()
                 }
                 activity.runOnUiThread {
-                    if (!closed) {
+                    requests.complete(operation.result) {
                         pending = null
                         operation.result.success(response)
                     }
                 }
             } catch (_: Exception) {
                 activity.runOnUiThread {
-                    if (!closed) {
+                    requests.complete(operation.result) {
                         pending = null
                         operation.result.error("document", "Document read or write failed", null)
                     }
                 }
             }
         }
+        requests.track(operation.result, work)
         return true
     }
 
@@ -319,6 +342,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             return activity.contentResolver.query(uri, columns, null, null, null)?.use { cursor ->
                 val records = ArrayList<Doc>()
                 while (cursor.moveToNext()) {
+                    if (Thread.currentThread().isInterrupted) throw InterruptedException()
                     if (records.size >= MAX_SCAN_FILES) break
                     val size = try { cursor.getLong(3) } catch (_: Exception) { 0L }
                     val modified = try { cursor.getLong(4) } catch (_: Exception) { 0L }
@@ -334,6 +358,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         var complete = true
         var reason: String? = null
         fun walk(id: String, depth: Int) {
+            if (Thread.currentThread().isInterrupted) throw InterruptedException()
             if (!complete) return
             if (depth > 10) {
                 complete = false
@@ -427,9 +452,28 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         return editor.commit()
     }
 
+    /** Hash source bytes without decoding or writing a temporary copy. */
+    private fun fingerprintLocalText(doc: Uri): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        activity.contentResolver.openInputStream(doc)?.use { input ->
+            val buffer = ByteArray(65536)
+            var total = 0
+            while (true) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                val count = input.read(buffer)
+                if (count < 0) break
+                total += count
+                require(total <= MAX_TEXT_BYTES) { "Text file exceeds 16 MB" }
+                digest.update(buffer, 0, count)
+            }
+        } ?: throw IllegalStateException("File is not readable")
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
     /** Stage bounded source bytes once, then decode without a full-book byte/string buffer.
-     * The UTF-8 -> GB18030 -> lenient UTF-8 order is identical to decodeTextBytes. */
-    private fun prepareLocalText(doc: Uri): String {
+     * The SHA-256 describes the same bytes as the returned decoded snapshot. */
+    private fun prepareLocalText(doc: Uri, withFingerprint: Boolean = false): Any {
+        val digest = MessageDigest.getInstance("SHA-256")
         val raw = File.createTempFile("local-raw-", ".tmp", activity.cacheDir)
         val decoded = File.createTempFile("local-utf8-", ".tmp", activity.cacheDir)
         try {
@@ -438,10 +482,12 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     val buffer = ByteArray(65536)
                     var total = 0
                     while (true) {
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
                         val count = input.read(buffer)
                         if (count < 0) break
                         total += count
                         require(total <= MAX_TEXT_BYTES) { "Text file exceeds 16 MB" }
+                        digest.update(buffer, 0, count)
                         output.write(buffer, 0, count)
                     }
                 }
@@ -456,7 +502,10 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                             reader.copyTo(writer, 32768)
                         }
                     }
-                    return decoded.absolutePath
+                    return if (withFingerprint) mapOf(
+                        "path" to decoded.absolutePath,
+                        "fingerprint" to digest.digest().joinToString("") { "%02x".format(it) },
+                    ) else decoded.absolutePath
                 } catch (error: CharacterCodingException) {
                     if (index == 2) throw error
                 }
@@ -476,6 +525,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         activity.contentResolver.openInputStream(doc)?.use { input ->
             val buffer = ByteArray(65536)
             while (true) {
+                if (Thread.currentThread().isInterrupted) throw InterruptedException()
                 val count = input.read(buffer)
                 if (count < 0) break
                 if (bytes.size() + count > MAX_TEXT_BYTES) throw IllegalArgumentException("Text file exceeds 16 MB")
@@ -818,12 +868,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     fun close() {
-        closed = true
-        pending?.result?.error("closed", "Activity closed", null)
+        requests.close()
         pending = null
-        pendingFolder?.error("closed", "Activity closed", null)
         pendingFolder = null
+        pendingFont = null
         activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        io.shutdown()
+        io.shutdownNow()
     }
 }

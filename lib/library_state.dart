@@ -17,6 +17,8 @@ import 'local_platform.dart';
 import 'local_library.dart';
 import 'text_anchor.dart';
 
+const _libraryWriteTimeout = Duration(seconds: 8);
+
 class ReadingPosition {
   const ReadingPosition({
     required this.chapter,
@@ -130,7 +132,7 @@ class ReaderBookmark {
 }
 
 class LibraryState extends ChangeNotifier {
-  LibraryState(this._prefs) {
+  LibraryState(this._prefs, {this.writeWaitTimeout = _libraryWriteTimeout}) {
     _shelf.addAll(
       ((_prefs.get('shelf') is List<String>)
               ? _prefs.getStringList('shelf')!
@@ -258,6 +260,7 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
+  final Duration writeWaitTimeout;
   final SharedPreferences _prefs;
   final _appearance = ChangeNotifier();
   final _application = ChangeNotifier();
@@ -542,6 +545,14 @@ class LibraryState extends ChangeNotifier {
     return _positionWrites;
   }
 
+  // Bound the caller's wait without replacing _positionWrites: the queued
+  // save/migration remains ordered and can finish when storage recovers.
+  Future<T> _withWriteTimeout<T>(Future<T> future, String operation) =>
+      future.timeout(
+        writeWaitTimeout,
+        onTimeout: () => throw LocalOperationTimeoutException('$operation（待办已保留）'),
+      );
+
   /// Hide history without destroying resume positions, shelf or body files.
   Future<void> hideReadingHistory(int id) {
     if (_restoreBarrier case final barrier?) {
@@ -599,7 +610,21 @@ class LibraryState extends ChangeNotifier {
 
   /// All consumers are prepared together before any progress is overwritten.
   /// Replay writes the journal's target records, never reinterprets new offsets.
-  Future<void> migrateLocalChapterTask(LocalChapterRemap task, {bool readingAlreadyMigrated = false}) {
+  Future<void> migrateLocalChapterTask(
+    LocalChapterRemap task, {
+    bool readingAlreadyMigrated = false,
+  }) => _withWriteTimeout(
+    _migrateLocalChapterTask(
+      task,
+      readingAlreadyMigrated: readingAlreadyMigrated,
+    ),
+    '阅读进度迁移',
+  );
+
+  Future<void> _migrateLocalChapterTask(
+    LocalChapterRemap task, {
+    required bool readingAlreadyMigrated,
+  }) {
     if (task.newTextPath.isEmpty) {
       final local = _localChapters;
       final book = local?.bookFor(task.bookId);
@@ -624,9 +649,9 @@ class LibraryState extends ChangeNotifier {
       if (legacyJournal != null) {
         return remapChapterProgress(task.bookId, oldChapters: task.oldChapters,
           newChapters: task.newChapters, migrationId: task.migrationId).then((_) =>
-            migrateLocalChapterTask(enriched, readingAlreadyMigrated: true));
+            _migrateLocalChapterTask(enriched, readingAlreadyMigrated: true));
       }
-      return migrateLocalChapterTask(enriched);
+      return _migrateLocalChapterTask(enriched, readingAlreadyMigrated: false);
     }
     return _queuePositionWrite(() async {
       final id = task.bookId;
@@ -1233,14 +1258,18 @@ class LibraryState extends ChangeNotifier {
 
   Future<void> rememberNovel(Novel novel) {
     if (_restoreBarrier case final barrier?) {
-      return barrier.future.then((_) => rememberNovel(novel));
+      return _withWriteTimeout(
+        barrier.future.then((_) => rememberNovel(novel)),
+        '书籍详情保存',
+      );
     }
     if (novel.id <= 0) return Future.value();
     _known[novel.id] = novel;
     final snapshot = _novelSnapshot(novel);
-    return snapshot == null
+    final queued = snapshot == null
         ? _positionWrites
         : _queuePositionWrite(() => _writeNovel(novel, snapshot));
+    return _withWriteTimeout(queued, '书籍详情保存');
   }
 
   Future<ReaderBookmark?> addBookmark({

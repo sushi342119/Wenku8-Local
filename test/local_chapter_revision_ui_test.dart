@@ -1,4 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
+import 'package:wenku8_flutter/catalog.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,6 +14,25 @@ import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/local_library.dart';
 import 'package:wenku8_flutter/local_platform.dart';
 import 'package:wenku8_flutter/pages.dart';
+
+// The persistent isolate's callbacks can belong to the widget clock while a
+// subsequent scan starts in runAsync. Drive both clocks until that scan ends.
+Future<void> _scanWithFrames(WidgetTester tester, LocalLibraryStore store) async {
+  var done = false;
+  Object? error;
+  await tester.runAsync(() async {
+    store.scan().then((_) { done = true; }, onError: (Object failure) {
+      error = failure;
+      done = true;
+    });
+  });
+  for (var i = 0; i < 200 && !done; i++) {
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+    await tester.pump(const Duration(milliseconds: 10));
+  }
+  expect(done, isTrue, reason: 'background scan must finish');
+  if (error != null) throw error!;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -42,10 +65,15 @@ void main() {
           ],
         };
       }
+      if (call.method == 'fingerprintLocalText') {
+        return sha256.convert(utf8.encode(text)).toString();
+      }
       if (call.method == 'prepareLocalText') {
         final file = File('${root.path}/decoded-${serial++}.txt');
         await file.writeAsString(text);
-        return file.path;
+        return (call.arguments as Map)['withFingerprint'] == true
+            ? {'path': file.path, 'fingerprint': sha256.convert(utf8.encode(text)).toString()}
+            : file.path;
       }
       throw MissingPluginException();
     });
@@ -62,6 +90,54 @@ void main() {
     messenger.setMockMethodCallHandler(paths, null);
     messenger.setMockMethodCallHandler(LocalPlatform.channel, null);
     await root.delete(recursive: true);
+  });
+
+  group('detail while a scan owns the mutation lock', () {
+    late Completer<Object?> blocked;
+    late Future<void> scanResult;
+    setUp(() async {
+      blocked = Completer<Object?>();
+      final entered = Completer<void>();
+      messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) {
+        if (!entered.isCompleted) entered.complete();
+        return blocked.future;
+      });
+      scanResult = expectLater(store.scan(), throwsA(isA<IncompleteScanException>()));
+      await entered.future;
+    });
+    tearDown(() async {
+      if (!blocked.isCompleted) blocked.complete({'complete': false});
+      await scanResult;
+    });
+    testWidgets('composite detail times out and can retry after scan releases', (tester) async {
+      final book = store.books.single;
+      await tester.pumpWidget(MaterialApp(theme: novelTheme(Brightness.light),
+        home: DetailLoaderPage(novel: store.toNovel(book), state: state,
+          repository: CompositeNovelRepository(local: store, remote: const DemoNovelRepository()),
+          loadTimeout: const Duration(milliseconds: 100))));
+      expect(tester.widget<DetailPage>(find.byType(DetailPage)).isLoading, isTrue);
+      await tester.pump(const Duration(milliseconds: 150));
+      await tester.pump();
+      final failed = tester.widget<DetailPage>(find.byType(DetailPage));
+      expect(failed.isLoading, isFalse);
+      expect(failed.loadError, isA<LocalOperationTimeoutException>());
+      expect(find.byType(DetailSkeleton), findsNothing);
+      expect(find.text('重试'), findsOneWidget);
+      await tester.runAsync(() async {
+        blocked.complete({'complete': false});
+        await scanResult;
+      });
+      await tester.pump();
+      await tester.tap(find.text('重试'));
+      for (var i = 0; i < 6; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+        await tester.pump();
+      }
+      final ready = tester.widget<DetailPage>(find.byType(DetailPage));
+      expect(ready.loadError, isNull);
+      expect(ready.novel.chapters, hasLength(2));
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   });
 
   testWidgets(
@@ -104,7 +180,7 @@ void main() {
       }
       expect(find.textContaining('乙唯一目标段落'), findsOneWidget);
       text = '序章 新开场\n新正文。\n第一章 起点\n甲独立正文段落。\n第二章 终点\n乙唯一目标段落。\n';
-      await tester.runAsync(() => store.scan());
+      await _scanWithFrames(tester, store);
       for (var i = 0; i < 10; i++) {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)),
@@ -164,7 +240,7 @@ void main() {
       DetailPage detail() => tester.widget<DetailPage>(find.byType(DetailPage));
       expect(detail().novel.chapters, hasLength(2));
       text = '序章 新开场\n新正文。\n第一章 起点\n甲独立正文段落。\n第二章 终点\n乙唯一目标段落。\n';
-      await tester.runAsync(() => store.scan());
+      await _scanWithFrames(tester, store);
       for (var i = 0; i < 8; i++) {
         await tester.runAsync(
           () => Future<void>.delayed(const Duration(milliseconds: 20)),

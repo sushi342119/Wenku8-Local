@@ -3071,11 +3071,13 @@ class DetailLoaderPage extends StatefulWidget {
     required this.state,
     required this.repository,
     this.coverHeroTag,
+    this.loadTimeout = const Duration(seconds: 12),
   });
   final Novel novel;
   final LibraryState state;
   final NovelRepository repository;
   final Object? coverHeroTag;
+  final Duration loadTimeout;
 
   @override
   State<DetailLoaderPage> createState() => _DetailLoaderPageState();
@@ -3087,9 +3089,14 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
   LocalLibraryStore? get _local => localLibraryOf(widget.repository);
   String? _revision;
   bool _loadingLocal = false;
+  int _loadGeneration = 0;
+  final _disposed = Completer<void>();
   void _localChanged() {
     final book = _local?.bookFor(widget.novel.id);
-    if (!mounted || _loadingLocal || book == null || book.revision == _revision) {
+    if (!mounted ||
+        _loadingLocal ||
+        book == null ||
+        book.revision == _revision) {
       return;
     }
     setState(() {
@@ -3100,6 +3107,8 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
 
   @override
   void dispose() {
+    _loadGeneration++;
+    _disposed.complete();
     _local?.removeListener(_localChanged);
     super.dispose();
   }
@@ -3127,21 +3136,51 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
     }
   }
 
-  Future<Novel> _load() async {
+  Future<Novel> _load() {
+    final future = _loadWithDeadline();
+    // A retry can fail before the next frame subscribes its FutureBuilder.
+    // Retain the error for that builder without an unhandled async error.
+    future.ignore();
+    return future;
+  }
+
+  Future<Novel> _loadWithDeadline() async {
+    final generation = ++_loadGeneration;
+    var expired = false;
     _loadingLocal = true;
-    try {
+    void checkActive() {
+      if (expired || !mounted || generation != _loadGeneration) {
+        throw StateError('详情加载已取消');
+      }
+    }
+    Future<Novel> loadBody() async {
       if (_local case final local?) {
         widget.state.bindLocalChapters(local);
         await local.ensureReady(widget.novel.id);
+        checkActive();
       }
       final detail = await widget.repository.detail(widget.novel);
+      checkActive();
       final chapters = await widget.repository.chapters(widget.novel.id);
+      checkActive();
       final loaded = detail.withChapters(chapters);
       await widget.state.rememberNovel(loaded);
+      checkActive();
+      return loaded;
+    }
+    try {
+      final loaded = await Future.any<Novel>([
+        loadBody(),
+        _disposed.future.then<Novel>((_) => throw StateError('详情页已关闭')),
+      ]).timeout(widget.loadTimeout, onTimeout: () {
+        expired = true;
+        throw const LocalOperationTimeoutException('详情加载');
+      });
+      checkActive();
       _revision = _local?.bookFor(widget.novel.id)?.revision;
       return loaded;
     } finally {
-      _loadingLocal = false;
+      if (generation == _loadGeneration) _loadingLocal = false;
     }
   }
 

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -358,7 +359,9 @@ Future<void> writeLibraryPreference(
     // The legacy plugin updates its in-memory cache before returning a failed
     // platform write. Reload prevents a failed hide/favorite from surviving a
     // new LibraryState instance in the same process.
-    await prefs.reload();
+    try {
+      await prefs.reload().timeout(const Duration(seconds: 1));
+    } catch (_) { /* Preserve the original write error. */ }
     rethrow;
   }
 }

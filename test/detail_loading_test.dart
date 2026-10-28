@@ -42,6 +42,21 @@ class _PendingDetail extends DemoNovelRepository {
   Future<List<NovelChapter>> chapters(int id) => directory.future;
 }
 
+class _RetryDetail extends DemoNovelRepository {
+  _RetryDetail(this.ready);
+  final Novel ready;
+  final first = Completer<Novel>();
+  int detailCalls = 0;
+  int chapterCalls = 0;
+  @override
+  Future<Novel> detail(Novel novel) => ++detailCalls == 1 ? first.future : Future.value(ready);
+  @override
+  Future<List<NovelChapter>> chapters(int id) async {
+    chapterCalls++;
+    return ready.chapters;
+  }
+}
+
 void main({
   Future<void> Function(WidgetTester tester, GlobalKey key, String name)?
   capture,
@@ -70,6 +85,35 @@ void main({
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
   }
+
+  testWidgets('detail deadline shows retry and ignores the first late result', (tester) async {
+    phoneViewport(tester);
+    final repository = _RetryDetail(novel);
+    await tester.pumpWidget(_app(DetailLoaderPage(
+      novel: novel.withChapters(const []), state: state, repository: repository,
+      loadTimeout: const Duration(seconds: 1),
+    )));
+    await tester.pump(const Duration(milliseconds: 1100));
+    await tester.pumpAndSettle();
+    expect(find.byType(DetailSkeleton), findsNothing);
+    expect(find.text('书籍详情加载失败'), findsOneWidget);
+    expect(tester.widget<DetailPage>(find.byType(DetailPage)).loadError, isNotNull);
+    await tester.tap(find.text('重试'));
+    await tester.pump();
+    for (var i = 0; i < 6; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(tester.widget<DetailPage>(find.byType(DetailPage)).loadError, isNull);
+    expect(repository.chapterCalls, 1);
+    repository.first.complete(novel.withChapters(const []));
+    await tester.pumpAndSettle();
+    expect(repository.chapterCalls, 1, reason: 'expired request must not continue into chapters/save');
+    expect(tester.widget<DetailPage>(find.byType(DetailPage)).novel.chapters, novel.chapters);
+    await tester.pumpWidget(const SizedBox.shrink());
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets(
     'late author and corrected title share the ready-content cut-in',

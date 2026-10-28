@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
@@ -15,6 +16,7 @@ import 'local_platform.dart';
 import 'book_tags.dart';
 import 'local_record_removal.dart';
 import 'local_source_identity.dart';
+import 'local_text_worker_client.dart';
 
 part 'local_text_worker.dart';
 
@@ -24,6 +26,13 @@ const localNovelIdBase = 0x40000000;
 
 bool isLocalNovelId(int id) =>
     id >= localNovelIdBase && id <= 0x7fffffff;
+
+class LocalOperationTimeoutException implements Exception {
+  const LocalOperationTimeoutException(this.operation);
+  final String operation;
+  @override
+  String toString() => '$operation 超时，请重试';
+}
 
 /// 扫描不完整时抛出的异常：entries 不可信，不能用于更新书库。
 /// [reason] 为原生返回的原因：permission / enumeration_failed /
@@ -101,6 +110,7 @@ class LocalBook {
     this.sourceKey = '',
     this.chapterSplitVersion = 0,
     this.textFingerprint = '',
+    this.sourceFingerprint = '',
   });
 
   final int id;
@@ -123,6 +133,8 @@ class LocalBook {
   /// 该书最近一次成功应用的章节切分规则版本。
   final int chapterSplitVersion;
   final String textFingerprint;
+  /// SHA-256 of original bytes, including encoding/BOM/line endings.
+  final String sourceFingerprint;
   String get revision => _bookRevisionCache[this] ??= sha256
       .convert(
         utf8.encode(
@@ -160,6 +172,7 @@ class LocalBook {
     String? sourceId,
     int? chapterSplitVersion,
     String? textFingerprint,
+    String? sourceFingerprint,
   }) => LocalBook(
     id: id,
     title: title ?? this.title,
@@ -178,6 +191,7 @@ class LocalBook {
     sourceKey: sourceKey ?? this.sourceKey,
     chapterSplitVersion: chapterSplitVersion ?? this.chapterSplitVersion,
     textFingerprint: textFingerprint ?? this.textFingerprint,
+    sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
   );
 
   Map<String, Object?> toJson() => {
@@ -198,6 +212,7 @@ class LocalBook {
     if (sourceKey.isNotEmpty) 'sourceKey': sourceKey,
     'chapterSplitVersion': chapterSplitVersion,
     'textFingerprint': textFingerprint,
+    'sourceFingerprint': sourceFingerprint,
   };
 
   factory LocalBook.fromJson(Map<String, Object?> json) {
@@ -225,6 +240,7 @@ class LocalBook {
       sourceKey: json['sourceKey'] as String? ?? '',
       chapterSplitVersion: (json['chapterSplitVersion'] as num?)?.toInt() ?? 0,
       textFingerprint: json['textFingerprint'] as String? ?? '',
+      sourceFingerprint: json['sourceFingerprint'] as String? ?? '',
     );
   }
 }
@@ -464,6 +480,7 @@ class LocalScanResult {
 
 /// 章节切分规则版本；与应用版本独立。
 const _chapterSplitVersion = 3;
+const _localOperationTimeout = Duration(seconds: 12);
 
 const _shelfPalette = [
   [Color(0xFF5C4A3A), Color(0xFF8A6F55)],
@@ -488,10 +505,18 @@ class BookCleanupFailed implements Exception {
 
 /// 本地图书仓库：SAF 文件夹扫描、TXT 章节切分、PDF 页数。
 /// 实现 [NovelRepository]，本地图书 id 落在 [localNovelIdBase] 段。
-class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibraryStore._(this._prefs, this._supportDir);
+class LocalLibraryStore extends NovelRepository with ChangeNotifier {
+  LocalLibraryStore._(
+    this._prefs,
+    this._supportDir,
+    this._operationTimeout,
+    this._textWorker,
+  );
 
   final SharedPreferences _prefs;
   final Directory _supportDir;
+  final Duration _operationTimeout;
+  final _LocalTextWorker _textWorker;
   final List<LocalBook> _books = [];
   final Map<int, int> _bookPositions = {};
   final Map<int, LocalBook> _savedBookRefs = {};
@@ -501,22 +526,52 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   var _textCacheBytes = 0;
   int _nextIdCursor = localNovelIdBase;
   int _reservedIdEnd = localNovelIdBase;
-  final _textWorker = _LocalTextWorker();
   final Set<int> _dirtyBookIds = {};
 
   /// 串行化所有变更操作，防止扫描/删除/编辑竞态（修复#4）。
   Future<void> _mutationLock = Future.value();
 
-  Future<T> _synchronized<T>(Future<T> Function() action) {
-    final next = _mutationLock.then((_) => action());
-    _mutationLock = next.then((_) {}, onError: (_) {});
-    return next;
+  Future<T> _synchronized<T>(
+    Future<T> Function() action, {
+    Duration? timeout,
+    String operation = '本地操作',
+  }) {
+    var expired = false;
+    var started = false;
+    final next = _mutationLock.then((_) {
+      // A caller that timed out in the queue must never start mutating later.
+      if (expired) throw LocalOperationTimeoutException('$operation等待本地操作锁');
+      started = true;
+      return action();
+    });
+    // Keep ownership until the real action finishes. Future.timeout alone
+    // cannot cancel file/prefs writes and must not unlock them early.
+    _mutationLock = next.then<void>((_) {}, onError: (_) {});
+    if (timeout == null) return next;
+    return next.timeout(timeout, onTimeout: () {
+      expired = true;
+      throw LocalOperationTimeoutException(
+        started ? operation : '$operation等待本地操作锁',
+      );
+    });
   }
 
-  static Future<LocalLibraryStore> load() async {
+  static Future<LocalLibraryStore> load({
+    Duration operationTimeout = _localOperationTimeout,
+    Duration workerReadyTimeout = const Duration(seconds: 3),
+    Duration workerReplyTimeout = const Duration(seconds: 12),
+  }) async {
     final prefs = await SharedPreferences.getInstance();
     final support = await getApplicationSupportDirectory();
-    final store = LocalLibraryStore._(prefs, support);
+    final store = LocalLibraryStore._(
+      prefs,
+      support,
+      operationTimeout,
+      _LocalTextWorker(
+        readyTimeout: workerReadyTimeout,
+        replyTimeout: workerReplyTimeout,
+      ),
+    );
     await store._loadIndex();
     // 索引已加载进 _books 后，先记录已持久化的章节表快照，
     // 再向 UI 发布书库前恢复仅移出待办。
@@ -697,11 +752,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         ],
       );
 
-  Future<void> ensureReady(int id) => _synchronized(() async {
-    // A failed index rename leaves only staged candidates in memory. Commit
-    // them before exposing or migrating to that content revision.
+  Future<void> ensureReady(int id) => _synchronized(
+    () => _ensureReadyInLock(id),
+    timeout: _operationTimeout,
+    operation: '详情准备',
+  );
+
+  Future<void> _ensureReadyInLock(int id) async {
     if (_dirtyBookIds.contains(id)) await _saveIndex();
-    var book = bookFor(id);
+    final book = bookFor(id);
     if (book == null || book.kind != LocalBookKind.txt) return;
     if (book.chapterSplitVersion != _chapterSplitVersion) {
       final remaps = <LocalChapterRemap>[];
@@ -734,11 +793,23 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final migrate = migrateProgress;
       if (migrate == null) throw StateError('阅读进度待迁移，请完成书库刷新');
       final task = tasks.first;
-      try { await migrate(task); }
-      catch (error) {
-        await _writePendingChapterRemaps(_readPendingChapterRemaps().map((r) =>
-          r.bookId == id && r.migrationId == task.migrationId ? r.withFailure(error) : r));
+      try {
+        await migrate(task).timeout(
+          _operationTimeout,
+          onTimeout: () => throw const LocalOperationTimeoutException('阅读进度迁移'),
+        );
+      } on LocalOperationTimeoutException {
+        // The durable task is already pending. Do not wait for another write
+        // just to record this timeout, and never confirm a timed out migration.
         rethrow;
+      } catch (error, stack) {
+        try {
+          await _writePendingChapterRemaps(_readPendingChapterRemaps().map((r) =>
+            r.bookId == id && r.migrationId == task.migrationId ? r.withFailure(error) : r));
+        } catch (_) {
+          // A diagnostic write must not replace the original migration error.
+        }
+        Error.throwWithStackTrace(error, stack);
       }
       await _writePendingChapterRemaps(
         _readPendingChapterRemaps().where(
@@ -748,10 +819,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       notifyListeners();
     }
     if (isMigrationPending(id)) throw StateError('章节更新尚未提交');
-  });
+  }
 
   /// ---- 章节迁移任务（可恢复）----
+  List<LocalChapterRemap>? _remapsDuringWrite;
+
   List<LocalChapterRemap> _readPendingChapterRemaps() {
+    if (_remapsDuringWrite case final pending?) return pending;
     final raw = _prefs.getString(_pendingChapterRemapsKey);
     if (raw == null || raw.isEmpty) return const [];
     final decoded = jsonDecode(raw);
@@ -766,13 +840,27 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   ) async {
     // 不排序：队列必须保留产生顺序，同一本书 A→B、B→C 的迁移
     // 不能因 migrationId 的哈希字典序被打乱，否则调用方按序执行会串章。
-    await _checkedSet(
-      () => _prefs.setString(
+    final previous = _readPendingChapterRemaps();
+    final next = remaps.toList();
+    // SharedPreferences updates its cache before native commit. Keep all tasks
+    // visible until the real write completes, especially a timed out confirm.
+    _remapsDuringWrite = {
+      for (final task in [...previous, ...next])
+        _remapKey(task.bookId, task.migrationId): task,
+    }.values.toList();
+    try {
+      await _checkedSet(
+        () => _prefs.setString(
+          _pendingChapterRemapsKey,
+          jsonEncode([for (final remap in next) remap.toJson()]),
+        ),
         _pendingChapterRemapsKey,
-        jsonEncode([for (final remap in remaps) remap.toJson()]),
-      ),
-      _pendingChapterRemapsKey,
-    );
+      );
+      _remapsDuringWrite = null;
+    } catch (_) {
+      _remapsDuringWrite = previous;
+      rethrow;
+    }
   }
 
   /// 把任务写成 journal。必须在 _saveIndex() 之前调用（扫描函数内部，
@@ -1003,7 +1091,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final ok = await write();
       if (!ok) throw StateError('写入失败: $what');
     } catch (_) {
-      await (await SharedPreferences.getInstance()).reload();
+      try {
+        await SharedPreferences.getInstance().then((prefs) => prefs.reload())
+            .timeout(const Duration(seconds: 1));
+      } catch (_) { /* Preserve the original write error. */ }
       rethrow;
     }
   }
@@ -1380,6 +1471,30 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
             existing.size == size && existing.modified == modified) {
           continue;
         }
+        // Metadata is the fast candidate check. A provider can leave both
+        // size and mtime unchanged after an in-place overwrite, so the final
+        // skip decision also requires a SHA-256 fingerprint. The hash-only
+        // native/worker job does not decode, split or rewrite the book.
+        if (!force &&
+            existing.kind == LocalBookKind.txt &&
+            existing.size == size &&
+            existing.modified == modified &&
+            existing.chapterSplitVersion == _chapterSplitVersion &&
+            existing.wordCount != null &&
+            existing.sourceFingerprint.isNotEmpty) {
+          try {
+            if (await _sourceHasFingerprint(
+              existing,
+              existing.sourceFingerprint,
+            )) {
+              continue;
+            }
+          } catch (error) {
+            failures['$name ($sourceKey)'] = error.toString();
+            skipped++;
+            continue;
+          }
+        }
         LocalBook? book;
         try {
           await _preserveCachedSnapshot(existing);
@@ -1405,7 +1520,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         if (!force && book.revision == existing.revision &&
             book.size == existing.size &&
             book.modified == existing.modified &&
-            book.wordCount == existing.wordCount) {
+            book.wordCount == existing.wordCount &&
+            book.sourceFingerprint == existing.sourceFingerprint) {
           continue;
         }
         if (book.kind == LocalBookKind.txt && existing.chapters.isNotEmpty &&
@@ -1653,6 +1769,25 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       final modified = stat.modified.millisecondsSinceEpoch;
       var existing = byKey[sourceKey] ?? byUriLegacy[uri];
       if (existing != null) {
+        if (!force &&
+            existing.size == size &&
+            existing.modified == modified &&
+            existing.chapterSplitVersion == _chapterSplitVersion &&
+            existing.wordCount != null &&
+            existing.sourceFingerprint.isNotEmpty) {
+          try {
+            if (await _sourceHasFingerprint(
+              existing,
+              existing.sourceFingerprint,
+            )) {
+              continue;
+            }
+          } catch (error) {
+            failures['$name ($sourceKey)'] = error.toString();
+            skipped++;
+            continue;
+          }
+        }
         LocalBook? book;
         try {
           await _preserveCachedSnapshot(existing);
@@ -1678,7 +1813,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
         if (!force && book.revision == existing.revision &&
             book.size == existing.size &&
             book.modified == existing.modified &&
-            book.wordCount == existing.wordCount) {
+            book.wordCount == existing.wordCount &&
+            book.sourceFingerprint == existing.sourceFingerprint) {
           continue;
         }
         if (book.kind == LocalBookKind.txt && existing.chapters.isNotEmpty &&
@@ -1800,6 +1936,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       size: size,
       modified: modified,
       textFingerprint: processed.fingerprint,
+      sourceFingerprint: processed.sourceFingerprint,
       chapters: processed.chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
@@ -2086,6 +2223,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
       size: size,
       modified: modified,
       textFingerprint: processed.fingerprint,
+      sourceFingerprint: processed.sourceFingerprint,
       chapters: processed.chapters,
       pageCount: 0,
       wordCount: processed.wordCount,
@@ -2133,6 +2271,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   @visibleForTesting
   static String authorFromNameForTest(String name) => _authorFromName(name);
 
+  Future<bool> _sourceHasFingerprint(LocalBook book, String expected) async {
+    final actual = book.sourceId == 'appFolder:novels'
+        ? await _textWorker.fingerprint(book.sourceKey)
+        : await LocalPlatform.fingerprintLocalText(book.fileUri);
+    return actual == expected;
+  }
+
   Future<_TextMetadata> _importText(
     String source,
     int id, {
@@ -2140,17 +2285,22 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {  LocalLibr
   }) async {
     String? temporary;
     try {
-      final path = direct && !LocalPlatform.android
-          ? source
-          : temporary = await LocalPlatform.prepareLocalText(
-              direct ? Uri.file(source).toString() : source,
-            );
+      var path = source;
+      String? sourceFingerprint;
+      if (!direct || LocalPlatform.android) {
+        final prepared = await LocalPlatform.prepareLocalTextSource(
+          direct ? Uri.file(source).toString() : source,
+        );
+        path = temporary = prepared.path;
+        sourceFingerprint = prepared.fingerprint;
+      }
       final result = await _textWorker.analyze(
         path,
         outputPath: '${_booksDir.path}/book_$id.staging',
         normalize: true,
         maxBytes: temporary == null ? 16 * 1024 * 1024 : null,
         preserveBom: temporary != null,
+        sourceFingerprint: sourceFingerprint,
       );
       if (result.inputLength > 0) {
         final staged = File('${_booksDir.path}/book_$id.staging');

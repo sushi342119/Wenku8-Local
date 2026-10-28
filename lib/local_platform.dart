@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -89,6 +90,7 @@ Future<void> deleteLocalDocumentWithChannel(
 /// open the Android picker; the normal reader does not alter system settings.
 abstract final class LocalPlatform {
   static const channel = MethodChannel('org.mewx.wenku8/local_tools');
+  static const _localIoTimeout = Duration(seconds: 30);
   static bool get android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
   static Future<bool> exportBackup(String text, String name) async =>
@@ -110,12 +112,18 @@ abstract final class LocalPlatform {
   /// 扫描已授权文件夹中的 txt / pdf。
   /// 返回 (entries, complete, reason)：entries 为 [{uri, name, size, modified}]；
   /// complete 为 false 表示扫描不完整（此时禁止执行删除）。
-  static Future<({List<Map<String, Object?>> entries, bool complete, String? reason})>
-      scanLocalFolder(String treeUri) async {
-    final result = await channel.invokeMethod<Map<Object?, Object?>>(
-      'scanLocalFolder',
-      {'treeUri': treeUri},
-    );
+  static Future<
+    ({List<Map<String, Object?>> entries, bool complete, String? reason})
+  >
+  scanLocalFolder(String treeUri) async {
+    final result = await channel
+        .invokeMethod<Map<Object?, Object?>>('scanLocalFolder', {
+          'treeUri': treeUri,
+        })
+        .timeout(
+          _localIoTimeout,
+          onTimeout: () => throw TimeoutException('目录查询超时，请重试'),
+        );
     if (result == null) {
       return (entries: <Map<String, Object?>>[], complete: false, reason: 'null_result');
     }
@@ -134,16 +142,48 @@ abstract final class LocalPlatform {
 
   /// 读取文本文件并自动识别 UTF-8 / GB18030 编码。
   static Future<String> readLocalText(String docUri) async =>
-      await channel.invokeMethod<String>('readLocalText', {'docUri': docUri}) ??
+      await channel
+          .invokeMethod<String>('readLocalText', {'docUri': docUri})
+          .timeout(
+            _localIoTimeout,
+            onTimeout: () => throw TimeoutException('源文件读取超时，请重试'),
+          ) ??
       '';
 
   /// Native decoding streams into a temporary UTF-8 file; callers own cleanup.
   static Future<String> prepareLocalText(String docUri) async {
-    final path = await channel.invokeMethod<String>('prepareLocalText', {
-      'docUri': docUri,
-    });
+    final path = await channel
+        .invokeMethod<String>('prepareLocalText', {'docUri': docUri})
+        .timeout(
+          _localIoTimeout,
+          onTimeout: () => throw TimeoutException('源文件读取超时，请重试'),
+        );
     if (path == null || path.isEmpty) throw StateError('原生文本解码未返回文件');
     return path;
+  }
+
+  static Future<String> fingerprintLocalText(String docUri) async {
+    final fingerprint = await channel.invokeMethod<String>(
+      'fingerprintLocalText', {'docUri': docUri},
+    ).timeout(_localIoTimeout);
+    if (fingerprint == null || fingerprint.isEmpty) {
+      throw StateError('源文件 SHA-256 校验未返回结果');
+    }
+    return fingerprint;
+  }
+
+  static Future<({String path, String fingerprint})> prepareLocalTextSource(
+    String docUri,
+  ) async {
+    final result = await channel.invokeMapMethod<String, dynamic>(
+      'prepareLocalText', {'docUri': docUri, 'withFingerprint': true},
+    ).timeout(_localIoTimeout);
+    final path = result?['path'] as String?;
+    final fingerprint = result?['fingerprint'] as String?;
+    if (path == null || path.isEmpty || fingerprint == null || fingerprint.isEmpty) {
+      throw StateError('源文件解码或 SHA-256 校验未返回结果');
+    }
+    return (path: path, fingerprint: fingerprint);
   }
 
   /// 解码原始字节，自动识别 UTF-8 / GB18030 编码。
@@ -193,10 +233,14 @@ abstract final class LocalPlatform {
     String treeUri,
   ) async {
     try {
-      final res = await channel.invokeMapMethod<String, dynamic>(
-        'queryTreePermission',
-        {'treeUri': treeUri},
-      );
+      final res = await channel
+          .invokeMapMethod<String, dynamic>('queryTreePermission', {
+            'treeUri': treeUri,
+          })
+          .timeout(
+            _localIoTimeout,
+            onTimeout: () => throw TimeoutException('目录权限查询超时，请重试'),
+          );
       return LocalTreePermission(
         persistedRead: res?['persistedRead'] == true,
         persistedWrite: res?['persistedWrite'] == true,

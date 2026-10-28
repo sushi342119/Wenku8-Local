@@ -1,46 +1,9 @@
 part of 'local_library.dart';
 
-/// One request at a time bounds the live input/output buffers to one book.
-/// Scans return only counts and chapter tables; body strings stay in the worker.
-class _LocalTextWorker {
-  Isolate? _isolate;
-  SendPort? _requests;
-  Future<void>? _starting;
-  bool _closed = false;
-
-  Future<void> _start() => _starting ??= () async {
-    final ready = ReceivePort();
-    try {
-      final isolate = await Isolate.spawn(_textWorkerMain, ready.sendPort);
-      _isolate = isolate;
-      if (_closed) {
-        isolate.kill(priority: Isolate.immediate);
-        throw StateError('Text worker disposed');
-      }
-      _requests = await ready.first as SendPort;
-    } finally {
-      ready.close();
-    }
-  }();
-
-  Future<Object?> run(Map<String, Object?> job) async {
-    if (_closed) throw StateError('Text worker disposed');
-    await _start();
-    final reply = ReceivePort();
-    try {
-      _requests!.send((reply.sendPort, job));
-      final response = await reply.first as List;
-      if (response[0] == false) {
-        Error.throwWithStackTrace(
-          response[1] as Object,
-          response[2] as StackTrace,
-        );
-      }
-      return response[1];
-    } finally {
-      reply.close();
-    }
-  }
+/// Body strings and chapter analysis stay in the worker isolate.
+class _LocalTextWorker extends LocalTextWorkerClient {
+  _LocalTextWorker({super.readyTimeout, super.replyTimeout})
+    : super(_textWorkerMain);
 
   Future<_TextMetadata> analyze(
     String path, {
@@ -48,9 +11,11 @@ class _LocalTextWorker {
     bool normalize = false,
     int? maxBytes,
     bool preserveBom = false,
+    String? sourceFingerprint,
   }) async =>
       await run({
             'path': path,
+            'sourceFingerprint': sourceFingerprint,
             'output': outputPath,
             'normalize': normalize,
             'maxBytes': maxBytes,
@@ -58,30 +23,34 @@ class _LocalTextWorker {
           })
           as _TextMetadata;
 
+  Future<String> fingerprint(String path) async =>
+      await run({'path': path, 'hash': true}) as String;
+
   Future<String> read(String path, {bool preserveBom = false}) async =>
       await run({'path': path, 'read': true, 'preserveBom': preserveBom})
           as String;
-
-  void dispose() {
-    _closed = true;
-    _isolate?.kill(priority: Isolate.immediate);
-  }
 }
 
 void _textWorkerMain(SendPort ready) async {
   final requests = ReceivePort();
   ready.send(requests.sendPort);
   await for (final message in requests) {
-    final (reply, job) = message as (SendPort, Map<String, Object?>);
     try {
+      final (reply, job) = message as (SendPort, Map<String, Object?>);
       final path = job['path'] as String;
       final result = job['read'] == true
           ? await _decodeTextChunks(
               _boundedTextBytes(path, null),
               job['preserveBom'] == true,
             ).join()
+          : job['hash'] == true
+          ? await sha256
+                .bind(_boundedTextBytes(path, 16 * 1024 * 1024))
+                .first
+                .then((d) => d.toString())
           : await _analyzeTextFile(
               path,
+              sourceFingerprint: job['sourceFingerprint'] as String?,
               outputPath: job['output'] as String?,
               normalize: job['normalize'] == true,
               maxBytes: job['maxBytes'] as int?,
@@ -89,7 +58,14 @@ void _textWorkerMain(SendPort ready) async {
             );
       reply.send([true, result]);
     } catch (error, stack) {
-      reply.send([false, error, stack]);
+      // Ordinary job errors are replies. If even the error cannot be sent,
+      // let onError/onExit fail the transport and trigger its bounded retry.
+      try {
+        final reply = (message as (SendPort, Map<String, Object?>)).$1;
+        reply.send([false, error, stack]);
+      } catch (_) {
+        rethrow;
+      }
     }
   }
 }
@@ -101,8 +77,10 @@ class _TextMetadata {
     this.chapters, {
     this.inputLength = 0,
     this.fingerprint = '',
+    this.sourceFingerprint = '',
   });
   final String fingerprint;
+  final String sourceFingerprint;
   final int inputLength;
   final int length;
   final int wordCount;
@@ -185,6 +163,7 @@ Stream<String> _normalizeText(Stream<String> chunks) async* {
 Future<_TextMetadata> _analyzeTextFile(
   String path, {
   required bool normalize,
+  String? sourceFingerprint,
   String? outputPath,
   int? maxBytes,
   bool preserveBom = false,
@@ -192,11 +171,16 @@ Future<_TextMetadata> _analyzeTextFile(
   var inputLength = 0;
   final digest = _DigestSink();
   final hashing = sha256.startChunkedConversion(digest);
-  var chunks = _decodeTextChunks(_boundedTextBytes(path, maxBytes), preserveBom || normalize)
-      .map((chunk) {
-        inputLength += chunk.length;
-        return chunk;
-      });
+  final rawDigest = _DigestSink();
+  final rawHash = sha256.startChunkedConversion(rawDigest);
+  final bytes = _boundedTextBytes(path, maxBytes).map((chunk) {
+    if (sourceFingerprint == null) rawHash.add(chunk);
+    return chunk;
+  });
+  var chunks = _decodeTextChunks(bytes, preserveBom || normalize).map((chunk) {
+    inputLength += chunk.length;
+    return chunk;
+  });
   if (normalize) chunks = _normalizeText(chunks);
   final analysis = _StreamingTextIndex();
   final temporary = outputPath == null ? null : File('$outputPath.importing');
@@ -215,6 +199,7 @@ Future<_TextMetadata> _analyzeTextFile(
     await output?.close();
     output = null;
     hashing.close();
+    rawHash.close();
     final result = analysis.finish();
     if (temporary != null && inputLength > 0) {
       await temporary.rename(outputPath!);
@@ -225,6 +210,7 @@ Future<_TextMetadata> _analyzeTextFile(
       result.chapters,
       inputLength: inputLength,
       fingerprint: digest.value.toString(),
+      sourceFingerprint: sourceFingerprint ?? rawDigest.value.toString(),
     );
   } finally {
     await output?.close();
