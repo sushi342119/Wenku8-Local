@@ -14,6 +14,7 @@ import 'catalog.dart';
 import 'chapter_splitter.dart';
 export 'chapter_splitter.dart' show LocalChapterIndex;
 import 'local_platform.dart';
+import 'local_epub.dart';
 import 'book_tags.dart';
 import 'filename_tags.dart';
 import 'local_record_removal.dart';
@@ -59,7 +60,15 @@ class IncompleteScanException implements Exception {
   };
 }
 
-enum LocalBookKind { txt, pdf }
+enum LocalBookKind { txt, pdf, epub }
+
+LocalBookKind? localBookKindForFileName(String name) {
+  final lower = name.toLowerCase();
+  if (lower.endsWith('.txt')) return LocalBookKind.txt;
+  if (lower.endsWith('.pdf')) return LocalBookKind.pdf;
+  if (lower.endsWith('.epub')) return LocalBookKind.epub;
+  return null;
+}
 
 final _bookRevisionCache = Expando<String>();
 
@@ -118,6 +127,8 @@ class LocalBook {
     this.chapterSplitVersion = 0,
     this.textFingerprint = '',
     this.sourceFingerprint = '',
+    this.epubChapterHrefs = const <String>[],
+    this.coverEntry,
   });
 
   final int id;
@@ -143,6 +154,12 @@ class LocalBook {
 
   /// SHA-256 of original bytes, including encoding/BOM/line endings.
   final String sourceFingerprint;
+
+  /// EPUB spine 章节的 XHTML 路径，与 chapters 等长并行；非 EPUB 书为空。
+  final List<String> epubChapterHrefs;
+
+  /// EPUB 封面图在 ZIP 内的路径；无封面或非 EPUB 书为 null。
+  final String? coverEntry;
   String get revision => _bookRevisionCache[this] ??= sha256
       .convert(
         utf8.encode(
@@ -181,6 +198,8 @@ class LocalBook {
     int? chapterSplitVersion,
     String? textFingerprint,
     String? sourceFingerprint,
+    List<String>? epubChapterHrefs,
+    String? coverEntry,
   }) => LocalBook(
     id: id,
     title: title ?? this.title,
@@ -200,6 +219,8 @@ class LocalBook {
     chapterSplitVersion: chapterSplitVersion ?? this.chapterSplitVersion,
     textFingerprint: textFingerprint ?? this.textFingerprint,
     sourceFingerprint: sourceFingerprint ?? this.sourceFingerprint,
+    epubChapterHrefs: epubChapterHrefs ?? this.epubChapterHrefs,
+    coverEntry: coverEntry ?? this.coverEntry,
   );
 
   Map<String, Object?> toJson() => {
@@ -221,6 +242,8 @@ class LocalBook {
     'chapterSplitVersion': chapterSplitVersion,
     'textFingerprint': textFingerprint,
     'sourceFingerprint': sourceFingerprint,
+    if (epubChapterHrefs.isNotEmpty) 'epubChapterHrefs': epubChapterHrefs,
+    if (coverEntry?.isNotEmpty ?? false) 'coverEntry': coverEntry,
   };
 
   factory LocalBook.fromJson(Map<String, Object?> json) {
@@ -231,7 +254,11 @@ class LocalBook {
       author: json['author'] as String? ?? '',
       fileUri: json['uri'] as String? ?? '',
       fileName: json['name'] as String? ?? '',
-      kind: json['kind'] == 'pdf' ? LocalBookKind.pdf : LocalBookKind.txt,
+      kind: json['kind'] == 'pdf'
+          ? LocalBookKind.pdf
+          : json['kind'] == 'epub'
+              ? LocalBookKind.epub
+              : LocalBookKind.txt,
       size: (json['size'] as num?)?.toInt() ?? 0,
       modified: (json['modified'] as num?)?.toInt() ?? 0,
       chapters: chapters is List
@@ -249,6 +276,12 @@ class LocalBook {
       chapterSplitVersion: (json['chapterSplitVersion'] as num?)?.toInt() ?? 0,
       textFingerprint: json['textFingerprint'] as String? ?? '',
       sourceFingerprint: json['sourceFingerprint'] as String? ?? '',
+      epubChapterHrefs: (json['epubChapterHrefs'] as List?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const <String>[],
+      coverEntry:
+          json['coverEntry'] is String ? json['coverEntry'] as String : null,
     );
   }
 }
@@ -2031,16 +2064,21 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   /// 扫描已选文件夹：新增导入、内容变化的重新导入、源文件已删的移除。
-  Future<T> _scanTransaction<T>(Future<T> Function() action) async {
+  Future<T> _scanTransaction<T>(
+    Future<T> Function(Map<String, File?> epubCacheBackups) action,
+  ) async {
     await _recordRemovalJournal.recover();
     await _recoverDataCleanup();
     final books = List<LocalBook>.of(_books);
     final dirty = Set<int>.of(_dirtyBookIds);
     final generation = _indexGeneration;
+    final epubCacheBackups = <String, File?>{};
+    var rollbackEpubCaches = false;
     try {
-      return await action();
+      return await action(epubCacheBackups);
     } catch (_) {
       if (generation == _indexGeneration) {
+        rollbackEpubCaches = true;
         _books
           ..clear()
           ..addAll(books);
@@ -2053,11 +2091,24 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         _textCacheBytes = 0;
       }
       rethrow;
+    } finally {
+      for (final entry in epubCacheBackups.entries) {
+        final backup = entry.value;
+        if (rollbackEpubCaches) {
+          if (backup == null) {
+            final cache = File(entry.key);
+            if (await cache.exists()) await cache.delete();
+          } else {
+            await backup.rename(entry.key);
+          }
+        }
+        if (backup != null) await backup.parent.delete(recursive: true);
+      }
     }
   }
 
   Future<LocalScanResult> scan({bool force = false}) => _synchronized(
-    () => _scanTransaction(() async {
+    () => _scanTransaction((epubCacheBackups) async {
       // 扫描入口必须先恢复，尤其不能先扫描导入、最后才恢复。
       await _recordRemovalJournal.recover();
       final treeUri = folderUri;
@@ -2142,7 +2193,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
             );
             chapterUpdates[existing.id] = existing;
           }
-          if (existing.kind == LocalBookKind.pdf &&
+          if ((existing.kind == LocalBookKind.pdf ||
+                  existing.kind == LocalBookKind.epub) &&
               !force &&
               existing.size == size &&
               existing.modified == modified) {
@@ -2176,6 +2228,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           try {
             await _preserveCachedSnapshot(existing);
             book = await _importEntry(
+              epubCacheBackups: epubCacheBackups,
               uri: uri,
               name: name,
               size: size,
@@ -2215,6 +2268,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           LocalBook? book;
           try {
             book = await _importEntry(
+              epubCacheBackups: epubCacheBackups,
               uri: uri,
               name: name,
               size: size,
@@ -2384,7 +2438,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Future<LocalScanResult> scanAppFolder({bool force = false}) => _synchronized(
-    () => _scanTransaction(() async {
+    () => _scanTransaction((_) async {
       // 与 scan() 同规则：先恢复仅移出待办，再扫描导入。
       await _recordRemovalJournal.recover();
       final folderPath = await appFolderPath;
@@ -2412,7 +2466,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           .where((e) => e is File)
           .cast<File>()
           .toList();
-      if (!files.any((file) => file.path.toLowerCase().endsWith('.txt')) &&
+      if (!files.any((file) {
+            final lowerPath = file.path.toLowerCase();
+            return lowerPath.endsWith('.txt') || lowerPath.endsWith('.epub');
+          }) &&
           _books.any((book) => book.sourceId == sourceId)) {
         throw const IncompleteScanException('empty_result');
       }
@@ -2420,9 +2477,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         files
             .where(
               (file) =>
-                  file.path.toLowerCase().endsWith('.txt') &&
+                  (file.path.toLowerCase().endsWith('.txt') ||
+                      file.path.toLowerCase().endsWith('.epub')) &&
                   !byKey.containsKey(file.path) &&
                   !byUriLegacy.containsKey('file://${file.path}') &&
+                  (!file.path.toLowerCase().endsWith('.epub') ||
+                      !byUriLegacy.containsKey(Uri.file(file.path).toString())) &&
                   !ignored.contains(
                     LocalSourceIdentity.appFolder(file.path).ignoredKey,
                   ),
@@ -2432,8 +2492,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       for (final file in files) {
         final name = file.path.split('/').last;
         final lower = name.toLowerCase();
-        if (!lower.endsWith('.txt')) continue;
-        final uri = 'file://${file.path}';
+        if (!lower.endsWith('.txt') && !lower.endsWith('.epub')) continue;
+        final uri = lower.endsWith('.epub')
+            ? Uri.file(file.path).toString()
+            : 'file://${file.path}';
+        final legacy = byUriLegacy[uri] ?? byUriLegacy['file://${file.path}'];
         final sourceKey = file.path;
         seen.add(sourceKey);
         // 「仅移出书库」的书跳过导入；记录仍在时对账移除（与 scan() 同规则）。
@@ -2442,7 +2505,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           LocalSourceIdentity.appFolder(file.path).ignoredKey,
         )) {
           skipped++;
-          final existingIgnored = byKey[sourceKey] ?? byUriLegacy[uri];
+          final existingIgnored = byKey[sourceKey] ?? legacy;
           if (existingIgnored != null) {
             _removeBook(existingIgnored);
             reconciledData.add(existingIgnored);
@@ -2463,7 +2526,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         }
         final size = stat.size;
         final modified = stat.modified.millisecondsSinceEpoch;
-        var existing = byKey[sourceKey] ?? byUriLegacy[uri];
+        var existing = byKey[sourceKey] ?? legacy;
         if (existing != null) {
           if (existing.fileName != name ||
               existing.fileUri != uri ||
@@ -2475,6 +2538,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               sourceKey: sourceKey,
             );
             chapterUpdates[existing.id] = existing;
+          }
+          if (existing.kind == LocalBookKind.epub &&
+              !force &&
+              existing.size == size &&
+              existing.modified == modified &&
+              existing.chapters.isNotEmpty) {
+            continue;
           }
           if (!force &&
               existing.size == size &&
@@ -2629,6 +2699,19 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     required String sourceKey,
     LocalBook? existing,
   }) async {
+    final kind = localBookKindForFileName(name);
+    if (kind == LocalBookKind.epub) {
+      return _importEpub(
+        localPath: path,
+        uri: Uri.file(path).toString(),
+        name: name,
+        size: size,
+        modified: modified,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        existing: existing,
+      );
+    }
     if (size > localTextMaxSourceBytes) {
       throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
     }
@@ -2910,10 +2993,141 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ok = false;
       }
     }
+    if (book.kind == LocalBookKind.epub &&
+        !book.fileUri.startsWith('file://')) {
+      try {
+        final cacheDir = await getApplicationCacheDirectory();
+        final cached = File('${cacheDir.path}/local_epub/${book.id}.epub');
+        if (await cached.exists()) {
+          await cached.delete();
+        }
+      } catch (_) {
+        ok = false;
+      }
+    }
     return ok;
   }
 
+  Future<String> _epubLocalPath({
+    required int id,
+    required String fileUri,
+    required int size,
+    required String sourceKey,
+    required String sourceFingerprint,
+  }) async {
+    if (fileUri.startsWith('file://')) {
+      if (sourceKey.isNotEmpty && File(sourceKey).isAbsolute) {
+        return sourceKey;
+      }
+      final legacyPath = fileUri.substring('file://'.length);
+      if (await File(legacyPath).exists()) return legacyPath;
+      return Uri.parse(fileUri).toFilePath();
+    }
+    if (size > localTextMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    }
+    final cacheFile = await _epubCacheFile(id);
+    if (await cacheFile.exists() &&
+        await cacheFile.length() == size &&
+        sourceFingerprint.isNotEmpty &&
+        await _epubSourceFingerprint(cacheFile.path) == sourceFingerprint) {
+      return cacheFile.path;
+    }
+    final staged = await _stageEpubCopy(fileUri, size, cacheFile.parent);
+    try {
+      if (sourceFingerprint.isNotEmpty &&
+          await _epubSourceFingerprint(staged.path) != sourceFingerprint) {
+        throw StateError('EPUB 源文件已变化，请重新扫描');
+      }
+      await staged.rename(cacheFile.path);
+      return cacheFile.path;
+    } finally {
+      await staged.parent.delete(recursive: true);
+    }
+  }
+
+  Future<File> _epubCacheFile(int id) async {
+    final cacheRoot = await getApplicationCacheDirectory();
+    final dir = Directory('${cacheRoot.path}/local_epub');
+    await dir.create(recursive: true);
+    return File('${dir.path}/$id.epub');
+  }
+
+  Future<File> _stageEpubCopy(String uri, int size, Directory cacheDir) async {
+    if (size > localTextMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    }
+    final stagingDir = await cacheDir.createTemp('import-');
+    final staged = File('${stagingDir.path}/book.epub');
+    try {
+      await LocalPlatform.copyDocumentToFile(uri, staged.path);
+      if (!await staged.exists() || await staged.length() != size) {
+        throw StateError('EPUB 缓存长度不一致，请重新扫描');
+      }
+      return staged;
+    } catch (_) {
+      await stagingDir.delete(recursive: true);
+      rethrow;
+    }
+  }
+
+  Future<String> _epubSourceFingerprint(String path) async {
+    final digest = await sha256.bind(File(path).openRead()).first;
+    return digest.toString();
+  }
+
+  Future<LocalBook?> _importEpub({
+    required String localPath,
+    required String uri,
+    required String name,
+    required int size,
+    required int modified,
+    required String sourceId,
+    required String sourceKey,
+    LocalBook? existing,
+    int? id,
+  }) async {
+    if (size > localTextMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    }
+    final bookId = id ?? existing?.id ?? _nextId();
+    final epub = await EpubPackage.open(localPath);
+    try {
+      final spine = epub.chapters;
+      if (spine.isEmpty) return null;
+      final chapters = [
+        for (final c in spine) LocalChapterIndex(c.title, 0, 0, volume: ''),
+      ];
+      final hrefs = [for (final c in spine) c.href];
+      return LocalBook(
+        id: bookId,
+        kind: LocalBookKind.epub,
+        title: _titleFromName(name),
+        author: _authorFromName(name),
+        fileUri: uri,
+        fileName: name,
+        size: size,
+        modified: modified,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        chapters: chapters,
+        epubChapterHrefs: hrefs,
+        coverEntry: epub.coverEntry,
+        sourceFingerprint: await _epubSourceFingerprint(localPath),
+        textFingerprint: '',
+        wordCount: null,
+        pageCount: 0,
+        chapterSplitVersion: 0,
+        customTitle: existing?.customTitle,
+        customAuthor: existing?.customAuthor,
+      );
+    } finally {
+      await epub.close();
+    }
+  }
+
   Future<LocalBook?> _importEntry({
+    required Map<String, File?> epubCacheBackups,
     required String uri,
     required String name,
     required int size,
@@ -2922,12 +3136,50 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     required String sourceKey,
     LocalBook? existing,
   }) async {
-    final lower = name.toLowerCase();
-    final kind = lower.endsWith('.pdf') ? LocalBookKind.pdf : LocalBookKind.txt;
+    final kind = localBookKindForFileName(name) ?? LocalBookKind.txt;
     // 刷新时保留原 ID，避免书架/进度失效（修复#3）。
     final id = existing?.id ?? _nextId();
     final title = _titleFromName(name);
     final author = _authorFromName(name);
+    if (kind == LocalBookKind.epub) {
+      if (size > localTextMaxSourceBytes) {
+        throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+      }
+      final cacheFile = await _epubCacheFile(id);
+      final staged = await _stageEpubCopy(uri, size, cacheFile.parent);
+      try {
+        final book = await _importEpub(
+          localPath: staged.path,
+          uri: uri,
+          name: name,
+          size: size,
+          modified: modified,
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          existing: existing,
+          id: id,
+        );
+        if (book != null) {
+          if (!epubCacheBackups.containsKey(cacheFile.path)) {
+            File? backup;
+            if (await cacheFile.exists()) {
+              final backupDir = await cacheFile.parent.createTemp('rollback-');
+              try {
+                backup = await cacheFile.copy('${backupDir.path}/book.epub');
+              } catch (_) {
+                await backupDir.delete(recursive: true);
+                rethrow;
+              }
+            }
+            epubCacheBackups[cacheFile.path] = backup;
+          }
+          await staged.rename(cacheFile.path);
+        }
+        return book;
+      } finally {
+        await staged.parent.delete(recursive: true);
+      }
+    }
     if (kind == LocalBookKind.pdf) {
       final pages = await LocalPlatform.pdfPageCount(uri);
       if (pages <= 0) return null;
@@ -3282,7 +3534,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Novel toNovel(LocalBook book) {
-    final kindLabel = book.kind == LocalBookKind.pdf ? 'PDF' : 'TXT';
+    final kindLabel = book.kind == LocalBookKind.pdf
+        ? 'PDF'
+        : book.kind == LocalBookKind.epub
+            ? 'EPUB'
+            : 'TXT';
     final countLabel = book.kind == LocalBookKind.pdf
         ? '${book.pageCount} 页'
         : '${book.chapters.length} 章';
@@ -3427,6 +3683,67 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       throw const StaleLocalChapterException();
     }
     return content.trim();
+  }
+
+  Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})> epubChapter(
+    int novelId,
+    int chapterIndex,
+  ) async {
+    final book = bookFor(novelId);
+    if (book == null ||
+        book.kind != LocalBookKind.epub ||
+        chapterIndex < 0 ||
+        chapterIndex >= book.chapters.length ||
+        book.epubChapterHrefs.length != book.chapters.length) {
+      throw StateError('EPUB 章节索引缺失或越界，请重新扫描');
+    }
+    final localPath = await _epubLocalPath(
+      id: book.id,
+      fileUri: book.fileUri,
+      size: book.size,
+      sourceKey: book.sourceKey,
+      sourceFingerprint: book.sourceFingerprint,
+    );
+    if (book.sourceFingerprint.isNotEmpty &&
+        await _epubSourceFingerprint(localPath) != book.sourceFingerprint) {
+      throw StateError('EPUB 源文件已变化，请重新扫描');
+    }
+    final package = await EpubPackage.open(localPath);
+    try {
+      if (package.chapters.length != book.chapters.length ||
+          package.chapters[chapterIndex].href !=
+              book.epubChapterHrefs[chapterIndex]) {
+        throw StateError('EPUB 章节对应关系已变化，请重新扫描');
+      }
+      final source = await package.chapterBlocks(chapterIndex);
+      final images = <String, Uint8List>{};
+      final failed = <String>{};
+      for (final block in source) {
+        if (block.kind != EpubBlockKind.image) continue;
+        final path = block.entryPath;
+        if (path == null || images.containsKey(path) || failed.contains(path)) {
+          continue;
+        }
+        try {
+          final bytes = await package.readEntry(path);
+          if (bytes.isEmpty) {
+            failed.add(path);
+          } else {
+            images[path] = bytes;
+          }
+        } catch (_) {
+          failed.add(path);
+        }
+      }
+      final blocks = <EpubBlock>[
+        for (final b in source)
+          if (b.kind != EpubBlockKind.image || images.containsKey(b.entryPath))
+            b,
+      ];
+      return (blocks: blocks, images: images);
+    } finally {
+      await package.close();
+    }
   }
 }
 

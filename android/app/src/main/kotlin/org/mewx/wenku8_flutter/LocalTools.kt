@@ -150,7 +150,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     private fun handleLibrary(call: MethodCall, result: MethodChannel.Result): Boolean {
         if (call.method !in setOf(
                 "pickLocalFolder", "queryTreePermission", "scanLocalFolder", "readLocalText", "fingerprintLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage",
-                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile"
+                "clearPdfCache", "deleteLocalDocument", "renameLocalDocument", "pickFontFile",
+                "copyDocumentToFile"
             )
         ) return false
         if (closed) {
@@ -210,9 +211,10 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 return true
             }
             "scanLocalFolder", "readLocalText", "fingerprintLocalText", "prepareLocalText", "writeLibraryPreferences", "decodeLocalText", "pdfPageCount", "renderPdfPage", "clearPdfCache",
-            "deleteLocalDocument", "renameLocalDocument", "queryTreePermission" -> {
+            "deleteLocalDocument", "renameLocalDocument", "queryTreePermission",
+            "copyDocumentToFile" -> {
                 val timeout = when (call.method) {
-                    "prepareLocalText", "fingerprintLocalText" -> 120000L
+                    "prepareLocalText", "fingerprintLocalText", "copyDocumentToFile" -> 120000L
                     "scanLocalFolder", "queryTreePermission", "readLocalText",
                     "pdfPageCount", "renderPdfPage" -> IO_TIMEOUT_MS
                     else -> null
@@ -243,6 +245,10 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                             )
                             "pdfPageCount" -> pdfPageCount(Uri.parse(call.argument<String>("docUri") ?: ""))
                             "clearPdfCache" -> clearPdfCache(Uri.parse(call.argument<String>("docUri") ?: ""))
+                            "copyDocumentToFile" -> copyDocumentToFile(
+                                Uri.parse(call.argument<String>("docUri") ?: ""),
+                                call.argument<String>("destPath") ?: "",
+                            )
                             else -> renderPdfPage(
                                 Uri.parse(call.argument<String>("docUri") ?: ""),
                                 call.argument<Int>("page") ?: 0,
@@ -250,9 +256,14 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                             )
                         }
                         activity.runOnUiThread {
-                            if (!requests.complete(result) { result.success(response) } && call.method == "prepareLocalText") {
-                                val path = if (response is String) response else (response as? Map<*, *>)?.get("path") as? String
-                                if (path != null) File(path).delete()
+                            if (!requests.complete(result) { result.success(response) }) {
+                                if (call.method == "prepareLocalText") {
+                                    val path = if (response is String) response else (response as? Map<*, *>)?.get("path") as? String
+                                    if (path != null) File(path).delete()
+                                } else if (call.method == "copyDocumentToFile") {
+                                    val path = call.argument<String>("destPath")
+                                    if (path != null) File(path).delete()
+                                }
                             }
                         }
                     } catch (_: OutOfMemoryError) {
@@ -377,7 +388,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         return true
     }
 
-    /** 递归扫描 SAF 树中的 txt / pdf，仅返回名称、大小与修改时间，不读内容。 */
+    /** 递归扫描 SAF 树中的 txt / pdf / epub，仅返回名称、大小与修改时间，不读内容。 */
     private fun scanLocalFolder(tree: Uri): Map<String, Any?> {
         data class Doc(val id: String, val name: String, val dir: Boolean, val size: Long, val modified: Long)
         var complete = true
@@ -447,7 +458,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                         break
                     }
                     val lower = doc.name.lowercase()
-                    if (lower.endsWith(".txt") || lower.endsWith(".pdf")) {
+                    if (lower.endsWith(".txt") || lower.endsWith(".pdf") || lower.endsWith(".epub")) {
                         output.add(
                             mapOf(
                                 "uri" to DocumentsContract.buildDocumentUriUsingTree(tree, doc.id).toString(),
@@ -731,6 +742,42 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         if (sub.isDirectory) sub.deleteRecursively()
         if (legacy.isDirectory && legacy != sub) legacy.deleteRecursively()
         return true
+    }
+
+    // 将 SAF 文档流式复制到 destPath，上限 MAX_TEXT_BYTES；失败或超限时删除目标文件
+    private fun copyDocumentToFile(doc: Uri, destPath: String): String {
+        val dest = java.io.File(destPath)
+        dest.parentFile?.let { parent ->
+            if (!parent.exists() && !parent.mkdirs() && !parent.exists()) {
+                throw java.io.IOException("cannot create directory: ${parent.path}")
+            }
+        }
+        try {
+            val input = activity.contentResolver.openInputStream(doc)
+                ?: throw java.io.IOException("cannot open input stream: $doc")
+            input.use { ins ->
+                java.io.FileOutputStream(dest).use { out ->
+                    val buffer = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        val n = ins.read(buffer)
+                        if (Thread.currentThread().isInterrupted) throw InterruptedException()
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_TEXT_BYTES) {
+                            throw java.io.IOException("document exceeds size limit")
+                        }
+                        out.write(buffer, 0, n)
+                    }
+                    out.flush()
+                }
+            }
+            return destPath
+        } catch (t: Throwable) {
+            dest.delete()
+            throw t
+        }
     }
 
     /** 删除 SAF 文档。provider 确认删除成功才算成功；FileNotFoundException

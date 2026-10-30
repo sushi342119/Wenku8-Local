@@ -243,6 +243,24 @@ abstract final class LocalPlatform {
   static Future<void> clearPdfCache(String docUri) =>
       channel.invokeMethod<bool>('clearPdfCache', {'docUri': docUri});
 
+  /// 复制 SAF 文档到本地文件。原生侧超时 120 秒，Dart 侧留 3 分钟余量；
+  /// 不能用 _localIoTimeout（30 秒）。
+  static Future<String> copyDocumentToFile(
+    String docUri,
+    String destPath,
+  ) async {
+    final result = await channel
+        .invokeMethod<String>('copyDocumentToFile', {
+          'docUri': docUri,
+          'destPath': destPath,
+        })
+        .timeout(const Duration(minutes: 3));
+    if (result == null || result.isEmpty) {
+      throw StateError('copyDocumentToFile 返回空结果');
+    }
+    return result;
+  }
+
   /// SAF：删除文档。provider 确认删除成功才算成功；无法确认时
   /// （如 FileNotFoundException）抛 io_error，保留本地记录，不再把
   /// “已不存在”当成删除成功。失败抛 [LocalDeleteException]

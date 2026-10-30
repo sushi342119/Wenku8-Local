@@ -12,13 +12,13 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.3.2';
-const currentAppBuild = 39;
+const currentAppVersion = '1.4.0';
+const currentAppBuild = 40;
 const currentReleaseNotes = '''
-1. 修复本地书库迁移、删除队列、书架读取、启动初始化与恢复日志等致命问题
-2. 修复一批数据丢失与崩溃问题，包括备份、标签与章节进度迁移
-3. 安全隐私加固：错误信息脱敏、封面白名单、备份导入校验
-4. 性能优化：扫描快路径、章节字节偏移与隔离编码，大文件打开速度恢复正常
+1. 新增 EPUB 支持：SAF 文件夹与应用文件夹扫描均可发现 EPUB 并进库
+2. EPUB 阅读器按章节顺序显示文字与插图，支持封面、章节标题回退
+3. EPUB 与 TXT/PDF 同机制：标签改名、备份/恢复、阅读进度、删除清理
+4. 坏 EPUB（截断、非 ZIP、畸形 OPF、加密正文/图片）干净拒绝，不中断整轮扫描、不留孤立缓存
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

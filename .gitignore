@@ -128,3 +128,6 @@ key.properties
 !/tools/test_public_source_policy.py
 !/tools/verify_apk_runtime.py
 !/tools/test_verify_apk_runtime.py
+
+# 本地工作日志，不进提交
+reports/
