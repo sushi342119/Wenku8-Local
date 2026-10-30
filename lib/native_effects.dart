@@ -674,11 +674,17 @@ class _MorphGlassClipper extends CustomClipper<ui.RRect> {
 
   @override
   ui.RRect getClip(ui.Size size) {
+    if (size.isEmpty || !size.isFinite) {
+      return ui.RRect.fromRectAndRadius(ui.Rect.zero, ui.Radius.zero);
+    }
     final box = context.findRenderObject()! as RenderBox;
     final rect = MatrixUtils.transformRect(
       box.getTransformTo(null),
       ui.Offset.zero & size,
     );
+    if (rect.isEmpty || !rect.isFinite) {
+      return ui.RRect.fromRectAndRadius(ui.Offset.zero & size, ui.Radius.zero);
+    }
     final radius = math.min(
       config.morph?.resolve(config.morph!.radius, config.radius) ??
           config.radius,

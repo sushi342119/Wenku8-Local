@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'catalog.dart';
 import 'performance_preferences.dart';
+import 'recovery_archive.dart';
 
 final backupPreferenceKeys = <String>{
   'theme',
@@ -23,9 +24,10 @@ final backupPreferenceKeys = <String>{
   PerformancePreferences.modeKey,
   ...PerformanceEffect.values.map((effect) => effect.preferenceKey),
 };
-const _listKeys = {'shelf', 'reading_history_hidden', 'recentSearches'};
+const _listKeys = {'shelf', 'reading_history_hidden', 'recentSearches', 'local_shelf_removed'};
 const _tagRecordKeys = {'tag_defs', 'tag_map'};
 const restoreJournalKey = 'library_restore_journal';
+const restoreJournalQuarantineKey = 'library_restore_journal_quarantine_v1';
 final _recordKey = RegExp(
   r'^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks)_([1-9][0-9]{0,9})$',
 );
@@ -37,12 +39,22 @@ bool isLibraryRecordKey(String key) =>
     (_recordKey.hasMatch(key) &&
         int.parse(_recordKey.firstMatch(key)![2]!) <= 0x7fffffff);
 
+class LibraryBackupUnavailable implements Exception {
+  const LibraryBackupUnavailable(this.message);
+  final String message;
+  @override
+  String toString() => message;
+}
+
 class LibraryBackup {
-  LibraryBackup._(this.createdAt, Map<String, Object> records)
-    : records = Map.unmodifiable(records);
+  LibraryBackup._(this.createdAt, Map<String, Object> records, {
+    List<String> omittedCoverKeys = const [],
+  }) : records = Map.unmodifiable(records),
+       omittedCoverKeys = List.unmodifiable(omittedCoverKeys);
   static const maxBytes = 4 * 1024 * 1024;
   final int createdAt;
   final Map<String, Object> records;
+  final List<String> omittedCoverKeys;
   int get shelfCount => (records['shelf'] as List<String>? ?? const []).length;
   int get positionCount =>
       records.keys.where((key) => key.startsWith('reading_position_')).length;
@@ -83,6 +95,8 @@ class LibraryBackup {
       compute(_decodeBackup, text);
   static Future<LibraryBackup> fromRecords(Map<String, Object> records) =>
       compute(_createBackup, records);
+  static Future<LibraryBackup> fromLocalRecords(Map<String, Object> records) =>
+      compute(_createLocalBackup, records);
   Future<String> encode() =>
       compute(_encodeBackup, (createdAt: createdAt, records: records));
 }
@@ -109,6 +123,25 @@ LibraryBackup _createBackup(Map<String, Object> records) {
   return backup;
 }
 
+LibraryBackup _createLocalBackup(Map<String, Object> records) {
+  final sanitized = Map<String, Object>.of(records);
+  final omitted = <String>[];
+  for (final entry in records.entries) {
+    if (!entry.key.startsWith('novel_meta_') || entry.value is! String) continue;
+    final record = jsonDecode(entry.value as String);
+    if (record is! Map<String, dynamic> || record['coverUrl'] == null) continue;
+    final cover = record['coverUrl'];
+    final uri = cover is String ? Uri.tryParse(cover) : null;
+    if (cover is! String || cover.length > 2048 || uri == null || !_isAllowedCoverUrl(uri)) {
+      record.remove('coverUrl');
+      sanitized[entry.key] = jsonEncode(record);
+      omitted.add(entry.key);
+    }
+  }
+  final backup = _createBackup(sanitized);
+  return LibraryBackup._(backup.createdAt, backup.records, omittedCoverKeys: omitted);
+}
+
 LibraryBackup _decodeBackup(String text) {
   if (text.length > LibraryBackup.maxBytes ||
       utf8.encode(text).length > LibraryBackup.maxBytes) {
@@ -130,6 +163,16 @@ LibraryBackup _decodeBackup(String text) {
 }
 
 Map<String, Object> _validateRecords(Map<String, dynamic> input) {
+  try {
+    return _validateRecordValues(input);
+  } on TypeError {
+    throw const FormatException('备份记录字段类型有误');
+  } on RangeError {
+    throw const FormatException('备份记录字段超出范围');
+  }
+}
+
+Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
   if (input.length > 50000) throw const FormatException('备份记录数量过多');
   final output = <String, Object>{};
   for (final entry in input.entries) {
@@ -271,7 +314,8 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
         final url = novel.coverUrl == null
             ? null
             : Uri.tryParse(novel.coverUrl!);
-        if (url != null && !['http', 'https'].contains(url.scheme)) {
+        if (novel.coverUrl != null &&
+            (url == null || !_isAllowedCoverUrl(url))) {
           throw const FormatException('封面地址格式有误');
         }
         final colors = record['colors'];
@@ -297,9 +341,11 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
               mark['id'] is! String ||
               (mark['id'] as String).isEmpty ||
               (mark['id'] as String).length > 128 ||
+              RegExp(r'[\x00-\x1f]').hasMatch(mark['id'] as String) ||
               !seen.add(mark['id']) ||
               mark['chapterTitle'] is! String ||
-              (mark['chapterTitle'] as String).length > 2048) {
+              (mark['chapterTitle'] as String).length > 2048 ||
+              RegExp(r'[\x00-\x1f]').hasMatch(mark['chapterTitle'] as String)) {
             throw const FormatException('书签格式有误');
           }
           _validatePosition(mark['position']);
@@ -313,6 +359,21 @@ Map<String, Object> _validateRecords(Map<String, dynamic> input) {
 
 bool _number(Object? value, double min, double max) =>
     value is num && value.isFinite && value >= min && value <= max;
+
+bool _isAllowedCoverUrl(Uri url) {
+  final host = url.host.toLowerCase();
+  final officialHost = host == 'wenku8.com' ||
+      host.endsWith('.wenku8.com') ||
+      host == 'wenku8.net' ||
+      host.endsWith('.wenku8.net') ||
+      host == 'wenku8.cn' ||
+      host.endsWith('.wenku8.cn');
+  return url.scheme == 'https' &&
+      url.userInfo.isEmpty &&
+      (!url.hasPort || url.port == 443) &&
+      officialHost;
+}
+
 void _validatePosition(Object? record) {
   if (record is! Map ||
       record['chapter'] is! int ||
@@ -368,19 +429,51 @@ Future<void> writeLibraryPreference(
 
 /// An interrupted multi-key merge is rolled back before LibraryState is loaded.
 /// The journal contains only allowlisted library keys, never session/API data.
-Future<void> recoverLibraryRestore(SharedPreferences prefs) async {
+Future<bool> recoverLibraryRestore(SharedPreferences prefs) async {
   final raw = prefs.get(restoreJournalKey);
-  if (raw == null) return;
-  if (raw is! String || raw.length > LibraryBackup.maxBytes * 2) {
-    throw const FormatException('本地恢复日志格式有误');
+  if (raw == null) return true;
+  var archived = false;
+  Future<bool> archive(String reason) async {
+    if (archived) return true;
+    try {
+      await archiveRecoveryRecord(
+        prefs, restoreJournalQuarantineKey, raw, reason: reason,
+      );
+      archived = true;
+      return true;
+    } catch (error) {
+      recordRecoveryFailure(restoreJournalKey, error);
+      return false;
+    }
   }
-  final journal = jsonDecode(raw);
-  if (journal is! Map || journal.length > 50000) {
-    throw const FormatException('本地恢复日志格式有误');
+  Future<bool> clearJournal() async {
+    try {
+      await writeLibraryPreference(prefs, restoreJournalKey, null);
+      return true;
+    } catch (error) {
+      recordRecoveryFailure(restoreJournalKey, error);
+      return false;
+    }
   }
+  late Map journal;
+  try {
+    if (raw is! String || raw.length > LibraryBackup.maxBytes * 2) {
+      throw const FormatException('本地恢复日志格式有误');
+    }
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map || decoded.length > 50000) {
+      throw const FormatException('本地恢复日志格式有误');
+    }
+    journal = decoded;
+  } catch (_) {
+    if (!await archive('invalid_journal')) return false;
+    return clearJournal();
+  }
+  var complete = true;
   for (final entry in journal.entries) {
     if (entry.key is! String || !isLibraryRecordKey(entry.key)) {
-      throw const FormatException('本地恢复日志包含未知记录');
+      if (!await archive('unknown_key')) complete = false;
+      continue;
     }
     final value = entry.value;
     if (value != null &&
@@ -389,15 +482,20 @@ Future<void> recoverLibraryRestore(SharedPreferences prefs) async {
         value is! int &&
         value is! double &&
         !(value is List && value.every((item) => item is String))) {
-      throw const FormatException('本地恢复日志格式有误');
+      if (!await archive('invalid_value')) complete = false;
+      continue;
+    }
+    try {
+      await writeLibraryPreference(
+        prefs,
+        entry.key,
+        value is List ? List<String>.from(value) : value,
+      );
+    } catch (error) {
+      complete = false;
+      recordRecoveryFailure(restoreJournalKey, error);
+      await archive('write_failed');
     }
   }
-  for (final entry in journal.entries) {
-    await writeLibraryPreference(
-      prefs,
-      entry.key,
-      entry.value is List ? List<String>.from(entry.value) : entry.value,
-    );
-  }
-  await writeLibraryPreference(prefs, restoreJournalKey, null);
+  return complete ? clearJournal() : false;
 }

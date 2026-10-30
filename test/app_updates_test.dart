@@ -387,4 +387,17 @@ void main() {
       );
     },
   );
+  test('missing digest retains the existing size-checked download behavior', () async {
+    final data = utf8.encode('synthetic package fixture');
+    final asset = UpdateAsset(
+      name: 'wenku8-fixture.apk',
+      url: Uri.parse('https://github.com/$_repo/releases/download/v0.3.0/fixture.apk'),
+      size: data.length,
+    );
+    final file = File('${temp.path}/fixture.apk');
+    final client = _Client([_Reply(200, [data])]);
+    await GithubUpdateSource(clientFactory: () => client)
+        .download(asset, file, UpdateDownload(), (_) {});
+    expect(await file.readAsBytes(), data);
+  });
 }

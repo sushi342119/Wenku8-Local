@@ -12,12 +12,13 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.2.2';
-const currentAppBuild = 29;
+const currentAppVersion = '1.3.2';
+const currentAppBuild = 39;
 const currentReleaseNotes = '''
-1. 阅读器底部新增可拖动进度条：显示全书进度，拖动可跳转章节
-2. 书籍详情页新增「···」菜单：可编辑书籍信息、删除文件
-3. 更换小说文件夹后切回，书籍标签自动保留恢复
+1. 修复本地书库迁移、删除队列、书架读取、启动初始化与恢复日志等致命问题
+2. 修复一批数据丢失与崩溃问题，包括备份、标签与章节进度迁移
+3. 安全隐私加固：错误信息脱敏、封面白名单、备份导入校验
+4. 性能优化：扫描快路径、章节字节偏移与隔离编码，大文件打开速度恢复正常
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
@@ -105,14 +106,12 @@ class AppRelease {
       final name = raw['name'];
       final url = Uri.tryParse(raw['browser_download_url']?.toString() ?? '');
       // GitHub 的 browser_download_url 会把 tag 中的 + 编码为 %2B
-      //（如 v1.2.2+29 → v1.2.2%2B29），两种写法都接受。
+      //（如 v1.3.1+38 → v1.3.1%2B38），两种写法都接受。
       final encodedTag = tag.replaceAll('+', '%2B');
       final underRelease =
           url?.path.startsWith('/$repository/releases/download/$tag/') ==
               true ||
-          url?.path.startsWith(
-                '/$repository/releases/download/$encodedTag/',
-              ) ==
+          url?.path.startsWith('/$repository/releases/download/$encodedTag/') ==
               true;
       final size = raw['size'];
       if (name is! String ||
@@ -353,10 +352,16 @@ class GithubUpdateSource implements UpdateSource {
           (asset.digest != null && digest.value.toString() != asset.digest)) {
         throw const FormatException('安装包校验失败，请重新下载');
       }
+      await sink.close();
+      sink = null;
     } finally {
-      await sink?.close();
-      client.close(force: true);
-      task._client = null;
+      try {
+        await sink?.close();
+      } catch (_) {
+      } finally {
+        client.close(force: true);
+        task._client = null;
+      }
     }
   }
 }
@@ -493,10 +498,14 @@ class AppUpdates extends ChangeNotifier {
         error = failure is FormatException ? failure.message : '下载失败，请检查网络后重试';
       }
     } finally {
-      if (part != null && await part.exists()) await part.delete();
-      _download = null;
-      downloading = false;
-      _notify();
+      try {
+        if (part != null && await part.exists()) await part.delete();
+      } on FileSystemException catch (_) {
+      } finally {
+        _download = null;
+        downloading = false;
+        _notify();
+      }
     }
   }
 

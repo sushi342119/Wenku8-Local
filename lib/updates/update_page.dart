@@ -180,7 +180,11 @@ class AppUpdatePage extends StatelessWidget {
                       ] else if (service.checked && !available) ...[
                         const SizedBox(height: 12),
                         Text(
-                          service.release == null ? '暂未发布可用的正式版本' : '已是最新版本',
+                          service.release == null
+                              ? '暂未发布可用的正式版本'
+                              : service.installed == null
+                              ? '暂时无法确认当前版本，请重试检查'
+                              : '已是最新版本',
                         ),
                       ],
                       if (service.error != null) ...[

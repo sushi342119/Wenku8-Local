@@ -64,6 +64,9 @@ locateTextAnchor(String text, List<LocalChapterIndex> chapters, int global) {
     }
   }
   final c = chapters[index];
+  if (c.offset < 0 || c.length < 0 || c.offset + c.length > text.length) {
+    throw StateError('阅读锚点范围损坏');
+  }
   final raw = text.substring(c.offset, c.offset + c.length);
   final body = raw.trim();
   final trim = raw.length - raw.trimLeft().length;

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'catalog.dart';
 import 'library_backup.dart';
@@ -14,10 +15,27 @@ import 'performance_preferences.dart';
 import 'app_typography.dart';
 import 'local_platform.dart';
 import 'local_library.dart';
-import 'text_anchor.dart';
 import 'file_text_anchor.dart';
+import 'recovery_archive.dart';
 
 const _libraryWriteTimeout = Duration(seconds: 8);
+const _maxImportedFontBytes = 100 * 1024 * 1024;
+
+class _StateNotifier extends ChangeNotifier {
+  bool _closed = false;
+
+  @override
+  void notifyListeners() {
+    if (!_closed) super.notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    if (_closed) return;
+    _closed = true;
+    super.dispose();
+  }
+}
 
 class ReadingPosition {
   const ReadingPosition({
@@ -75,8 +93,8 @@ class ReadingPosition {
     }
 
     return ReadingPosition(
-      revision: value['revision'] as String? ?? '',
-      textOffset: value['textOffset'] as int?,
+      revision: value['revision'] is String ? value['revision'] : '',
+      textOffset: value['textOffset'] is int ? value['textOffset'] : null,
       chapter: value['chapter'] is int
           ? (value['chapter'] as int).clamp(0, 100000)
           : 0,
@@ -120,7 +138,14 @@ class ReaderBookmark {
     final id = json['id'];
     final title = json['chapterTitle'];
     final position = json['position'];
-    if (id is! String || id.isEmpty || title is! String || position is! Map) {
+    if (id is! String ||
+        id.isEmpty ||
+        id.length > 128 ||
+        RegExp(r'[\x00-\x1f]').hasMatch(id) ||
+        title is! String ||
+        title.length > 2048 ||
+        RegExp(r'[\x00-\x1f]').hasMatch(title) ||
+        position is! Map) {
       throw const FormatException('Damaged bookmark');
     }
     return ReaderBookmark(
@@ -133,14 +158,22 @@ class ReaderBookmark {
 
 class LibraryState extends ChangeNotifier {
   LibraryState(this._prefs, {this.writeWaitTimeout = _libraryWriteTimeout}) {
-    _shelf.addAll(
-      ((_prefs.get('shelf') is List<String>)
-              ? _prefs.getStringList('shelf')!
-              : const <String>[])
-          .map(int.tryParse)
-          .whereType<int>()
-          .where((id) => id > 0),
-    );
+    try {
+      final raw = _prefs.get('shelf');
+      if (raw != null) {
+        if (raw is! List) throw const FormatException('书架类型异常');
+        for (final value in raw) {
+          final id = value is String ? int.tryParse(value) : null;
+          if (id == null || id <= 0 || id > 0x7fffffff) {
+            _shelfLoadFailed = true;
+          } else {
+            _shelf.add(id);
+          }
+        }
+      }
+    } catch (_) {
+      _shelfLoadFailed = true;
+    }
     _hiddenHistory.addAll(
       ((_prefs.get('reading_history_hidden') is List<String>)
               ? _prefs.getStringList('reading_history_hidden')!
@@ -262,17 +295,18 @@ class LibraryState extends ChangeNotifier {
 
   final Duration writeWaitTimeout;
   final SharedPreferences _prefs;
-  final _appearance = ChangeNotifier();
-  final _application = ChangeNotifier();
-  final _glassChanges = ChangeNotifier();
-  final _readerSettings = ChangeNotifier();
-  final _settings = ChangeNotifier();
-  final _history = ChangeNotifier();
-  final _bookmarkChanges = ChangeNotifier();
-  final _searchChanges = ChangeNotifier();
-  final _shelfViewChanges = ChangeNotifier();
-  final _readerBehaviorChanges = ChangeNotifier();
+  final _appearance = _StateNotifier();
+  final _application = _StateNotifier();
+  final _glassChanges = _StateNotifier();
+  final _readerSettings = _StateNotifier();
+  final _settings = _StateNotifier();
+  final _history = _StateNotifier();
+  final _bookmarkChanges = _StateNotifier();
+  final _searchChanges = _StateNotifier();
+  final _shelfViewChanges = _StateNotifier();
+  final _readerBehaviorChanges = _StateNotifier();
   final Set<int> _shelf = {};
+  bool _shelfLoadFailed = false;
   final Set<int> _hiddenHistory = {};
   final Map<int, Novel> _known = {};
   final Map<int, Novel> _persistedNovels = {};
@@ -313,6 +347,51 @@ class LibraryState extends ChangeNotifier {
   }
 
   Set<int> get shelf => Set.unmodifiable(_shelf);
+  bool get shelfLoadFailed => _shelfLoadFailed;
+
+  void _requireShelfLoaded() {
+    if (_shelfLoadFailed) throw StateError('书架读取失败，已禁止覆盖书架');
+  }
+
+  Future<void> repairShelf() async {
+    if (_restoreBarrier case final barrier?) {
+      await barrier.future;
+      return repairShelf();
+    }
+    await _queuePositionWrite(() async {
+      final raw = _prefs.get('shelf');
+      final repaired = <int>{};
+      var damaged = raw != null && raw is! List;
+      if (raw is List) {
+        for (final value in raw) {
+          final id = value is String ? int.tryParse(value) : null;
+          if (id == null || id <= 0 || id > 0x7fffffff) {
+            damaged = true;
+          } else {
+            repaired.add(id);
+          }
+        }
+      }
+      if (damaged) {
+        await archiveRecoveryRecord(
+          _prefs, 'library_shelf_quarantine_v1', raw!, reason: 'invalid_shelf',
+        );
+        await _commitLibraryRecords(
+          {'shelf': repaired.map((id) => '$id').toList()}, repairingShelf: true,
+        );
+      }
+      for (final id in {..._shelf, ...repaired}) {
+        if (_shelf.contains(id) != repaired.contains(id)) {
+          _shelfRevisions[id] = shelfRevision(id) + 1;
+        }
+      }
+      _shelf
+        ..clear()
+        ..addAll(repaired);
+      _shelfLoadFailed = false;
+      notifyListeners();
+    });
+  }
   Listenable get appearanceChanges => _appearance;
   Listenable get applicationChanges => _application;
   Listenable get glassChanges => _glassChanges;
@@ -376,13 +455,22 @@ class LibraryState extends ChangeNotifier {
   Novel? cachedNovel(int id) => _known[id];
   ReadingPosition? positionFor(int id) {
     if (_positions[id] case final position?) return position;
-    final anchor = _readJsonObjectPreference(_chapterProgressAnchorKey(id));
+    Map<String, dynamic>? anchor;
+    try {
+      anchor = _readJsonObjectPreference(_chapterProgressAnchorKey(id));
+    } catch (_) {
+      return null;
+    }
     if (anchor == null || anchor['chapter'] != _chapters[id]) return null;
+    if (_chapters[id] == null || anchor['fraction'] is! num ||
+        !(anchor['fraction'] as num).isFinite) {
+      return null;
+    }
     return ReadingPosition(
       chapter: _chapters[id]!,
       chapterId: _chapters[id]!,
       offset: 0,
-      fraction: (anchor['fraction'] as num?)?.toDouble() ?? 0,
+      fraction: (anchor['fraction'] as num).toDouble().clamp(0, 1),
       fontSize: fontSize,
       width: 0,
       updatedAt: 0,
@@ -538,7 +626,9 @@ class LibraryState extends ChangeNotifier {
   Future<void> _queuePositionWrite(Future<void> Function() write) {
     _positionWrites = _positionWrites.catchError((Object _) {}).then((_) async {
       if (_prefs.get(restoreJournalKey) != null) {
-        await recoverLibraryRestore(_prefs);
+        if (!await recoverLibraryRestore(_prefs)) {
+          throw StateError('恢复记录尚未处理完成，已保留原记录，请恢复存储后重试');
+        }
       }
       await write();
     });
@@ -581,21 +671,41 @@ class LibraryState extends ChangeNotifier {
     }
     return _queuePositionWrite(() async {
       if (id <= 0) return;
+      final hidden = {..._hiddenHistory}..remove(id);
+      final changes = <String, Object?>{
+        'reading_position_$id': null,
+        'chapter_$id': null,
+        _chapterProgressAnchorKey(id): null,
+        'reader_bookmarks_$id': null,
+        'listening.cursor.v1.$id': null,
+        'novel_meta_$id': null,
+        'reading_history_hidden': hidden.map((value) => '$value').toList(),
+      };
+      final previous = {for (final key in changes.keys) key: _prefs.get(key)};
+      try {
+        for (final entry in changes.entries) {
+          await writeLibraryPreference(_prefs, entry.key, entry.value);
+        }
+      } catch (_) {
+        for (final entry in previous.entries) {
+          await writeLibraryPreference(_prefs, entry.key, entry.value);
+        }
+        rethrow;
+      }
       _positions.remove(id);
       _chapters.remove(id);
       _hiddenHistory.remove(id);
       _known.remove(id);
-      await _prefs.remove('reading_position_$id');
-      await _prefs.remove('chapter_$id');
-      // 独立锚点也一并清除，但不要删 remap journal：journal 是为了
-      // 让同一个任务在 confirm 前继续幂等重放。
-      await _prefs.remove(_chapterProgressAnchorKey(id));
+      _persistedNovels.remove(id);
+      _bookmarks.remove(id);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
       _historyChanged();
       notifyListeners();
     });
   }
 
   LocalLibraryStore? _localChapters;
+  final Map<int, Future<void>> _chapterMigrations = {};
   void bindLocalChapters(LocalLibraryStore local) {
     _localChapters = local;
     local.migrateProgress = migrateLocalChapterTask;
@@ -613,13 +723,19 @@ class LibraryState extends ChangeNotifier {
   Future<void> migrateLocalChapterTask(
     LocalChapterRemap task, {
     bool readingAlreadyMigrated = false,
-  }) => _withWriteTimeout(
-    _migrateLocalChapterTask(
-      task,
-      readingAlreadyMigrated: readingAlreadyMigrated,
-    ),
-    '阅读进度迁移',
-  );
+  }) {
+    final previous = _chapterMigrations[task.bookId] ?? Future<void>.value();
+    final next = previous.then((_) => _migrateLocalChapterTask(
+      task, readingAlreadyMigrated: readingAlreadyMigrated));
+    final drained = next.then<void>((_) {}, onError: (Object _) {});
+    _chapterMigrations[task.bookId] = drained;
+    unawaited(drained.then((_) {
+      if (identical(_chapterMigrations[task.bookId], drained)) {
+        _chapterMigrations.remove(task.bookId);
+      }
+    }));
+    return _withWriteTimeout(next, '阅读进度迁移');
+  }
 
   Future<void> _migrateLocalChapterTask(
     LocalChapterRemap task, {
@@ -653,27 +769,29 @@ class LibraryState extends ChangeNotifier {
       }
       return _migrateLocalChapterTask(enriched, readingAlreadyMigrated: false);
     }
-    return _queuePositionWrite(() async {
+    return (() async {
       final id = task.bookId;
       final key = _remapJournalKey(id, task.migrationId);
-      var journal = _readJsonObjectPreference(key);
+      final sourceKeys = ['reading_position_$id', 'chapter_$id',
+        _chapterProgressAnchorKey(id), 'reader_bookmarks_$id', 'listening.cursor.v1.$id'];
+      late Map<String, Object?> sourceRecords;
+      Map<String, dynamic>? journal;
+      ReadingPosition? current;
+      List<ReaderBookmark>? marks;
+      await _queuePositionWrite(() async {
+        sourceRecords = {for (final source in sourceKeys) source: _prefs.get(source)};
+        journal = _readJsonObjectPreference(key);
+        current = positionFor(id) ?? (_chapters.containsKey(id) ? ReadingPosition(
+          chapter: _chapters[id]!, chapterId: _chapters[id]!, offset: 0, fraction: 0,
+          fontSize: fontSize, width: 0, updatedAt: 0) : null);
+        marks = _bookmarks[id] == null ? null : List.of(_bookmarks[id]!);
+      });
       if (journal?['status'] == 'done') return;
+      final quarantined = <Object>[];
       if (journal == null &&
-          positionFor(id) == null &&
-          !_chapters.containsKey(id) &&
-          (_bookmarks[id]?.isEmpty ?? true) &&
-          _prefs.getString('listening.cursor.v1.$id') == null) {
-        await writeLibraryPreference(
-          _prefs,
-          key,
-          jsonEncode({
-            'version': 2,
-            'bookId': id,
-            'status': 'done',
-            'records': {},
-          }),
-        );
-        return;
+          current == null && (marks?.isEmpty ?? true) &&
+          sourceRecords['listening.cursor.v1.$id'] == null) {
+        journal = {'version': 2, 'bookId': id, 'status': 'prepared', 'records': <String, Object?>{}};
       }
       if (journal == null) {
         final oldText = await FileTextAnchor.open(task.oldTextPath);
@@ -694,30 +812,27 @@ class LibraryState extends ChangeNotifier {
           if (position.revision == task.newRevision) return position;
           if (task.oldRevision.isNotEmpty && position.revision.isNotEmpty &&
               position.revision != task.oldRevision) {
-            throw StateError('阅读锚点属于其他目录修订：$id');
+            throw const FormatException('阅读锚点属于其他目录修订');
           }
           if (position.chapter < 0 ||
               position.chapter >= task.oldChapters.length) {
-            throw StateError('旧阅读章节越界：$id');
+            throw const FormatException('旧阅读章节越界');
           }
           final old = task.oldChapters[position.chapter];
           final start = old.offset.clamp(0, oldText.length);
           final end = (old.offset + old.length).clamp(start, oldText.length);
-          final raw = await oldText.slice(start, end);
-          final body = raw.trim();
-          final trim = raw.length - raw.trimLeft().length;
+          final range = await oldText.trimmedRange(start, end);
+          final bodyLength = range.end - range.start;
           final local =
               position.textOffset ??
               (position.paragraphIndex != null
-                  ? paragraphTextOffset(
-                          body.split('\n\n'),
-                          position.paragraphIndex!,
-                        ) +
+                  ? (await oldText.paragraphAt(range.start, range.end,
+                        stopAt: position.paragraphIndex!)).start +
                         withinParagraph
-                  : (position.fraction * body.length).floor());
+                  : (position.fraction * bodyLength).floor());
           final global = await newText.relocateFrom(
             oldText,
-            start + trim + local.clamp(0, body.length),
+            range.start + local.clamp(0, bodyLength),
           );
           final target = await newText.locate(chapters, global);
           return ReadingPosition(
@@ -739,50 +854,58 @@ class LibraryState extends ChangeNotifier {
         }
 
         final records = <String, Object?>{};
-        final current =
-            positionFor(id) ??
-            (_chapters.containsKey(id)
-                ? ReadingPosition(
-                    chapter: _chapters[id]!,
-                    chapterId: _chapters[id]!,
-                    offset: 0,
-                    fraction: 0,
-                    fontSize: fontSize,
-                    width: 0,
-                    updatedAt: 0,
-                  )
-                : null);
-        if (current != null) {
+        if (current case final currentPosition?) {
           Future<ReadingPosition> migrateCurrentPosition() async {
-            if (!readingAlreadyMigrated) return migrate(current);
-            final c = chapters[current.chapter];
+            if (!readingAlreadyMigrated) return migrate(currentPosition);
+            if (currentPosition.chapter < 0 || currentPosition.chapter >= chapters.length) {
+              throw const FormatException('阅读锚点范围损坏');
+            }
+            final c = chapters[currentPosition.chapter];
             final target = await newText.locate(chapters,
-              c.offset + (current.fraction * c.length).floor());
-            return ReadingPosition.fromJson({...current.toJson(),
+              c.offset + (currentPosition.fraction * c.length).floor());
+            return ReadingPosition.fromJson({...currentPosition.toJson(),
               'revision': task.newRevision, 'textOffset': target.textOffset,
               'paragraphIndex': target.paragraph, 'width': 0, 'offset': 0});
           }
-          final position = await migrateCurrentPosition();
-          records['reading_position_$id'] = jsonEncode(position.toJson());
-          records['chapter_$id'] = position.chapter;
-          records[_chapterProgressAnchorKey(id)] = null;
+          try {
+            final position = await migrateCurrentPosition();
+            records['reading_position_$id'] = jsonEncode(position.toJson());
+            records['chapter_$id'] = position.chapter;
+            records[_chapterProgressAnchorKey(id)] = null;
+          } on FormatException {
+            quarantined.add({'kind': 'reading', 'record': currentPosition.toJson()});
+            if (chapters.isEmpty) throw StateError('章节目录为空');
+            final fallback = ReadingPosition.fromJson({...currentPosition.toJson(),
+              'chapter': 0, 'chapterId': 0, 'textOffset': 0, 'offset': 0,
+              'fraction': 0, 'paragraphIndex': 0, 'paragraphFraction': 0,
+              'width': 0, 'revision': task.newRevision});
+            records['reading_position_$id'] = jsonEncode(fallback.toJson());
+            records['chapter_$id'] = 0;
+            records[_chapterProgressAnchorKey(id)] = null;
+          }
         }
-        final marks = _bookmarks[id];
-        if (marks != null) {
-          records['reader_bookmarks_$id'] = jsonEncode([
-            for (final mark in marks)
-              await (() async {
+        if (marks case final currentMarks?) {
+          final migratedMarks = <Object>[];
+          for (final mark in currentMarks) {
+            try {
                 final p = await migrate(mark.position);
-                return ReaderBookmark(
+                migratedMarks.add(ReaderBookmark(
                   id: mark.id,
                   chapterTitle: chapters[p.chapter].title,
                   position: p,
-                ).toJson();
-              })(),
-          ]);
+                ).toJson());
+            } on FormatException {
+              quarantined.add({'kind': 'bookmark', 'record': mark.toJson()});
+            } on RangeError {
+              quarantined.add({'kind': 'bookmark', 'record': mark.toJson()});
+            }
+          }
+          records['reader_bookmarks_$id'] = jsonEncode(migratedMarks);
         }
         final cursorKey = 'listening.cursor.v1.$id';
-        final cursor = _readJsonObjectPreference(cursorKey);
+        try {
+        final rawCursor = sourceRecords[cursorKey];
+        final cursor = rawCursor == null ? null : jsonDecode(rawCursor as String) as Map<String, dynamic>;
         if (cursor != null) {
           final p = await migrate(
             ReadingPosition(
@@ -800,7 +923,9 @@ class LibraryState extends ChangeNotifier {
             withinParagraph: cursor['start'] as int? ?? 0,
           );
           final c = chapters[p.chapter];
-          final body = (await newText.slice(c.offset, c.offset + c.length)).trim();
+          final range = await newText.trimmedRange(c.offset, c.offset + c.length);
+          final paragraph = await newText.paragraphAt(range.start, range.end,
+              stopAt: p.paragraphIndex!);
           records[cursorKey] = jsonEncode({
             ...cursor,
             'chapter': p.chapter,
@@ -808,12 +933,19 @@ class LibraryState extends ChangeNotifier {
             'paragraph': p.paragraphIndex,
             'start':
                 p.textOffset! -
-                paragraphTextOffset(body.split('\n\n'), p.paragraphIndex!),
+                paragraph.start,
             'textOffset': p.textOffset,
             'revision': task.newRevision,
             'positionMs': 0,
             'segmentHash': '',
           });
+        }
+        } on FormatException {
+          quarantined.add({'kind': 'listening', 'record': sourceRecords[cursorKey]});
+        } on TypeError {
+          quarantined.add({'kind': 'listening', 'record': sourceRecords[cursorKey]});
+        } on RangeError {
+          quarantined.add({'kind': 'listening', 'record': sourceRecords[cursorKey]});
         }
         journal = {
           'version': 2,
@@ -821,12 +953,27 @@ class LibraryState extends ChangeNotifier {
           'status': 'prepared',
           'records': records,
         };
+      }
+      await _queuePositionWrite(() async {
+      final stored = _readJsonObjectPreference(key);
+      if (stored?['status'] == 'done') return;
+      if (stored != null) {
+        journal = stored;
+      } else {
+        if (sourceRecords.entries.any((entry) => _prefs.get(entry.key) != entry.value)) {
+          throw StateError('迁移期间进度已更新，请重试');
+        }
+        for (final record in quarantined) {
+          await archiveRecoveryRecord(_prefs, 'local_progress_quarantine_v1', record,
+              reason: 'invalid_progress', details: {'bookId': id});
+        }
         await writeLibraryPreference(_prefs, key, jsonEncode(journal));
       }
-      if (journal['bookId'] != id || journal['records'] is! Map) {
+      final committed = journal!;
+      if (committed['bookId'] != id || committed['records'] is! Map) {
         throw StateError('章节迁移日志损坏：$id');
       }
-      final records = Map<String, dynamic>.from(journal['records'] as Map);
+      final records = Map<String, dynamic>.from(committed['records'] as Map);
       for (final record in records.entries) {
         if (record.value == null) {
           if (!await _prefs.remove(record.key)) {
@@ -839,7 +986,7 @@ class LibraryState extends ChangeNotifier {
       await writeLibraryPreference(
         _prefs,
         key,
-        jsonEncode({...journal, 'status': 'done'}),
+        jsonEncode({...committed, 'status': 'done'}),
       );
       if (records['reading_position_$id'] case final String raw) {
         _positions[id] = ReadingPosition.fromJson(
@@ -852,10 +999,11 @@ class LibraryState extends ChangeNotifier {
           for (final item in jsonDecode(raw) as List)
             ReaderBookmark.fromJson(Map<String, dynamic>.from(item as Map)),
         ];
-        _bookmarkChanges.notifyListeners();
+        if (!_disposed) _bookmarkChanges.notifyListeners();
       }
       notifyListeners();
-    });
+      });
+    })();
   }
 
   String _chapterProgressAnchorKey(int id) {
@@ -1241,13 +1389,13 @@ class LibraryState extends ChangeNotifier {
       return true;
     }());
     final snapshot = jsonEncode(novel.toSnapshot());
-    _persistedNovels[novel.id] = novel;
     return snapshot;
   }
 
   Future<void> _writeNovel(Novel novel, String snapshot) async {
     try {
       await writeLibraryPreference(_prefs, 'novel_meta_${novel.id}', snapshot);
+      _persistedNovels[novel.id] = novel;
     } catch (_) {
       if (identical(_persistedNovels[novel.id], novel)) {
         _persistedNovels.remove(novel.id);
@@ -1256,19 +1404,21 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  Future<void> rememberNovel(Novel novel) {
+  Future<void> rememberNovel(Novel novel, {bool Function()? accepts}) {
     if (_restoreBarrier case final barrier?) {
       return _withWriteTimeout(
-        barrier.future.then((_) => rememberNovel(novel)),
+        barrier.future.then((_) => rememberNovel(novel, accepts: accepts)),
         '书籍详情保存',
       );
     }
     if (novel.id <= 0) return Future.value();
-    _known[novel.id] = novel;
-    final snapshot = _novelSnapshot(novel);
-    final queued = snapshot == null
-        ? _positionWrites
-        : _queuePositionWrite(() => _writeNovel(novel, snapshot));
+    if (accepts == null) _known[novel.id] = novel;
+    final queued = _queuePositionWrite(() async {
+      if (accepts != null && !accepts()) return;
+      final snapshot = _novelSnapshot(novel);
+      if (snapshot != null) await _writeNovel(novel, snapshot);
+      _known[novel.id] = novel;
+    });
     return _withWriteTimeout(queued, '书籍详情保存');
   }
 
@@ -1354,20 +1504,24 @@ class LibraryState extends ChangeNotifier {
   Future<void> addShelfIds(
     Iterable<int> values, {
     Map<int, Novel> novels = const {},
+    bool automatic = false,
   }) async {
     final ids = values.where((id) => id > 0 && id <= 0x7fffffff).toSet();
     if (_restoreBarrier case final barrier?) {
       await barrier.future;
-      return addShelfIds(ids, novels: novels);
+      return addShelfIds(ids, novels: novels, automatic: automatic);
     }
     await _queuePositionWrite(() async {
-      final additions = ids.difference(_shelf);
+      final excluded = (_prefs.getStringList('local_shelf_removed') ?? []).toSet();
+      final additions = ids.difference(_shelf)
+        ..removeWhere((id) => automatic && excluded.contains('$id'));
       if (additions.isEmpty) return;
       final shelf = {..._shelf, ...additions};
       final now = DateTime.now().millisecondsSinceEpoch;
       final snapshots = <int, Novel>{};
       final changes = <String, Object>{
         'shelf': shelf.map((id) => '$id').toList(),
+        'local_shelf_removed': excluded.where((id) => !additions.any((added) => '$added' == id)).toList(),
         for (final id in additions) 'shelf_added_$id': now,
       };
       for (final id in additions) {
@@ -1388,6 +1542,7 @@ class LibraryState extends ChangeNotifier {
         rethrow;
       }
       _shelf.addAll(additions);
+      _persistedNovels.addAll(snapshots);
       for (final id in additions) {
         _added[id] = now;
         _shelfRevisions[id] = shelfRevision(id) + 1;
@@ -1401,7 +1556,7 @@ class LibraryState extends ChangeNotifier {
   /// 扫描自动上架的批量入口，同时持久化书架和书籍元数据。
   Future<void> addShelfBooks(Iterable<Novel> novels) async {
     final byId = <int, Novel>{for (final novel in novels) novel.id: novel};
-    await addShelfIds(byId.keys, novels: byId);
+    await addShelfIds(byId.keys, novels: byId, automatic: true);
   }
 
   Future<void> setShelfMembership(
@@ -1423,6 +1578,14 @@ class LibraryState extends ChangeNotifier {
     if (id <= 0) return;
     await _queuePositionWrite(() async {
       final changedMembership = contains(id) != present;
+      final excluded = (_prefs.getStringList('local_shelf_removed') ?? []).toSet();
+      if (isLocalNovelId(id)) {
+        if (present) {
+          excluded.remove('$id');
+        } else {
+          excluded.add('$id');
+        }
+      }
       final shelf = {..._shelf};
       if (present) {
         shelf.add(id);
@@ -1437,6 +1600,7 @@ class LibraryState extends ChangeNotifier {
       final snapshot = novel == null ? null : _novelSnapshot(novel);
       try {
         await _commitLibraryRecords({
+          'local_shelf_removed': excluded.toList(),
           if (changedMembership) 'shelf': shelf.map((id) => '$id').toList(),
           if (present && timestamp != null) 'shelf_added_$id': timestamp,
           'novel_meta_$id': ?snapshot,
@@ -1452,6 +1616,7 @@ class LibraryState extends ChangeNotifier {
         ..addAll(shelf);
       if (present && timestamp != null) _added[id] = timestamp;
       if (novel != null) _known[id] = novel;
+      if (novel != null && snapshot != null) _persistedNovels[id] = novel;
       if (changedMembership) _shelfRevisions[id] = shelfRevision(id) + 1;
       if (!_disposed && (changedMembership || novel != null)) notifyListeners();
     });
@@ -1463,14 +1628,16 @@ class LibraryState extends ChangeNotifier {
     }
     if (id <= 0 || chapter < 0) return;
     _chapters[id] = chapter;
-    final reveal = _hiddenHistory.remove(id);
-    final hidden = reveal ? _hiddenHistory.map((id) => '$id').toList() : null;
     notifyListeners();
     _historyChanged();
     await _queuePositionWrite(() async {
       await writeLibraryPreference(_prefs, 'chapter_$id', chapter);
-      if (hidden != null) {
-        await writeLibraryPreference(_prefs, 'reading_history_hidden', hidden);
+      if (_hiddenHistory.contains(id)) {
+        final hidden = {..._hiddenHistory}..remove(id);
+        await writeLibraryPreference(_prefs, 'reading_history_hidden',
+            hidden.map((value) => '$value').toList());
+        _hiddenHistory.remove(id);
+        _historyChanged();
       }
     });
   }
@@ -1534,18 +1701,42 @@ class LibraryState extends ChangeNotifier {
       textScale: textScale.clamp(.5, 5),
       typeface: typeface ?? _appFontId,
     );
+    final previousPosition = _positions[novel.id];
+    final previousChapter = _chapters[novel.id];
+    final previousNovel = _known[novel.id];
     _positions[novel.id] = position;
     final chapterChanged = _chapters[novel.id] != chapter;
     _chapters[novel.id] = chapter;
     _known[novel.id] = novel;
-    final reveal = _hiddenHistory.remove(novel.id);
-    final hidden = reveal ? _hiddenHistory.map((id) => '$id').toList() : null;
     if (notify) notifyListeners();
     _historyChanged();
-    final snapshot = _novelSnapshot(novel);
     final record = jsonEncode(position.toJson());
+    void rollbackRejected() {
+      if (!identical(_positions[novel.id], position)) return;
+      if (previousPosition == null) {
+        _positions.remove(novel.id);
+      } else {
+        _positions[novel.id] = previousPosition;
+      }
+      if (previousChapter == null) {
+        _chapters.remove(novel.id);
+      } else {
+        _chapters[novel.id] = previousChapter;
+      }
+      if (previousNovel == null) {
+        _known.remove(novel.id);
+      } else {
+        _known[novel.id] = previousNovel;
+      }
+      _historyChanged();
+    }
     return _queuePositionWrite(() async {
-      if (!_acceptLocalPosition(novel, chapter)) return;
+      if (!_acceptLocalPosition(novel, chapter)) {
+        rollbackRejected();
+        return;
+      }
+      try {
+      final snapshot = _novelSnapshot(novel);
       if (chapterChanged) {
         await writeLibraryPreference(_prefs, 'chapter_${novel.id}', chapter);
       }
@@ -1555,8 +1746,16 @@ class LibraryState extends ChangeNotifier {
         record,
       );
       if (snapshot != null) await _writeNovel(novel, snapshot);
-      if (hidden != null) {
-        await writeLibraryPreference(_prefs, 'reading_history_hidden', hidden);
+      if (_hiddenHistory.contains(novel.id)) {
+        final hidden = {..._hiddenHistory}..remove(novel.id);
+        await writeLibraryPreference(_prefs, 'reading_history_hidden',
+            hidden.map((value) => '$value').toList());
+        _hiddenHistory.remove(novel.id);
+        _historyChanged();
+      }
+      } catch (_) {
+        if (_prefs.getString('reading_position_${novel.id}') != record) rollbackRejected();
+        rethrow;
       }
     });
   }
@@ -1601,12 +1800,14 @@ class LibraryState extends ChangeNotifier {
         if (list is List) {
           for (final item in list) {
             if (item is Map<String, Object?>) {
+              try {
               final entry = AppFontEntry.fromJson(item);
               if (entry.id.isNotEmpty &&
                   entry.source == AppFontSource.imported &&
                   entry.family != null) {
                 _importedFonts.add(entry);
               }
+              } on FormatException catch (_) {}
             }
           }
         }
@@ -1670,8 +1871,12 @@ class LibraryState extends ChangeNotifier {
   Future<bool> _doLoadImportedFont(String family, String path) async {
     try {
       final file = File(path);
-      if (!await file.exists()) return false;
+      if (!await _isPrivateFontFile(file) ||
+          await file.length() > _maxImportedFontBytes) {
+        return false;
+      }
       final bytes = await file.readAsBytes();
+      if (!_hasSupportedFontSignature(bytes)) return false;
       final loader = FontLoader(family);
       loader.addFont(Future.value(ByteData.view(bytes.buffer)));
       await loader.load();
@@ -1679,6 +1884,42 @@ class LibraryState extends ChangeNotifier {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<bool> _isPrivateFontFile(File file) async {
+    try {
+      final support = await getApplicationSupportDirectory();
+      final fonts = Directory('${support.path}${Platform.pathSeparator}fonts');
+      final root = await fonts.resolveSymbolicLinks();
+      final actual = await file.resolveSymbolicLinks();
+      final separator = Platform.pathSeparator;
+      return actual != root && actual.startsWith('$root$separator');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _hasSupportedFontSignature(Uint8List bytes) {
+    if (bytes.length < 12 || bytes.length > _maxImportedFontBytes) return false;
+    final data = ByteData.sublistView(bytes);
+    final signature = data.getUint32(0);
+    if (signature != 0x4f54544f && signature != 0x00010000) return false;
+    final count = data.getUint16(4);
+    final directoryEnd = 12 + count * 16;
+    if (count == 0 || count > 64 || directoryEnd > bytes.length) return false;
+    final tables = <String>{};
+    for (var index = 0; index < count; index++) {
+      final record = 12 + index * 16;
+      final tag = String.fromCharCodes(bytes.sublist(record, record + 4));
+      final offset = data.getUint32(record + 8);
+      final length = data.getUint32(record + 12);
+      if (!tables.add(tag) || offset < directoryEnd ||
+          offset + length > bytes.length ||
+          (const {'head', 'name', 'maxp'}.contains(tag) && length == 0)) {
+        return false;
+      }
+    }
+    return tables.containsAll(const {'head', 'name', 'maxp'});
   }
 
   /// 确保当前选中的导入字体已通过 FontLoader 加载（启动时调用）。
@@ -1750,7 +1991,9 @@ class LibraryState extends ChangeNotifier {
     String displayName,
   ) async {
     final file = File(filePath);
-    if (!await file.exists()) throw StateError('字体文件不存在');
+    if (!await _isPrivateFontFile(file)) {
+      throw StateError('字体文件不在应用字体目录内');
+    }
     final id =
         'imported_${DateTime.now().millisecondsSinceEpoch}_${filePath.hashCode.abs()}';
     final entry = AppFontEntry(
@@ -1794,7 +2037,9 @@ class LibraryState extends ChangeNotifier {
       final path = entry.filePath;
       if (path != null) {
         final file = File(path);
-        if (await file.exists()) await file.delete();
+        if (await _isPrivateFontFile(file) && await file.exists()) {
+          await file.delete();
+        }
       }
     } catch (_) {}
     if (_appFontId == id) _appFontId = appFontSystem.id;
@@ -1936,45 +2181,56 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  Map<String, Object> _backupRecords() => {
-    'shelf': _shelf.map((id) => '$id').toList(),
-    'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
-    'recentSearches': _recentSearches,
-    'theme': _theme.name,
-    'readerFontSize': _fontSize,
-    'readerLineHeight': _lineHeight,
-    'reduceMotion': _reduceMotion,
-    'appFontId': _appFontId,
-    ..._performance.toRecords(),
-    'glassBlur': _glassBlur,
-    'glassOpacity': _glassOpacity,
-    'readerKeepScreenOn': _keepScreenOn,
-    'shelfSort': _shelfSort,
-    'shelfFilter': _shelfFilter,
-    for (final entry in _added.entries) 'shelf_added_${entry.key}': entry.value,
-    for (final entry in _known.entries)
-      'novel_meta_${entry.key}': jsonEncode(entry.value.toSnapshot()),
-    for (final entry in _chapters.entries) 'chapter_${entry.key}': entry.value,
-    for (final entry in _positions.entries)
-      'reading_position_${entry.key}': jsonEncode(entry.value.toJson()),
-    for (final entry in _bookmarks.entries)
-      'reader_bookmarks_${entry.key}': jsonEncode(
-        entry.value.map((mark) => mark.toJson()).toList(),
-      ),
-    // 标签定义与归属：重装迁移时靠它恢复，平时备份也一并带上。
-    ...TagStore.shared.exportTagRecords(),
-  };
+  Map<String, Object> _backupRecords() {
+    final tagStore = TagStore.maybeShared;
+    if (tagStore == null) {
+      throw const LibraryBackupUnavailable('标签未加载，已拒绝生成备份或恢复前快照；请重启并成功加载标签后重试');
+    }
+    return {
+      'shelf': _shelf.map((id) => '$id').toList(),
+      'local_shelf_removed': _prefs.getStringList('local_shelf_removed') ?? <String>[],
+      'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
+      'recentSearches': _recentSearches,
+      'theme': _theme.name,
+      'readerFontSize': _fontSize,
+      'readerLineHeight': _lineHeight,
+      'reduceMotion': _reduceMotion,
+      'appFontId': _appFontId,
+      ..._performance.toRecords(),
+      'glassBlur': _glassBlur,
+      'glassOpacity': _glassOpacity,
+      'readerKeepScreenOn': _keepScreenOn,
+      'shelfSort': _shelfSort,
+      'shelfFilter': _shelfFilter,
+      for (final entry in _added.entries) 'shelf_added_${entry.key}': entry.value,
+      for (final entry in _known.entries)
+        'novel_meta_${entry.key}': jsonEncode(entry.value.toSnapshot()),
+      for (final entry in _chapters.entries) 'chapter_${entry.key}': entry.value,
+      for (final entry in _positions.entries)
+        'reading_position_${entry.key}': jsonEncode(entry.value.toJson()),
+      for (final entry in _bookmarks.entries)
+        'reader_bookmarks_${entry.key}': jsonEncode(
+          entry.value.map((mark) => mark.toJson()).toList(),
+        ),
+      ...tagStore.exportTagRecords(),
+    };
+  }
 
   Future<LibraryBackup> createBackup() async {
+    _requireShelfLoaded();
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => createBackup());
     }
     late LibraryBackup backup;
     await _queuePositionWrite(() async {
-      backup = await LibraryBackup.fromRecords(_backupRecords());
+      _requireShelfLoaded();
+      backup = await LibraryBackup.fromLocalRecords(_backupRecords());
+      _recordOmittedCovers(backup);
     });
     return backup;
   }
+
+  String? get preRestoreBackup => _prefs.getString('library_pre_restore_snapshot_v1');
 
   /// Merge, do not replace: current newer positions and metadata win. Memory is
   /// published only after all keys commit, with a rollback journal across kills.
@@ -1982,6 +2238,7 @@ class LibraryState extends ChangeNotifier {
     LibraryBackup backup, {
     bool importPreferences = false,
   }) async {
+    _requireShelfLoaded();
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
         (_) => restoreBackup(backup, importPreferences: importPreferences),
@@ -1991,6 +2248,10 @@ class LibraryState extends ChangeNotifier {
     _restoreBarrier = barrier;
     try {
       await _queuePositionWrite(() async {
+        _requireShelfLoaded();
+        final previous = await LibraryBackup.fromLocalRecords(_backupRecords());
+        _recordOmittedCovers(previous);
+        await writeLibraryPreference(_prefs, 'library_pre_restore_snapshot_v1', await previous.encode());
         final records = backup.records;
         final shelf = {
           ..._shelf,
@@ -2089,8 +2350,16 @@ class LibraryState extends ChangeNotifier {
         final searches = <String>[
           ..._recentSearches,
           ...(records['recentSearches'] as List<String>? ?? const []),
-        ].where((term) => seen.add(term.toLowerCase())).take(12).toList();
+        ].map((term) => term.trim())
+            .where(validSearchHistory)
+            .where((term) => seen.add(term.toLowerCase()))
+            .take(12)
+            .toList();
         changed['shelf'] = shelf.map((id) => '$id').toList();
+        changed['local_shelf_removed'] = {
+          ...?_prefs.getStringList('local_shelf_removed'),
+          ...(records['local_shelf_removed'] as List<String>? ?? const []),
+        }.where((id) => !shelf.contains(int.tryParse(id))).toList();
         changed['reading_history_hidden'] = hidden.map((id) => '$id').toList();
         changed['recentSearches'] = searches;
         if (importPreferences) {
@@ -2140,7 +2409,8 @@ class LibraryState extends ChangeNotifier {
         _recentSearches = searches;
         if (importPreferences) {
           if (records['theme'] case final String value) {
-            _theme = ThemeMode.values.firstWhere((mode) => mode.name == value);
+            _theme = ThemeMode.values.firstWhere((mode) => mode.name == value,
+                orElse: () => ThemeMode.system);
           }
           if (records['readerFontSize'] case final num value) {
             _fontSize = value.toDouble();
@@ -2208,6 +2478,12 @@ class LibraryState extends ChangeNotifier {
     return jsonEncode(position);
   }
 
+  void _recordOmittedCovers(LibraryBackup backup) {
+    if (backup.omittedCoverKeys.isNotEmpty) {
+      debugPrint('本地备份省略了不支持的封面：${backup.omittedCoverKeys.join(', ')}');
+    }
+  }
+
   Future<void> _writeLibraryBatch(Map<String, Object> changes) async {
     if (LocalPlatform.android) {
       try {
@@ -2229,7 +2505,11 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
-  Future<void> _commitLibraryRecords(Map<String, Object> changes) async {
+  Future<void> _commitLibraryRecords(Map<String, Object> changes, {
+    bool repairingShelf = false,
+  }) async {
+    changes = Map<String, Object>.of(changes);
+    if (changes.containsKey('shelf') && !repairingShelf) _requireShelfLoaded();
     changes.removeWhere(
       (key, value) => jsonEncode(_prefs.get(key)) == jsonEncode(value),
     );
@@ -2253,7 +2533,13 @@ class LibraryState extends ChangeNotifier {
   }
 
   @override
+  void notifyListeners() {
+    if (!_disposed) super.notifyListeners();
+  }
+
+  @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     _appearance.dispose();
     _application.dispose();

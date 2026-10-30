@@ -5,6 +5,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class LocalRenameOutcomeTest {
+    @Test fun renameThenThrowRestoresConfirmedOriginalUri() {
+        var name = "旧.txt"
+        var calls = 0
+        val result = localRenameOutcome("same", "新.txt", { name }) { uri, next ->
+            calls++
+            name = next
+            if (calls == 1) throw IllegalStateException("provider failed after rename")
+            uri
+        }
+        assertEquals(2, calls)
+        assertEquals("旧.txt", name)
+        assertEquals(false, result["renamed"])
+        assertEquals("旧.txt", result["fileName"])
+    }
+
+    @Test fun renameThenThrowWithUnknownUriDoesNotClaimOldLocationIsValid() {
+        var attempted = false
+        val result = localRenameOutcome("old", "新.txt", { if (attempted) null else "旧.txt" }) { _, _ ->
+            attempted = true
+            throw IllegalStateException("provider changed uri")
+        }
+        assertEquals("unconfirmed", result["code"])
+        assertNull(result["fileUri"])
+        assertNull(result["fileName"])
+    }
+
     @Test fun exactNameAndChangedUriAreConfirmed() {
         var name = "书.txt"
         val result = localRenameOutcome("old", "书 ✦古风.txt", { name }) { _, next ->

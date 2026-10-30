@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'recovery_archive.dart';
+
 /// 仅移出书库的移除状态待恢复：提交后中断时恢复继续完成；
 /// 提交前回滚尚未完成时也抛此异常，保留待办供下次继续回滚，
 /// 并非只表示提交后继续删除。
@@ -40,16 +42,18 @@ class _RemovalIntent {
         'committed': committed,
       });
 
-  static _RemovalIntent decode(String raw) {
+  static _RemovalIntent decode(Object raw) {
+    if (raw is! String) throw const FormatException('移除待办类型错误');
     final value = jsonDecode(raw);
-    if (value is! Map<String, dynamic>) {
+    if (value is! Map || value.keys.any((key) => key is! String)) {
       throw const FormatException('移除待办格式错误');
     }
-    final bookId = value['bookId'];
-    final ignoreKey = value['ignoreKey'];
-    final wasIgnored = value['wasIgnored'];
-    final committed = value['committed'];
-    if (bookId is! int ||
+    final map = Map<String, dynamic>.from(value);
+    final bookId = map['bookId'];
+    final ignoreKey = map['ignoreKey'];
+    final wasIgnored = map['wasIgnored'];
+    final committed = map['committed'];
+    if (bookId is! int || bookId <= 0 ||
         (ignoreKey != null && ignoreKey is! String) ||
         wasIgnored is! bool ||
         committed is! bool) {
@@ -75,13 +79,15 @@ class RecordRemovalJournal {
   RecordRemovalJournal({
     required this.readIntent,
     required this.writeIntent,
+    Future<void> Function(Object)? archiveIntent,
     required this.readIgnored,
     required this.writeIgnored,
     required this.finishRemoval,
-  });
+  }) : archiveIntent = archiveIntent ?? ((_) async {});
 
-  final String? Function() readIntent;
+  final Object? Function() readIntent;
   final Future<void> Function(String?) writeIntent;
+  final Future<void> Function(Object) archiveIntent;
   final Set<String> Function() readIgnored;
   final Future<void> Function(Set<String>) writeIgnored;
 
@@ -91,8 +97,18 @@ class RecordRemovalJournal {
   Future<void> recover() async {
     final raw = readIntent();
     if (raw == null) return;
-    // 损坏时阻止扫描，不把损坏待办当成没有待办。
-    final intent = _RemovalIntent.decode(raw);
+    late _RemovalIntent intent;
+    try {
+      intent = _RemovalIntent.decode(raw);
+    } catch (_) {
+      try {
+        await archiveIntent(raw);
+        await writeIntent(null);
+      } catch (error) {
+        recordRecoveryFailure('record_removal_archive', error);
+      }
+      return;
+    }
     if (!intent.committed) {
       try {
         await _rollbackPrepared(intent);
@@ -109,6 +125,9 @@ class RecordRemovalJournal {
     required String? ignoreKey,
   }) async {
     await recover();
+    if (readIntent() != null) {
+      throw StateError('旧移除记录尚未归档，请恢复存储后重试');
+    }
     final ignoredBefore = Set<String>.of(readIgnored());
     final prepared = _RemovalIntent(
       bookId: bookId,

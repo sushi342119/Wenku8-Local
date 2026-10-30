@@ -1,7 +1,12 @@
 package org.mewx.wenku8_flutter
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipDescription
+import android.content.ClipboardManager
 import android.content.Intent
+import android.os.Build
+import android.os.PersistableBundle
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -28,7 +33,10 @@ import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /** Explicit document/folder/share actions; never touches the Wenku8 bridge/session. */
-class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandler {
+class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandler {
+    fun attachActivity(activity: Activity) {
+        this.activity = activity
+    }
     private val io = Executors.newSingleThreadExecutor()
     private val requests = LocalToolRequests { callback -> activity.runOnUiThread { callback() } }
     private data class Pending(val result: MethodChannel.Result, val export: String?, val legacy: Boolean = false)
@@ -46,6 +54,18 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         private const val MAX_TEXT_BUFFER_BYTES = 4 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
         private const val IO_TIMEOUT_MS = 20000L
+        private const val PDF_CACHE_MAX_BYTES = 256L * 1024 * 1024
+        private const val PDF_CACHE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
+        private val libraryRecordKey =
+            Regex("^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks)_[1-9][0-9]{0,9}$")
+        private val allowedLibraryPreferenceKeys = setOf(
+            "theme", "readerFontSize", "readerLineHeight", "reduceMotion",
+            "glassBlur", "glassOpacity", "readerKeepScreenOn", "checkAppUpdates",
+            "appTypeface", "appFontId", "shelfSort", "shelfFilter", "lowPerformanceMode",
+            "performanceGlass", "performanceBlur", "performanceEdgeBlur",
+            "performanceMotion", "performanceShelf3d", "shelf", "reading_history_hidden",
+            "recentSearches", "local_shelf_removed", "tag_defs", "tag_map",
+        )
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
@@ -61,6 +81,25 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 }
                 result.success(null)
+            }
+            "setSensitiveClipboard" -> {
+                val text = call.argument<String>("text")
+                if (text.isNullOrBlank() || text.length > 256 * 1024) {
+                    result.error("input", "Invalid clipboard text", null)
+                } else try {
+                    val clip = ClipData.newPlainText("文库备份", text)
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        clip.description.extras = PersistableBundle().apply {
+                            putBoolean(ClipDescription.EXTRA_IS_SENSITIVE, true)
+                        }
+                    }
+                    val clipboard =
+                        activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(clip)
+                    result.success(null)
+                } catch (_: Exception) {
+                    result.error("clipboard", "Backup could not be copied", null)
+                }
             }
             "shareText" -> {
                 val text = call.argument<String>("text") ?: ""
@@ -175,7 +214,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 val timeout = when (call.method) {
                     "prepareLocalText", "fingerprintLocalText" -> 120000L
                     "scanLocalFolder", "queryTreePermission", "readLocalText",
-                    "pdfPageCount", "writeLibraryPreferences" -> IO_TIMEOUT_MS
+                    "pdfPageCount", "renderPdfPage" -> IO_TIMEOUT_MS
                     else -> null
                 }
                 if (!requests.begin(result, timeout)) return true
@@ -216,10 +255,12 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                                 if (path != null) File(path).delete()
                             }
                         }
+                    } catch (_: OutOfMemoryError) {
+                        requests.error(result, "memory", "Not enough memory to process this document")
                     } catch (e: SecurityException) {
                         requests.error(result, "permission", "Folder permission was revoked")
-                    } catch (e: Exception) {
-                        requests.error(result, "local", e.message ?: "Local file operation failed")
+                    } catch (_: Exception) {
+                        requests.error(result, "local", "Local file operation failed")
                     }
                 }
                 requests.track(result, work)
@@ -246,8 +287,8 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                     requests.success(result, path)
                 } catch (e: SecurityException) {
                     requests.error(result, "permission", "Font permission was revoked")
-                } catch (e: Exception) {
-                    requests.error(result, "font", e.message ?: "Font import failed")
+                } catch (_: Exception) {
+                    requests.error(result, "font", "Font import failed")
                 }
             }
             requests.track(result, work)
@@ -281,12 +322,14 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
         }
         if (request != REQUEST) return false
         val operation = pending ?: return true
+        pending = null
         val uri = data?.data
         if (code != Activity.RESULT_OK || uri == null) {
             pending = null
             requests.success(operation.result, if (operation.export == null) null else false)
             return true
         }
+        if (operation.export == null) requests.deadline(operation.result, IO_TIMEOUT_MS)
         val work = io.submit {
             if (!requests.active(operation.result)) return@submit
             try {
@@ -314,14 +357,17 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 }
                 activity.runOnUiThread {
                     requests.complete(operation.result) {
-                        pending = null
                         operation.result.success(response)
                     }
                 }
+            } catch (_: OutOfMemoryError) {
+                requests.error(operation.result, "memory", "Not enough memory to process this document")
             } catch (_: Exception) {
+                if (operation.export != null) {
+                    try { DocumentsContract.deleteDocument(activity.contentResolver, uri) } catch (_: Exception) { }
+                }
                 activity.runOnUiThread {
                     requests.complete(operation.result) {
-                        pending = null
                         operation.result.error("document", "Document read or write failed", null)
                     }
                 }
@@ -334,6 +380,8 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
     /** 递归扫描 SAF 树中的 txt / pdf，仅返回名称、大小与修改时间，不读内容。 */
     private fun scanLocalFolder(tree: Uri): Map<String, Any?> {
         data class Doc(val id: String, val name: String, val dir: Boolean, val size: Long, val modified: Long)
+        var complete = true
+        var reason: String? = null
         fun children(id: String): List<Doc> {
             val uri = DocumentsContract.buildChildDocumentsUriUsingTree(tree, id)
             val columns = arrayOf(
@@ -347,11 +395,15 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 val records = ArrayList<Doc>()
                 while (cursor.moveToNext()) {
                     if (Thread.currentThread().isInterrupted) throw InterruptedException()
-                    if (records.size >= MAX_SCAN_FILES) break
+                    if (records.size >= MAX_SCAN_FILES) {
+                        complete = false
+                        reason = "limit"
+                        break
+                    }
                     val size = try { cursor.getLong(3) } catch (_: Exception) { 0L }
                     val modified = try { cursor.getLong(4) } catch (_: Exception) { 0L }
                     records.add(
-                        Doc(cursor.getString(0), cursor.getString(1) ?: "",
+                        Doc(cursor.getString(0) ?: throw IllegalStateException("Missing document id"), cursor.getString(1) ?: "",
                             cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR, size, modified)
                     )
                 }
@@ -359,8 +411,6 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             } ?: throw IllegalStateException("Folder is not readable")
         }
         val output = ArrayList<Map<String, Any>>()
-        var complete = true
-        var reason: String? = null
         fun walk(id: String, depth: Int) {
             if (Thread.currentThread().isInterrupted) throw InterruptedException()
             if (!complete) return
@@ -391,6 +441,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 if (doc.dir) {
                     walk(doc.id, depth + 1)
                 } else {
+                    if (doc.name.isBlank()) {
+                        complete = false
+                        reason = "enumeration_failed"
+                        break
+                    }
                     val lower = doc.name.lowercase()
                     if (lower.endsWith(".txt") || lower.endsWith(".pdf")) {
                         output.add(
@@ -428,6 +483,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
 
     /** One Editor commit for all library keys; the Dart rollback journal brackets it. */
     private fun writeLibraryPreferences(changes: Map<String, Any?>): Boolean {
+        require(changes.keys.all(::isAllowedLibraryPreferenceKey))
         val editor = activity.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE).edit()
         for ((key, value) in changes) {
             val prefixed = "flutter.$key"
@@ -454,6 +510,11 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             }
         }
         return editor.commit()
+    }
+
+    private fun isAllowedLibraryPreferenceKey(key: String): Boolean {
+        if (key in allowedLibraryPreferenceKeys) return true
+        return libraryRecordKey.matches(key)
     }
 
     /** Hash source bytes without decoding or writing a temporary copy. */
@@ -594,6 +655,7 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             .substring(0, 16)
         val sub = File(File(activity.cacheDir, "local_pdf"), digest)
         if (!sub.isDirectory) sub.mkdirs()
+        cleanupPdfCache(File(activity.cacheDir, "local_pdf"), sub)
         val w = widthPx.coerceIn(400, 2400)
         val out = File(sub, "p_${page}_w${w}.png")
         if (!out.isFile) {
@@ -624,6 +686,37 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
             } ?: throw IllegalStateException("PDF is not readable")
         }
         return out.absolutePath
+    }
+
+    private fun cleanupPdfCache(root: File, active: File) {
+        val now = System.currentTimeMillis()
+        val files = root.walkTopDown().filter { it.isFile }.toList()
+        var total = files.sumOf { it.length() }
+        for (file in files) {
+            if (file.name.endsWith(".tmp") && now - file.lastModified() > 60 * 60 * 1000) {
+                val length = file.length()
+                if (file.delete()) total -= length
+            }
+        }
+        val old = root.walkTopDown().filter {
+            it.isFile && it.parentFile != active && now - it.lastModified() > PDF_CACHE_MAX_AGE_MS
+        }.sortedBy { it.lastModified() }
+        for (file in old) {
+            val length = file.length()
+            if (file.delete()) total -= length
+        }
+        if (total > PDF_CACHE_MAX_BYTES) {
+            val remaining = root.walkTopDown().filter {
+                it.isFile && it.parentFile != active
+            }.sortedBy { it.lastModified() }
+            for (file in remaining) {
+                if (total <= PDF_CACHE_MAX_BYTES) break
+                val length = file.length()
+                if (file.delete()) total -= length
+            }
+        }
+        root.listFiles()?.filter { it.isDirectory && it != active && it.listFiles().isNullOrEmpty() }
+            ?.forEach { it.delete() }
     }
 
     /** 删除某 PDF 的全部渲染缓存。 */
@@ -823,7 +916,9 @@ class LocalTools(private val activity: Activity) : MethodChannel.MethodCallHandl
                 val records = ArrayList<Document>()
                 while (cursor.moveToNext()) {
                     check(records.size < 10000) { "Folder too large" }
-                    records.add(Document(cursor.getString(0), cursor.getString(1),
+                    val documentId = cursor.getString(0) ?: continue
+                    val documentName = cursor.getString(1) ?: continue
+                    records.add(Document(documentId, documentName,
                         cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR, cursor.getLong(3)))
                 }
                 records

@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/archive_wave.dart';
 import 'package:wenku8_flutter/catalog.dart';
+import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/library_backup.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/low_performance_page.dart';
@@ -55,6 +56,7 @@ void main() {
   test(
     'backup merges performance switches only when preferences are requested',
     () async {
+      await TagStore.load();
       const preferences = PerformancePreferences(
         enabled: true,
         effects: {PerformanceEffect.glass, PerformanceEffect.motion},

@@ -51,11 +51,71 @@ class FileTextAnchor {
     return result.toString();
   }
 
+  Stream<String> _chunks(int start, int end) async* {
+    if (start < 0 || end < start || end > length) {
+      throw StateError('阅读锚点范围损坏');
+    }
+    var offset = 0;
+    await for (final chunk in file.openRead().transform(utf8.decoder)) {
+      final next = offset + chunk.length;
+      if (next > start && offset < end) {
+        yield chunk.substring((start - offset).clamp(0, chunk.length),
+            (end - offset).clamp(0, chunk.length));
+      }
+      offset = next;
+      if (offset >= end) break;
+    }
+    if (offset < end) throw StateError('迁移期间正文发生变化');
+  }
+
+  Future<({int start, int end})> trimmedRange(int start, int end) async {
+    int? first;
+    var last = start;
+    var offset = start;
+    await for (final chunk in _chunks(start, end)) {
+      final left = chunk.trimLeft();
+      if (first == null && left.isNotEmpty) first = offset + chunk.length - left.length;
+      final right = chunk.trimRight();
+      if (right.isNotEmpty) last = offset + right.length;
+      offset += chunk.length;
+    }
+    return (start: first ?? end, end: first == null ? end : last);
+  }
+
+  Future<({int index, int start})> paragraphAt(int start, int end, {int? stopAt}) async {
+    var paragraph = 0;
+    var paragraphStart = 0;
+    var consumed = 0;
+    var newline = false;
+    if (stopAt == 0) return (index: 0, start: 0);
+    await for (final chunk in _chunks(start, end)) {
+      for (final unit in chunk.codeUnits) {
+        consumed++;
+        if (unit == 10 && newline) {
+          paragraph++;
+          paragraphStart = consumed;
+          newline = false;
+          if (stopAt != null && paragraph >= stopAt) {
+            return (index: paragraph, start: paragraphStart);
+          }
+        } else {
+          newline = unit == 10;
+        }
+      }
+    }
+    return (index: paragraph, start: paragraphStart);
+  }
+
   Future<int> relocateFrom(FileTextAnchor old, int offset) async {
     offset = offset.clamp(0, old.length);
-    if (old.file.path == file.path) return offset;
     if (old._text != null && _text != null) {
       return relocateTextOffset(old._text, _text, offset);
+    }
+    if (old.file.path == file.path) {
+      if (old.length != length) {
+        throw StateError('迁移期间正文发生变化');
+      }
+      return offset;
     }
     final windowStart = (offset - 4096).clamp(0, old.length);
     final windowEnd = (offset + 4160).clamp(0, old.length);
@@ -134,6 +194,15 @@ class FileTextAnchor {
     );
     if (index < 0) index = chapters.length - 1;
     final chapter = chapters[index];
+    if (chapter.length > maxSliceLength) {
+      final range = await trimmedRange(chapter.offset, chapter.offset + chapter.length);
+      final bodyLength = range.end - range.start;
+      final local = (global - range.start).clamp(0, bodyLength);
+      final paragraph = await paragraphAt(range.start, range.start + local);
+      return (chapter: index, textOffset: local,
+        paragraph: paragraph.index, paragraphStart: paragraph.start,
+        fraction: bodyLength == 0 ? 0.0 : local / bodyLength);
+    }
     final body = await slice(chapter.offset, chapter.offset + chapter.length);
     final target = locateTextAnchor(body, [
       LocalChapterIndex(chapter.title, 0, body.length),

@@ -56,6 +56,9 @@ class EdgeSpeechClient {
         '${pad(d.hour)}:${pad(d.minute)}:${pad(d.second)} GMT+0000 (Coordinated Universal Time)';
   }
 
+  static bool _isForbiddenHandshake(WebSocketException error) =>
+      error.httpStatusCode == HttpStatus.forbidden;
+
   static Map<String, String> get headers => {
     'User-Agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0',
@@ -149,13 +152,14 @@ class EdgeSpeechClient {
     if (length <= 0 || length + 2 > data.length) {
       throw const SpeechFailure('在线语音数据头无效');
     }
+    final bytes = data is Uint8List ? data : Uint8List.fromList(data);
     final header = utf8.decode(
-      data.sublist(2, length + 2),
+      Uint8List.sublistView(bytes, 2, length + 2),
       allowMalformed: false,
     );
     final path =
         RegExp(r'(?:^|\r\n)Path:([^\r\n]+)').firstMatch(header)?.group(1) ?? '';
-    return (path: path, audio: Uint8List.fromList(data.sublist(length + 2)));
+    return (path: path, audio: Uint8List.sublistView(bytes, length + 2));
   }
 
   Future<Uint8List> synthesize(
@@ -260,8 +264,8 @@ class EdgeSpeechClient {
       rethrow;
     } on WebSocketException catch (error) {
       cancellation.check();
-      onTransportError?.call(error);
-      if (retryClock && error.message.contains('403')) {
+      onTransportError?.call(const SpeechFailure('在线音源连接失败，请检查网络后重试'));
+      if (retryClock && _isForbiddenHandshake(error)) {
         try {
           await voices(refresh: true);
         } catch (_) {
@@ -273,7 +277,7 @@ class EdgeSpeechClient {
       throw const SpeechFailure('在线音源连接失败，请检查网络后重试，或换一个在线音色');
     } catch (error) {
       cancellation.check();
-      onTransportError?.call(error);
+      onTransportError?.call(const SpeechFailure('在线音源连接失败，请检查网络后重试'));
       throw const SpeechFailure('在线音源连接失败，请检查网络后重试，或换一个在线音色');
     } finally {
       removeCancellation();

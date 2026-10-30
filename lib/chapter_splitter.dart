@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// UTF-16 offsets in the normalized internal text, shared by import and audit.
 class LocalChapterIndex {
   const LocalChapterIndex(
@@ -5,16 +7,22 @@ class LocalChapterIndex {
     this.offset,
     this.length, {
     this.volume = '',
+    this.byteOffset = -1,
+    this.byteLength = -1,
   });
   final String title;
   final int offset;
   final int length;
   final String volume;
+  final int byteOffset;
+  final int byteLength;
   Map<String, Object?> toJson() => {
     't': title,
     'o': offset,
     'l': length,
     if (volume.isNotEmpty) 'v': volume,
+    if (byteOffset >= 0 && byteLength >= 0) 'bo': byteOffset,
+    if (byteOffset >= 0 && byteLength >= 0) 'bl': byteLength,
   };
   factory LocalChapterIndex.fromJson(Map<String, Object?> json) =>
       LocalChapterIndex(
@@ -22,6 +30,8 @@ class LocalChapterIndex {
         (json['o'] as num?)?.toInt() ?? 0,
         (json['l'] as num?)?.toInt() ?? 0,
         volume: json['v'] as String? ?? '',
+        byteOffset: (json['bo'] as num?)?.toInt() ?? -1,
+        byteLength: (json['bl'] as num?)?.toInt() ?? -1,
       );
 }
 
@@ -80,9 +90,12 @@ class _Heading {
     this.weak,
     this.volume,
     this.key,
+    this.startBytes,
+    this.contentBytes,
   );
   final String title, family, key;
   final int start, content, wordsBefore, wordsAfter;
+  final int startBytes, contentBytes;
   final bool weak, volume;
 }
 
@@ -91,13 +104,44 @@ class _Heading {
 /// accepted without growing the line buffer. All coordinates stay in the source.
 class ChapterTextIndex {
   int length = 0;
-  int _lineStart = 0, _indent = 0, _words = 0, _lineWords = 0;
+  int byteLength = 0;
+  int _lineStart = 0, _lineByteStart = 0;
+  int _indent = 0, _words = 0, _lineWords = 0;
   String _line = '';
   bool _leading = true;
   final _headings = <_Heading>[];
   final _directoryMarkers = <int>[];
 
+  // A high surrogate held from the previous chunk: it contributes no bytes
+  // until its low surrogate arrives, so a pair split across chunk
+  // boundaries is counted once (4 bytes) instead of twice (3 + 3 bytes
+  // for two lone-surrogate replacements).
+  int _pendingHigh = -1;
+
   void add(String chunk) {
+    // Byte counting runs over countChunk, which carries a held high
+    // surrogate from the previous chunk (shift 1) and holds a trailing
+    // high surrogate for the next chunk. Character offsets keep using
+    // the original chunk, so line splitting is unaffected.
+    var countChunk = chunk;
+    var shift = 0;
+    if (_pendingHigh >= 0) {
+      countChunk = String.fromCharCode(_pendingHigh) + chunk;
+      _pendingHigh = -1;
+      shift = 1;
+    }
+    if (countChunk.isNotEmpty) {
+      final last = countChunk.codeUnitAt(countChunk.length - 1);
+      if (last >= 0xD800 && last <= 0xDBFF) {
+        _pendingHigh = last;
+        countChunk = countChunk.substring(0, countChunk.length - 1);
+      }
+    }
+    // 增量字节计数：segStart 为 countChunk 中尚未计入 runningBytes 的起点。
+    // 分段点只在下标 0 或 '\n' 之后，不会拆开代理对，各段 UTF-8 长度之和
+    // 等于整段前缀长度。每个码元只编码一次。
+    var segStart = 0;
+    var runningBytes = byteLength;
     for (var i = 0; i < chunk.length;) {
       final newline = chunk.indexOf('\n', i);
       final end = newline < 0 ? chunk.length : newline;
@@ -114,14 +158,21 @@ class ChapterTextIndex {
         _line += part.length > room ? part.substring(0, room) : part;
       }
       if (newline < 0) break;
-      _finishLine(length + newline + 1);
+      final segEnd = newline + 1 + shift;
+      runningBytes += utf8.encode(countChunk.substring(segStart, segEnd)).length;
+      segStart = segEnd;
+      final nextBytes = runningBytes;
+      _finishLine(length + newline + 1, nextBytes);
       _lineStart = length + newline + 1;
+      _lineByteStart = nextBytes;
       i = newline + 1;
     }
     length += chunk.length;
+    byteLength =
+        runningBytes + utf8.encode(countChunk.substring(segStart)).length;
   }
 
-  void _finishLine(int next) {
+  void _finishLine(int next, int nextBytes) {
     final line = _line.trimRight();
     if (RegExp(
       r'^[【\[\s]*(?:目\s*录|contents)[】\]\s:：]*$',
@@ -129,7 +180,7 @@ class ChapterTextIndex {
     ).hasMatch(line)) {
       _directoryMarkers.add(_lineStart);
     }
-    final h = _parse(line, next);
+    final h = _parse(line, next, nextBytes);
     if (h != null) _headings.add(h);
     if (_headings.length + _directoryMarkers.length > 100000) {
       throw const FormatException('TXT 章节索引过大：候选标题与目录标记超过 100000 条');
@@ -141,7 +192,7 @@ class ChapterTextIndex {
     _leading = true;
   }
 
-  _Heading? _parse(String raw, int next) {
+  _Heading? _parse(String raw, int next, int nextBytes) {
     if (raw.isEmpty) return null;
     var line = raw.replaceFirst(_decoration, '');
     final displayLine = line;
@@ -271,6 +322,10 @@ class ChapterTextIndex {
                   .length
         : _words + _lineWords;
     final key = title.replaceAll(RegExp(r'[\s【】\[\]（）()]'), '');
+    final contentUnits = (content - _lineStart).clamp(0, raw.length);
+    final contentBytes = glued
+        ? _lineByteStart + utf8.encode(raw.substring(0, contentUnits)).length
+        : nextBytes;
     return _Heading(
       title,
       _lineStart,
@@ -281,11 +336,19 @@ class ChapterTextIndex {
       weak,
       isVolume,
       key,
+      _lineByteStart,
+      contentBytes,
     );
   }
 
   List<LocalChapterIndex> finish() {
-    _finishLine(length);
+    // A trailing unpaired high surrogate encodes as one replacement
+    // character (3 bytes) in whole-string UTF-8 encoding.
+    if (_pendingHigh >= 0) {
+      byteLength += 3;
+      _pendingHigh = -1;
+    }
+    _finishLine(length, byteLength);
     final families = <String, int>{};
     for (final h in _headings) {
       families.update(h.family, (n) => n + 1, ifAbsent: () => 1);
@@ -328,16 +391,30 @@ class ChapterTextIndex {
     }).toList();
     // Front matter TOCs contain consecutive headings with no body and often
     // repeat at the real chapter. Do not make those entries empty chapters.
+    final lastHeadingByKey = <String, int>{};
+    for (var i = 0; i < headings.length; i++) {
+      lastHeadingByKey[headings[i].key] = i;
+    }
     final directory = <_Heading>{};
     for (var i = 0; i + 1 < headings.length; i++) {
       final h = headings[i], after = headings[i + 1];
       if (after.wordsBefore - h.wordsAfter > 0) break;
-      final repeated = headings.skip(i + 1).any((later) => later.key == h.key);
+      final repeated = (lastHeadingByKey[h.key] ?? i) > i;
       final marked = _directoryMarkers.any((offset) => offset <= h.start);
       if (repeated || marked) directory.add(h);
     }
     headings = headings.where((h) => !directory.contains(h)).toList();
-    if (headings.isEmpty) return [LocalChapterIndex('正文', 0, length)];
+    if (headings.isEmpty) {
+      return [
+        LocalChapterIndex(
+          '正文',
+          0,
+          length,
+          byteOffset: 0,
+          byteLength: byteLength,
+        ),
+      ];
+    }
     final chapters = <LocalChapterIndex>[];
     var volume = '';
     final volumes = _headings.where((h) => h.volume).toList();
@@ -345,7 +422,15 @@ class ChapterTextIndex {
     // Preserve ALL nonempty front matter, including TOC text as front matter;
     // it has no independent chapter entries and never hides opening prose.
     if (headings.first.wordsBefore > 0) {
-      chapters.add(LocalChapterIndex('前言', 0, headings.first.start));
+      chapters.add(
+        LocalChapterIndex(
+          '前言',
+          0,
+          headings.first.start,
+          byteOffset: 0,
+          byteLength: headings.first.startBytes,
+        ),
+      );
     }
     for (var i = 0; i < headings.length; i++) {
       final h = headings[i];
@@ -363,10 +448,22 @@ class ChapterTextIndex {
           h.content,
           end - h.content,
           volume: h.volume ? '' : volume,
+          byteOffset: h.contentBytes,
+          byteLength: (next?.startBytes ?? byteLength) - h.contentBytes,
         ),
       );
     }
-    if (chapters.isEmpty) return [LocalChapterIndex('正文', 0, length)];
+    if (chapters.isEmpty) {
+      return [
+        LocalChapterIndex(
+          '正文',
+          0,
+          length,
+          byteOffset: 0,
+          byteLength: byteLength,
+        ),
+      ];
+    }
     if (!validChapterRanges(chapters, length)) {
       throw StateError('Invalid chapter ranges');
     }

@@ -62,7 +62,7 @@ class _BlockedRememberState extends LibraryState {
   final saved = Completer<void>();
   var calls = 0;
   @override
-  Future<void> rememberNovel(Novel novel) {
+  Future<void> rememberNovel(Novel novel, {bool Function()? accepts}) {
     calls++;
     return saved.future;
   }

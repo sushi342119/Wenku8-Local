@@ -57,6 +57,7 @@ class _Preferences extends InMemorySharedPreferencesStore {
   @override
   Future<bool> remove(String key) async {
     writes.add(key);
+    if (key == blockedKey) await writeGate!.future;
     if (key == failOnce) {
       failOnce = null;
       return false;
@@ -365,8 +366,8 @@ void main() {
       expect((await store.scanAppFolder()).skipped, 1);
       expect(store.books.single, same(book));
       await file.delete();
-      expect((await store.scanAppFolder()).removed, 1);
-      expect(store.bookFor(book.id), isNull);
+      await expectLater(store.scanAppFolder(), throwsA(isA<IncompleteScanException>()));
+      expect(store.bookFor(book.id), isNotNull);
     },
   );
 
@@ -662,7 +663,7 @@ void main() {
     () async {
       final texts = [
         '\uFEFF\uFEFF第一章 甲\n正文\n第二章 乙\n正文',
-        '\uFEFF',
+        '\uFEFF正文',
         '第一章 甲\u2028第二章 乙\n正文\n第三章 丙\n末尾',
         '${'长行' * 300}\u2029第一章 甲\n正文\n第二章 乙\n末尾',
         '第一章 甲\r第二章 乙\r正文',
@@ -921,6 +922,35 @@ void main() {
     expect(state.bookmarksFor(book.id).single.position.chapter, 1);
     expect(ListeningStore(prefs).cursor(book.id)!.chapter, 1);
     expect(state.positionFor(book.id)!.revision, book.revision);
+  });
+
+  test('damaged bookmark and cursor do not block valid reading migration', () async {
+    source(0, text: '第一章 起点\n甲正文。\n第二章 终点\n乙正文目标。');
+    final store = await load();
+    await store.scan();
+    final book = store.books.single;
+    final whole = bodies[book.fileUri]!;
+    final position = ReadingPosition(chapter: 0, chapterId: 0, offset: 0,
+      fraction: .2, fontSize: 19, width: 0, updatedAt: 42,
+      textOffset: whole.indexOf('乙正文'));
+    final invalid = ReadingPosition.fromJson({...position.toJson(), 'chapter': 999});
+    await prefs.setString('reading_position_${book.id}', jsonEncode(position.toJson()));
+    await prefs.setString('reader_bookmarks_${book.id}', jsonEncode([
+      ReaderBookmark(id: 'good', chapterTitle: '正文', position: position).toJson(),
+      ReaderBookmark(id: 'bad', chapterTitle: '未知', position: invalid).toJson(),
+    ]));
+    await prefs.setString('listening.cursor.v1.${book.id}', '{broken');
+    final state = await LibraryState.load();
+    addTearDown(state.dispose);
+    state.bindLocalChapters(store);
+    await state.migrateLocalChapterTask(LocalChapterRemap.create(bookId: book.id,
+      oldChapters: [(offset: 0, length: whole.length)],
+      newChapters: [for (final chapter in book.chapters) (offset: chapter.offset, length: chapter.length)]));
+    expect(state.positionFor(book.id)!.chapter, 1);
+    expect(state.bookmarksFor(book.id).single.id, 'good');
+    expect(state.bookmarksFor(book.id).single.position.chapter, 1);
+    expect(prefs.getStringList('local_progress_quarantine_v1'), hasLength(2));
+    expect(prefs.getString('listening.cursor.v1.${book.id}'), '{broken');
   });
 
   test('scan reports each unreadable source rather than no changes', () async {

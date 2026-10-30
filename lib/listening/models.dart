@@ -92,14 +92,17 @@ class SpeechSegment {
   const SpeechSegment(this.paragraph, this.start, this.end, this.text);
   final int paragraph, start, end;
   final String text;
-  String key(SpeechVoice voice) => sha256
-      .convert(
-        utf8.encode(
-          'speech-v1|${voice.source.name}|${voice.engine}|${voice.id}|$text',
-        ),
-      )
-      .toString();
+  String key(SpeechVoice voice) {
+    final voiceKey = '${voice.source.name}|${voice.engine}|${voice.id}';
+    final cache = _speechSegmentKeys[this] ??= <String, String>{};
+    return cache.putIfAbsent(
+      voiceKey,
+      () => sha256.convert(utf8.encode('speech-v1|$voiceKey|$text')).toString(),
+    );
+  }
 }
+
+final _speechSegmentKeys = Expando<Map<String, String>>();
 
 final _speechLetters = RegExp(r'[\p{L}\p{N}]', unicode: true);
 
@@ -313,8 +316,8 @@ class ListeningCursor {
     int number(String key) =>
         json[key] is int ? (json[key] as int).clamp(0, 1 << 30) : 0;
     return ListeningCursor(
-      revision: json['revision'] as String? ?? '',
-      textOffset: json['textOffset'] as int?,
+      revision: json['revision'] is String ? json['revision'] : '',
+      textOffset: json['textOffset'] is int ? json['textOffset'] : null,
       novelId: number('novelId'),
       chapterId: number('chapterId'),
       chapter: number('chapter'),

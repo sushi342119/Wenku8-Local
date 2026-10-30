@@ -132,8 +132,10 @@ Future<ListeningAudioOutput> createListeningOutput(
 }
 
 Future<void>? _serviceReady;
+ListeningAudioHandler? _serviceHandler;
 Future<void> prepareListeningService(ListeningController controller) async {
   await (_serviceReady ??= _registerService(controller));
+  _serviceHandler?.bind(controller);
 }
 
 // Keep this name in sync with res/raw/listening_keep.xml. The Android plugin
@@ -159,6 +161,7 @@ Future<void> _registerService(ListeningController controller) async {
         rewindInterval: Duration(seconds: 15),
       ),
     );
+    _serviceHandler = handler;
   } catch (_) {
     handler.close();
     _serviceReady = null;
@@ -175,7 +178,7 @@ class ListeningAudioHandler extends BaseAudioHandler {
     controller.chapterProgress.addListener(_position);
     _state();
   }
-  final ListeningController controller;
+  ListeningController controller;
   final Duration bufferingGrace;
   Timer? _bufferingTimer;
   bool _holdingTransition = false;
@@ -184,6 +187,18 @@ class ListeningAudioHandler extends BaseAudioHandler {
     _bufferingTimer?.cancel();
     controller.snapshot.removeListener(_state);
     controller.chapterProgress.removeListener(_position);
+  }
+
+  void bind(ListeningController next) {
+    if (identical(next, controller)) return;
+    close();
+    controller = next;
+    _holdingTransition = false;
+    _readyKey = null;
+    _mediaKey = null;
+    controller.snapshot.addListener(_state);
+    controller.chapterProgress.addListener(_position);
+    _state();
   }
 
   String? _mediaKey;
@@ -243,8 +258,8 @@ class ListeningAudioHandler extends BaseAudioHandler {
           MediaControl.stop,
         ],
         systemActions: const {
-          MediaAction.seekForward,
-          MediaAction.seekBackward,
+          MediaAction.fastForward,
+          MediaAction.rewind,
         },
         androidCompactActionIndices: const [0, 1, 2],
         processingState: switch (state.phase) {

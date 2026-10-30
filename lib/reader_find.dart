@@ -106,6 +106,12 @@ class _ReaderFindPanelState extends State<ReaderFindPanel> {
   }
 
   @override
+  void didUpdateWidget(ReaderFindPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.content, widget.content)) _edited();
+  }
+
+  @override
   void dispose() {
     _generation++;
     _debounce?.cancel();

@@ -14,6 +14,7 @@ class _LocalTextWorker extends LocalTextWorkerClient {
     String? sourceFingerprint,
   }) async =>
       await run({
+            'op': 'analyze',
             'path': path,
             'sourceFingerprint': sourceFingerprint,
             'output': outputPath,
@@ -24,52 +25,84 @@ class _LocalTextWorker extends LocalTextWorkerClient {
           as _TextMetadata;
 
   Future<String> fingerprint(String path) async =>
-      await run({'path': path, 'hash': true}) as String;
+      await run({'op': 'hash', 'path': path}) as String;
 
   Future<String> read(String path, {bool preserveBom = false}) async =>
-      await run({'path': path, 'read': true, 'preserveBom': preserveBom})
+      await run({'op': 'read', 'path': path, 'preserveBom': preserveBom})
           as String;
 
-  Future<String> readRange(String path, int offset, int length) async =>
-      await run({'path': path, 'offset': offset, 'length': length}) as String;
+  Future<String> readRange(
+    String path,
+    int offset,
+    int length, {
+    int? byteOffset,
+    int? byteLength,
+  }) async =>
+      await run({
+            'op': 'readRange',
+            'path': path,
+            'offset': offset,
+            'length': length,
+            'byteOffset': byteOffset,
+            'byteLength': byteLength,
+          })
+          as String;
 }
 
 void _textWorkerMain(SendPort ready) async {
   final requests = ReceivePort();
-  _TextSeekIndex? seekIndex;
+  final seekIndexes = <String, _TextSeekIndex>{};
   ready.send(requests.sendPort);
   await for (final message in requests) {
     try {
       final (reply, job) = message as (SendPort, Map<String, Object?>);
       final path = job['path'] as String;
-      if (job['offset'] != null) {
-        final stat = await File(path).stat();
-        if (seekIndex?.path != path ||
-            seekIndex?.size != stat.size ||
-            seekIndex?.modified != stat.modified) {
+      final op = job['op'];
+      if (op == 'readRange') {
+        final FileStat stat;
+        try {
+          stat = await File(path).stat();
+        } on FileSystemException catch (error) {
+          throw _TextSourceException(error);
+        }
+        var seekIndex = seekIndexes.remove(path);
+        if (seekIndex == null ||
+            seekIndex.size != stat.size ||
+            seekIndex.modified != stat.modified) {
           seekIndex = _TextSeekIndex(path, stat.size, stat.modified);
+        }
+        seekIndexes[path] = seekIndex;
+        while (seekIndexes.length > 3) {
+          seekIndexes.remove(seekIndexes.keys.first);
         }
         reply.send([
           true,
-          await seekIndex!.read(job['offset'] as int, job['length'] as int),
+          await seekIndex.read(
+            job['offset'] as int,
+            job['length'] as int,
+            byteOffset: job['byteOffset'] as int?,
+            byteLength: job['byteLength'] as int?,
+          ),
         ]);
         continue;
       }
-      final result = job['read'] == true
-          ? await _readSmallText(path, job['preserveBom'] == true)
-          : job['hash'] == true
-          ? await sha256
-                .bind(_boundedTextBytes(path, localTextMaxSourceBytes))
-                .first
-                .then((d) => d.toString())
-          : await _analyzeTextFile(
-              path,
-              sourceFingerprint: job['sourceFingerprint'] as String?,
-              outputPath: job['output'] as String?,
-              normalize: job['normalize'] == true,
-              maxBytes: job['maxBytes'] as int?,
-              preserveBom: job['preserveBom'] == true,
-            );
+      final result = switch (op) {
+        'read' => await _readSmallText(path, job['preserveBom'] == true),
+        'hash' =>
+          await sha256
+              .bind(_boundedTextBytes(path, localTextMaxSourceBytes))
+              .first
+              .then((d) => d.toString()),
+        'analyze' => await _analyzeTextFile(
+          path,
+          sourceFingerprint: job['sourceFingerprint'] as String?,
+          outputPath: job['output'] as String?,
+          normalize: job['normalize'] == true,
+          maxBytes: job['maxBytes'] as int?,
+          preserveBom: job['preserveBom'] == true,
+        ),
+        _ => throw ArgumentError('未知文本任务：$op'),
+      };
       reply.send([true, result]);
     } catch (error, stack) {
       // Ordinary job errors are replies. If even the error cannot be sent,
@@ -146,13 +179,54 @@ class _TextSeekIndex {
   final DateTime modified;
   final _checkpoints = <({int bytes, int units})>[(bytes: 0, units: 0)];
 
-  Future<String> read(int offset, int length) async {
+  Future<String> read(
+    int offset,
+    int length, {
+    int? byteOffset,
+    int? byteLength,
+  }) async {
     if (size > localTextMaxDecodedBytes) {
       throw const FormatException('TXT 解码后文件过大：超过 768 MiB 上限');
     }
     if (offset < 0 || length < 0) throw StateError('章节范围损坏，请重新扫描');
     if (length > localTextMaxReadCodeUnits) {
       throw const FormatException('单章正文过大：超过 4194304 个 UTF-16 字符，请拆分章节');
+    }
+    if (byteOffset != null &&
+        byteLength != null &&
+        byteOffset >= 0 &&
+        byteLength >= 0) {
+      // 字节坐标只用于加速。本路径特有的失败（坐标越界、UTF-8 解码失败、解码后长度
+      // 不符）返回 null 并回退到下面的检查点路径，由检查点路径给出最终结论。
+      // 文件系统错误不回退，照常抛 _TextSourceException。
+      Future<String?> readUtf8Range(int start, int count) async {
+        // 每个 UTF-16 码元对应 1..3 个 UTF-8 字节（代理对 2 码元 4 字节，也在区间内）。
+        if (count < length || count > length * 3) return null;
+        if (start > size || count > size - start) return null;
+        if (length == 0) return '';
+        final buffer = Uint8List(count);
+        var filled = 0;
+        try {
+          await for (final chunk in File(path).openRead(start, start + count)) {
+            if (chunk.length > count - filled) return null;
+            buffer.setRange(filled, filled + chunk.length, chunk);
+            filled += chunk.length;
+          }
+        } on FileSystemException catch (error) {
+          throw _TextSourceException(error);
+        }
+        if (filled != count) return null;
+        final String text;
+        try {
+          text = utf8.decode(buffer);
+        } on FormatException {
+          return null;
+        }
+        return text.length == length ? text : null;
+      }
+
+      final text = await readUtf8Range(byteOffset, byteLength);
+      if (text != null) return text;
     }
     var low = 0;
     var high = _checkpoints.length;

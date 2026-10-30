@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Filename suffix tags and the original name with only those tags removed.
 class ParsedFilenameTags {
   const ParsedFilenameTags({required this.baseFilename, required this.tags});
@@ -10,6 +12,9 @@ class ParsedFilenameTags {
 bool isValidFilenameTag(String tag) =>
     tag.isNotEmpty &&
     !tag.contains('✦') &&
+    tag != '.' &&
+    tag != '..' &&
+    utf8.encode(tag).length <= 64 &&
     !tag.runes.any(
       (rune) =>
           (rune >= 0x0009 && rune <= 0x000D) ||
@@ -24,7 +29,8 @@ bool isValidFilenameTag(String tag) =>
           rune == 0x205F ||
           rune == 0x3000 ||
           rune == 0xFEFF,
-    );
+    ) &&
+    !RegExp(r'[\x00-\x1f\x7f<>:"/\\|?*]').hasMatch(tag);
 
 ({String stem, String extension}) _splitExtension(String filename) {
   final dot = filename.lastIndexOf('.');
@@ -63,12 +69,17 @@ String appendFilenameTags(String filename, Iterable<String> tags) {
   final incoming = tags.toList();
   for (final tag in incoming) {
     if (!isValidFilenameTag(tag)) {
-      throw ArgumentError('标签名不得为空、包含空格或包含 ✦');
+      throw ArgumentError('标签名包含文件名不允许的字符或过长');
     }
   }
   if (incoming.isEmpty) return filename;
   final parsed = parseFilenameTags(filename);
   final all = {...parsed.tags, ...incoming};
   final split = _splitExtension(parsed.baseFilename);
-  return '${split.stem}${all.map((tag) => ' ✦$tag').join()}${split.extension}';
+  final result =
+      '${split.stem}${all.map((tag) => ' ✦$tag').join()}${split.extension}';
+  if (utf8.encode(result).length > 255) {
+    throw ArgumentError('标签拼接后的文件名过长');
+  }
+  return result;
 }

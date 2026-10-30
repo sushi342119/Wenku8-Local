@@ -18,7 +18,7 @@ Future<T?> pushNovelPage<T>(
   if (!context.mounted) return null;
   final navigator = Navigator.of(context);
   final slots = _routeSlots[navigator] ??= <Object>{};
-  final key = slot ?? page.runtimeType;
+  final key = slot ?? (context, page.runtimeType);
   if (!slots.add(key)) return null;
   final route = softRoute<T>(
     page,
@@ -60,8 +60,9 @@ void showNovelFeedback(
                   try {
                     await action();
                   } catch (_) {
-                    if (context.mounted) {
-                      showNovelFeedback(context, actionFailure);
+                    if (messenger.mounted) {
+                      messenger.hideCurrentSnackBar();
+                      messenger.showSnackBar(SnackBar(content: Text(actionFailure)));
                     }
                   }
                 },

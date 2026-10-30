@@ -27,6 +27,44 @@ const accent = Color(0xFF202020);
 const canvas = ArchiveDesign.background;
 const hairline = Color(0xFFD8DBD5);
 
+Future<T?> showDialogWithControllers<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+  required List<ChangeNotifier> controllers,
+}) => showDialog<T>(
+  context: context,
+  builder: (context) => _DialogControllerLifetime(
+    controllers: controllers,
+    child: builder(context),
+  ),
+);
+
+class _DialogControllerLifetime extends StatefulWidget {
+  const _DialogControllerLifetime({
+    required this.controllers,
+    required this.child,
+  });
+  final List<ChangeNotifier> controllers;
+  final Widget child;
+
+  @override
+  State<_DialogControllerLifetime> createState() =>
+      _DialogControllerLifetimeState();
+}
+
+class _DialogControllerLifetimeState extends State<_DialogControllerLifetime> {
+  @override
+  void dispose() {
+    for (final controller in widget.controllers) {
+      controller.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
+}
+
 /// Live appearance values are shared by controls, navigation and scroll edges.
 class GlassAppearance extends InheritedWidget {
   const GlassAppearance({
@@ -405,8 +443,9 @@ class _LiquidGlassState extends State<LiquidGlass> {
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final media = MediaQuery.of(context);
-    final opaque = media.highContrast && !widget.transparent;
+    final highContrast = MediaQuery.highContrastOf(context);
+    final disableAnimations = MediaQuery.disableAnimationsOf(context);
+    final opaque = highContrast && !widget.transparent;
     final surface = Theme.of(context).colorScheme.surface;
     final appearance = GlassAppearance.of(context);
     final tintOpacity = widget.tintOpacity ?? appearance.opacity;
@@ -417,8 +456,8 @@ class _LiquidGlassState extends State<LiquidGlass> {
           opacity: tintOpacity,
         );
     return AnimatedScale(
-      scale: _pressed && !media.disableAnimations ? .97 : 1,
-      duration: media.disableAnimations
+      scale: _pressed && !disableAnimations ? .97 : 1,
+      duration: disableAnimations
           ? Duration.zero
           : _pressed
           ? NovelMotion.contact
@@ -1230,14 +1269,23 @@ Future<T?> showGlassMenu<T>({
     if (source != null) return;
     final widget = element.widget;
     if (widget is LiquidGlass) {
+      var keyed = false;
+      void checkKeys(Element child) {
+        if (child.widget.key is GlobalKey) keyed = true;
+        child.visitChildElements(checkKeys);
+      }
+
+      element.visitChildElements(checkKeys);
       source = GlassMenuSource(
         radius: widget.radius,
         thickness: widget.thickness,
         blur: widget.blur ?? 0,
-        foreground: InheritedTheme.capture(
-          from: element,
-          to: navigator.context,
-        ).wrap(Padding(padding: widget.padding, child: widget.child)),
+        foreground: keyed
+            ? const SizedBox.shrink()
+            : InheritedTheme.capture(
+                from: element,
+                to: navigator.context,
+              ).wrap(Padding(padding: widget.padding, child: widget.child)),
       );
       return;
     }
@@ -1533,7 +1581,12 @@ class _GlassOverlayRoute<T> extends PopupRoute<T> {
             trigger.getTransformTo(overlay),
             Offset.zero & trigger.size,
           )
-        : anchor;
+        : anchor ??
+              Rect.fromCenter(
+                center: overlay.size.center(Offset.zero),
+                width: 1,
+                height: 1,
+              );
     final surface = GlassOverlayTransition(
       animation: animation,
       kind: kind,
@@ -1552,7 +1605,7 @@ class _GlassOverlayRoute<T> extends PopupRoute<T> {
             )
           : GlassMenuSurface(
               animation: animation,
-              anchor: origin!,
+              anchor: origin,
               source: source,
               reduceMotion: reduceMotion,
               child: SingleChildScrollView(
@@ -1581,7 +1634,7 @@ class _GlassOverlayRoute<T> extends PopupRoute<T> {
               );
               if (kind == GlassOverlayKind.menu) {
                 return CustomSingleChildLayout(
-                  delegate: _GlassMenuPlacement(origin!, safe),
+                  delegate: _GlassMenuPlacement(origin, safe),
                   child: surface,
                 );
               }
@@ -1722,12 +1775,13 @@ class _GlassSheetState extends State<_GlassSheet>
       onVerticalDragUpdate: (details) =>
           _drag.value = math.max(0, _drag.value + details.delta.dy),
       onVerticalDragEnd: (details) {
+        if (!mounted || ModalRoute.of(context)?.isCurrent != true) return;
         if (_cancelled) {
           _restore();
           return;
         }
-        final box =
-            _surfaceKey.currentContext!.findRenderObject()! as RenderBox;
+        final box = _surfaceKey.currentContext?.findRenderObject();
+        if (box is! RenderBox || !box.attached || !box.hasSize) return;
         if ((details.primaryVelocity ?? 0) > 550 ||
             _drag.value > box.size.height * .24) {
           Navigator.of(context).pop();

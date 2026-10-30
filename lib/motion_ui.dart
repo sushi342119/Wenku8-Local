@@ -196,13 +196,18 @@ class PaperCoverPlane {
         Offset.lerp(a.vertical, b.vertical, t)!,
       );
 
-  Matrix4 matrix(Size size) => Matrix4.identity()
+  Matrix4 matrix(Size size) {
+    if (size.isEmpty || !size.width.isFinite || !size.height.isFinite) {
+      return Matrix4.identity();
+    }
+    return Matrix4.identity()
     ..setEntry(0, 0, horizontal.dx)
     ..setEntry(1, 0, horizontal.dy * size.height / size.width)
     ..setEntry(0, 1, vertical.dx * size.width / size.height)
     ..setEntry(1, 1, vertical.dy)
     ..setEntry(0, 3, origin.dx * size.width)
     ..setEntry(1, 3, origin.dy * size.height);
+  }
 }
 
 /// Source scenes provide physical foreground silhouettes, not page snapshots.
@@ -288,7 +293,10 @@ class _PaperCoverFlightState extends State<PaperCoverFlight> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _info != null) return;
       final boundary = _face.currentContext?.findRenderObject();
-      if (boundary is! RenderRepaintBoundary || boundary.size.isEmpty) return;
+      if (boundary is! RenderRepaintBoundary || !boundary.hasSize || boundary.size.isEmpty) {
+        _snapshotRequested = false;
+        return;
+      }
       // A small GPU-only cover texture, once per flight. No page readback,
       // screenshot, asynchronous decode or repeated subtree paint per frame.
       final scale =
@@ -300,8 +308,8 @@ class _PaperCoverFlightState extends State<PaperCoverFlight> {
       try {
         final image = boundary.toImageSync(pixelRatio: scale.clamp(1.0, 8.0));
         setState(() => _fallback = image);
-      } on FlutterError {
-        // Keep the original face on renderers without synchronous textures.
+      } catch (_) {
+        _snapshotRequested = false;
       }
     });
   }
@@ -542,12 +550,16 @@ class PaperCoverRender extends RenderProxyBox {
   @override
   void paint(PaintingContext context, Offset offset) {
     if (size.isEmpty || child == null) return;
+    if (config.faceSize.isEmpty || !config.faceSize.width.isFinite ||
+        !config.faceSize.height.isFinite) {
+      super.paint(context, offset);
+      return;
+    }
     final pose = PaperFlightPose(progress);
     final image = config.image;
     final occlusion = _occlusion();
-    final mask = occlusion?.path.transform(
-      Matrix4.inverted(getTransformTo(null)).storage,
-    );
+    final inverse = Matrix4.tryInvert(getTransformTo(null));
+    final mask = inverse == null ? null : occlusion?.path.transform(inverse.storage);
     if (image == null) {
       // Only the first frame (or an unsupported renderer) uses the original
       // face. It is never replayed in bands, even for a composited fallback.
@@ -671,20 +683,31 @@ class GlassMenuStretchRender extends RenderProxyBox {
 
   Rect get anchor => _anchor;
 
+  Matrix4 get _coordinateTransform {
+    if (!attached || (_coordinateSpace != null && !_coordinateSpace!.attached)) {
+      return Matrix4.identity();
+    }
+    try {
+      return getTransformTo(_coordinateSpace);
+    } catch (_) {
+      return Matrix4.identity();
+    }
+  }
+
   Rect get targetRect => MatrixUtils.transformRect(
-    getTransformTo(_coordinateSpace),
+    _coordinateTransform,
     Offset.zero & size,
   );
 
   Rect get localCurrentRect {
-    final inverse = Matrix4.tryInvert(getTransformTo(_coordinateSpace));
+    final inverse = Matrix4.tryInvert(_coordinateTransform);
     return inverse == null
         ? Offset.zero & size
         : MatrixUtils.transformRect(inverse, currentRect);
   }
 
   Offset sourceOffset(Size sourceSize) {
-    final inverse = Matrix4.tryInvert(getTransformTo(_coordinateSpace));
+    final inverse = Matrix4.tryInvert(_coordinateTransform);
     final center = inverse == null
         ? _anchor.center
         : MatrixUtils.transformPoint(inverse, _anchor.center);
@@ -727,6 +750,7 @@ class GlassMenuStretchRender extends RenderProxyBox {
   }
 
   Matrix4 get _paintTransform {
+    if (!hasSize || size.isEmpty) return Matrix4.identity();
     // Convert back before painting: deltas in view/Overlay coordinates are
     // not local deltas when a Navigator is translated or scaled.
     final current = localCurrentRect;
@@ -1105,8 +1129,7 @@ class GlassOverlayTransition extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (reduceMotion || MediaQuery.disableAnimationsOf(context)) return child;
-    if (kind == GlassOverlayKind.menu) {
-      assert(anchor != null);
+    if (kind == GlassOverlayKind.menu && anchor != null) {
       return GlassMenuStretch(
         key: const ValueKey('glass-menu-transition'),
         animation: animation,

@@ -163,7 +163,7 @@ class ArchiveSection extends StatelessWidget {
               child: ArchivePart(start: .1, end: .68, child: ArchiveCode(code)),
             ),
             const SizedBox(width: 9),
-            Expanded(
+            if (constraints.hasBoundedWidth) Expanded(
               child: const ArchivePart(
                 start: 0,
                 end: .46,

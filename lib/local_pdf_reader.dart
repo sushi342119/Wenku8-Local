@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -48,6 +49,10 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
 
   @override
   void dispose() {
+    final book = widget.local.bookFor(widget.novel.id);
+    if (book != null) {
+      unawaited(LocalPlatform.clearPdfCache(book.fileUri).catchError((_) {}));
+    }
     _controller.dispose();
     super.dispose();
   }
@@ -56,16 +61,12 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
     final book = widget.local.bookFor(widget.novel.id);
     if (book == null) return Future.error(StateError('书籍已移除'));
     return _pending.putIfAbsent(page, () async {
-      final width = (MediaQuery.devicePixelRatioOf(context) *
-              MediaQuery.sizeOf(context).width *
-              1.5)
-          .round()
-          .clamp(800, 2400);
-      final path = await LocalPlatform.renderPdfPage(
-        book.fileUri,
-        page,
-        width,
-      );
+      final width =
+          (MediaQuery.devicePixelRatioOf(context) *
+                  MediaQuery.sizeOf(context).width)
+              .round()
+              .clamp(800, 2400);
+      final path = await LocalPlatform.renderPdfPage(book.fileUri, page, width);
       if (path.isEmpty) throw StateError('页面渲染失败');
       return path;
     });
@@ -75,14 +76,11 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
     _page = page;
     widget.state.setChapter(widget.novel.id, page);
     if (mounted) setState(() {});
-    // 预渲染相邻页。
-    for (final next in [page + 1, page + 2]) {
-      if (next < _pageCount && mounted) {
-        _render(next).then((_) {
-          if (mounted) setState(() {});
-        }).catchError((Object _) {});
-      }
-    }
+    // 首帧完成后优先预渲染下一页，避免翻页回调里同时启动多个解码任务。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || page + 1 >= _pageCount) return;
+      _render(page + 1).catchError((Object _) => '');
+    });
   }
 
   @override
@@ -106,10 +104,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
               ),
               Text(
                 count == 0 ? '' : '第 ${_page + 1} 页 / 共 $count 页',
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: Colors.white70,
-                ),
+                style: const TextStyle(fontSize: 12, color: Colors.white70),
               ),
             ],
           ),
@@ -136,6 +131,19 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
                           child: Image.file(
                             File(snapshot.data!),
                             fit: BoxFit.contain,
+                            cacheWidth:
+                                (MediaQuery.devicePixelRatioOf(context) *
+                                        MediaQuery.sizeOf(context).width)
+                                    .round()
+                                    .clamp(800, 2400),
+                            errorBuilder: (context, error, stack) {
+                              _pending.remove(page);
+                              return const Icon(
+                                Icons.broken_image_outlined,
+                                color: Colors.white38,
+                                size: 48,
+                              );
+                            },
                           ),
                         ),
                       );
@@ -168,9 +176,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
                       );
                     }
                     return const Center(
-                      child: CircularProgressIndicator(
-                        color: Colors.white54,
-                      ),
+                      child: CircularProgressIndicator(color: Colors.white54),
                     );
                   },
                 ),

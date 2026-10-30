@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import 'local_platform.dart';
+import 'wenku_errors.dart';
 
 /// 扫描后处理结果：关联清理与章节迁移任务的统一记录。
 class LocalScanFollowUp {
@@ -31,7 +32,7 @@ class LocalScanFollowUpException implements Exception {
 
   @override
   String toString() =>
-      '扫描后处理未完成：关联清理错误=${result.cleanupError}，'
+      '扫描后处理未完成：关联清理错误=${result.cleanupError?.runtimeType ?? '无'}，'
       '失败状态未保存=${result.unrecordedFailures}';
 }
 
@@ -58,9 +59,12 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
   final failures = <({M remap, Object error})>[];
   try {
     await cleanupAssociations();
-  } catch (error, stackTrace) {
+  } catch (error, _) {
     cleanupError = error;
-    debugPrint('association cleanup failed: $error\n$stackTrace');
+    debugPrint(
+      'association cleanup failed: '
+      '${describeSafeError(error, fallback: '关联清理失败')}',
+    );
   }
   for (final remap in remaps) {
     final bookId = bookIdOf(remap);
@@ -68,22 +72,30 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
     try {
       await migrate(remap);
       if (commitMigrationOutcomes == null) {
-        await confirm(remap);
+        try {
+          await confirm(remap);
+        } catch (_) {
+          failedBooks.add(bookId);
+          unrecordedFailures++;
+        }
       } else {
         confirmed.add(remap);
       }
-    } catch (error, stackTrace) {
+    } catch (error, _) {
       failedBooks.add(bookId);
       failedMigrations++;
-      debugPrint('chapter migration failed: $error\n$stackTrace');
+      debugPrint(
+        'chapter migration failed: '
+        '${describeSafeError(error, fallback: '章节迁移失败')}',
+      );
       if (commitMigrationOutcomes == null) {
         try {
           await recordFailure(remap, error);
-        } catch (recordError, recordStackTrace) {
+        } catch (recordError, _) {
           unrecordedFailures++;
           debugPrint(
             'failed to persist chapter migration failure: '
-            '$recordError\n$recordStackTrace',
+            '${describeSafeError(recordError, fallback: '失败记录保存失败')}',
           );
         }
       } else {
@@ -95,10 +107,11 @@ Future<LocalScanFollowUp> applyLocalScanFollowUp<M>({
       (confirmed.isNotEmpty || failures.isNotEmpty)) {
     try {
       await commitMigrationOutcomes(confirmed, failures);
-    } catch (error, stackTrace) {
+    } catch (error, _) {
       unrecordedFailures++;
       debugPrint(
-        'failed to persist chapter migration outcomes: $error\n$stackTrace',
+        'failed to persist chapter migration outcomes: '
+        '${describeSafeError(error, fallback: '迁移结果保存失败')}',
       );
     }
   }
@@ -129,10 +142,12 @@ Future<LocalReauthorizationResult> finishLocalReauthorization({
   required LocalTreePermission permission,
   required Future<LocalScanFollowUp> Function() scanAndApply,
 }) async {
+  if (previousFolder != pickedFolder) {
+    throw StateError('重新授权必须选择原文件夹');
+  }
   if (!permission.persistedRead) {
     throw StateError('已选中目录，但没有取得持久化读取权限');
   }
-  // 原目录、不同目录都走同一个入口。
   final followUp = await scanAndApply();
   if (!followUp.handled) {
     throw LocalScanFollowUpException(followUp);

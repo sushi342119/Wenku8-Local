@@ -4,12 +4,15 @@ import 'package:flutter/widgets.dart';
 
 List<String> _splitParagraphs(String source) => source.split('\n\n');
 
+final _readerIllustrations = Expando<List<String>>();
+
 class ReaderContent {
   const ReaderContent(this.paragraphs);
   final List<String> paragraphs;
-  List<String> get illustrations => List.unmodifiable([
-    for (final paragraph in paragraphs) ?readerIllustrationUrl(paragraph),
-  ]);
+  List<String> get illustrations =>
+      _readerIllustrations[this] ??= List.unmodifiable([
+        for (final paragraph in paragraphs) ?readerIllustrationUrl(paragraph),
+      ]);
 
   static Future<ReaderContent> parse(String source) async {
     if (source.trim().isEmpty) throw const FormatException('章节正文为空');
@@ -22,20 +25,14 @@ class ReaderContent {
 
 /// Standalone paired markers from the original text API. Images keep their
 /// paragraph index, so bookmarks and lazy restoration share one coordinate map.
-String? readerIllustrationUrl(String paragraph) {
-  const marker = '<!--image-->';
-  final text = paragraph.trim();
-  if (!text.startsWith(marker) ||
-      !text.endsWith(marker) ||
-      text.length <= marker.length * 2) {
-    return null;
-  }
-  final raw = text.substring(marker.length, text.length - marker.length).trim();
-  final uri = Uri.tryParse(raw);
+String? normalizeReaderIllustrationUrl(String raw) {
+  final uri = Uri.tryParse(raw.trim());
+  final scheme = uri?.scheme.toLowerCase();
   if (uri == null ||
-      !['https', 'http'].contains(uri.scheme) ||
+      (scheme != 'https' && scheme != 'http') ||
+      uri.host.isEmpty ||
       uri.userInfo.isNotEmpty ||
-      (uri.hasPort && ![80, 443].contains(uri.port)) ||
+      (uri.hasPort && uri.port != 80 && uri.port != 443) ||
       !(uri.host == 'wenku8.com' ||
           uri.host.endsWith('.wenku8.com') ||
           uri.host == 'wenku8.net' ||
@@ -46,6 +43,18 @@ String? readerIllustrationUrl(String paragraph) {
     return null;
   }
   return uri.replace(scheme: 'https', port: 443).toString();
+}
+
+String? readerIllustrationUrl(String paragraph) {
+  const marker = '<!--image-->';
+  final text = paragraph.trim();
+  if (!text.startsWith(marker) ||
+      !text.endsWith(marker) ||
+      text.length <= marker.length * 2) {
+    return null;
+  }
+  final raw = text.substring(marker.length, text.length - marker.length);
+  return normalizeReaderIllustrationUrl(raw);
 }
 
 final _missingIllustration = RegExp(r'(^|\n)[ \t]*\[插图\][ \t]*(\n|$)');

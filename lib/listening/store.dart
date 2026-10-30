@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models.dart';
+import '../recovery_archive.dart';
 
 /// Speech preferences/cursors are separate from reading anchors and existing backup schema.
 class ListeningStore {
@@ -8,6 +9,7 @@ class ListeningStore {
   final SharedPreferences preferences;
   bool Function(ListeningCursor)? acceptsCursor;
   Future<void> _writes = Future.value();
+  final Map<int, Object> _damagedCursors = {};
   Future<void> _write(Future<bool> Function() action, String message) {
     final next = _writes.then((_) async {
       if (!await action()) throw SpeechFailure(message);
@@ -58,21 +60,33 @@ class ListeningStore {
   ListeningCursor? cursor(int novelId) {
     try {
       final raw = preferences.getString('listening.cursor.v1.$novelId');
-      return raw == null
-          ? null
-          : ListeningCursor.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+      if (raw == null) return null;
+      final decoded = jsonDecode(raw) as Map<String, dynamic>;
+      if ((decoded['revision'] != null && decoded['revision'] is! String) ||
+          (decoded['textOffset'] != null && decoded['textOffset'] is! int)) {
+        _damagedCursors[novelId] = raw;
+      }
+      return ListeningCursor.fromJson(decoded);
     } catch (_) {
+      final raw = preferences.get('listening.cursor.v1.$novelId');
+      if (raw != null) _damagedCursors[novelId] = raw;
       return null;
     }
   }
 
   Future<void> saveCursor(ListeningCursor cursor) => _write(
-    () => acceptsCursor != null && !acceptsCursor!(cursor)
-        ? Future.value(true)
-        : preferences.setString(
+    () async {
+      if (acceptsCursor != null && !acceptsCursor!(cursor)) return true;
+      if (_damagedCursors[cursor.novelId] case final raw?) {
+        await archiveRecoveryRecord(preferences, 'listening.cursor.quarantine.v1',
+            raw, reason: 'invalid_cursor');
+        _damagedCursors.remove(cursor.novelId);
+      }
+      return preferences.setString(
             'listening.cursor.v1.${cursor.novelId}',
             jsonEncode(cursor.toJson()),
-          ),
+          );
+    },
     '续听位置保存失败',
   );
 }

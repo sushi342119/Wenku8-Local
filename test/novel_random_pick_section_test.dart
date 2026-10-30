@@ -253,7 +253,7 @@ void main() {
   });
 
   for (final raw in <Object>['{broken', 7, '[]', '{"1":-3,"2":"4","3":1.5}']) {
-    testWidgets('invalid stored counts are ignored: $raw', (tester) async {
+    testWidgets('invalid stored counts are retained without overwriting: $raw', (tester) async {
       SharedPreferences.setMockInitialValues({_countsKey: raw});
       await TagStore.load();
       await tester.pumpWidget(_app());
@@ -261,7 +261,7 @@ void main() {
       expect(_weights(tester), [1, 1, 1]);
       await tester.tap(find.text('抽阅一本'));
       await tester.pumpAndSettle();
-      expect((await _storedCounts()).values, [1]);
+      expect((await SharedPreferences.getInstance()).get(_countsKey), raw);
       expect(tester.takeException(), isNull);
     });
   }

@@ -27,6 +27,11 @@ class AppFontEntry {
       };
 
   factory AppFontEntry.fromJson(Map<String, Object?> json) {
+    for (final key in ['id', 'displayName', 'family', 'source', 'filePath']) {
+      if (json[key] != null && json[key] is! String) {
+        throw const FormatException('字体记录字段类型错误');
+      }
+    }
     final source = switch (json['source']) {
       'imported' => AppFontSource.imported,
       'bundled' => AppFontSource.bundled,

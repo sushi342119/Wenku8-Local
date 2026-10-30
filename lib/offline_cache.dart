@@ -126,6 +126,7 @@ class OfflineCacheStore extends ChangeNotifier {
       final novel = await readBook(id);
       if (novel == null) continue;
       final sizes = <int, int>{};
+      try {
       await for (final body in entry.list(followLinks: false)) {
         if (body is! File) continue;
         final filename = body.uri.pathSegments.last;
@@ -133,8 +134,16 @@ class OfflineCacheStore extends ChangeNotifier {
         if (chapter == null) continue;
         final cid = int.tryParse(chapter.group(1)!);
         if (cid == null) continue;
-        final size = await body.length();
-        if (size > 0 && size <= maxBodyBytes) sizes[cid] = size;
+        try {
+          final size = await body.length();
+          if (size > 0 && size <= maxBodyBytes) sizes[cid] = size;
+        } on FileSystemException {
+          continue;
+        }
+      }
+      } on FileSystemException {
+        if (_books[id] case final previous?) found[id] = previous;
+        continue;
       }
       found[id] = OfflineBook(
         novel: novel,

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'filename_tags.dart';
+import 'recovery_archive.dart';
 
 /// 书籍标签：标签库 + 每本书的标签归属，全部存在本机。
 class Tag {
@@ -39,7 +40,7 @@ const tagPalette = [
 class TagStore extends ChangeNotifier {
   static String validateTagName(String name) {
     if (!isValidFilenameTag(name)) {
-      throw ArgumentError('标签名不得为空、包含空格或包含 ✦');
+      throw ArgumentError('标签名包含文件名不允许的字符或过长');
     }
     return name;
   }
@@ -57,41 +58,80 @@ class TagStore extends ChangeNotifier {
 
   static Future<void> load() async {
     final store = TagStore._(await SharedPreferences.getInstance());
-    store._read();
+    await store._read();
     _shared = store;
   }
 
   final SharedPreferences _prefs;
   final List<Tag> _tags = [];
   final Map<int, Set<String>> _bookTags = {};
+  final Map<String, Tag> _tagById = {};
+  final Map<String, int> _bookCountByTagId = {};
 
   List<Tag> get tags => List.unmodifiable(_tags);
 
-  void _read() {
-    try {
-      final raw = _prefs.getString('book_tags');
-      if (raw != null) {
-        final list = jsonDecode(raw);
-        if (list is List) {
-          for (final entry in list.whereType<Map<String, Object?>>()) {
-            final tag = Tag.fromJson(entry);
-            if (tag.id.isNotEmpty && tag.name.isNotEmpty) _tags.add(tag);
+  void _rebuildIndexes() {
+    _tagById
+      ..clear()
+      ..addEntries(_tags.map((tag) => MapEntry(tag.id, tag)));
+    _bookCountByTagId.clear();
+    for (final ids in _bookTags.values) {
+      for (final id in ids) {
+        _bookCountByTagId[id] = (_bookCountByTagId[id] ?? 0) + 1;
+      }
+    }
+  }
+
+  Future<void> _read() async {
+    for (final key in ['book_tags', 'book_tag_map']) {
+      final raw = _prefs.get(key);
+      if (raw == null) continue;
+      var damaged = false;
+      try {
+        if (raw is! String) throw const FormatException('invalid tags');
+        final decoded = jsonDecode(raw);
+        if (key == 'book_tags') {
+          if (decoded is! List) throw const FormatException('invalid tags');
+          for (final entry in decoded) {
+            try {
+              final tag = Tag.fromJson(Map<String, Object?>.from(entry as Map));
+              if (tag.id.isEmpty || tag.name.isEmpty ||
+                  _tags.any((existing) => existing.id == tag.id)) {
+                throw const FormatException('invalid tag');
+              }
+              _tags.add(tag);
+            } catch (_) {
+              damaged = true;
+            }
+          }
+        } else {
+          if (decoded is! Map) throw const FormatException('invalid tags');
+          for (final entry in decoded.entries) {
+            final id = int.tryParse('${entry.key}');
+            final value = entry.value;
+            if (id == null || id <= 0 || value is! List) {
+              damaged = true;
+              continue;
+            }
+            final ids = value.whereType<String>().toSet();
+            if (ids.length != value.length) damaged = true;
+            if (ids.isNotEmpty) _bookTags[id] = ids;
           }
         }
+      } catch (_) {
+        damaged = true;
       }
-      final rawMap = _prefs.getString('book_tag_map');
-      if (rawMap != null) {
-        final map = jsonDecode(rawMap);
-        if (map is Map<String, Object?>) {
-          map.forEach((key, value) {
-            final id = int.tryParse(key);
-            if (id == null || value is! List) return;
-            final ids = value.whereType<String>().toSet();
-            if (ids.isNotEmpty) _bookTags[id] = ids;
-          });
+      if (damaged) {
+        try {
+          await archiveRecoveryRecord(_prefs, '${key}_quarantine_v1', raw,
+              reason: 'invalid_tag_records');
+        } catch (_) {
+          // archiveRecoveryRecord 内部已 recordRecoveryFailure；此处不再抛、不再另记，
+          // 保证归档失败不阻断 _read()/load()。
         }
       }
-    } catch (_) {}
+    }
+    _rebuildIndexes();
   }
 
   Future<void> _persist() async {
@@ -116,7 +156,9 @@ class TagStore extends ChangeNotifier {
         (id, ids) => MapEntry(id, Set<String>.of(ids)),
       );
       try {
-        return await action();
+        final result = await action();
+        _rebuildIndexes();
+        return result;
       } catch (error, stack) {
         _tags
           ..clear()
@@ -124,6 +166,7 @@ class TagStore extends ChangeNotifier {
         _bookTags
           ..clear()
           ..addAll(oldMap);
+        _rebuildIndexes();
         try {
           await _persist();
         } catch (_) {
@@ -145,10 +188,7 @@ class TagStore extends ChangeNotifier {
   }
 
   Tag? tagById(String id) {
-    for (final tag in _tags) {
-      if (tag.id == id) return tag;
-    }
-    return null;
+    return _tagById[id];
   }
 
   /// 创建标签，返回 id；同名返回既有标签。
@@ -259,7 +299,10 @@ class TagStore extends ChangeNotifier {
       tagsForBook(bookId).map((tag) => tag.name).toList();
 
   int bookCountFor(String tagId) =>
-      _bookTags.values.where((ids) => ids.contains(tagId)).length;
+      _bookCountByTagId[tagId] ?? 0;
+
+  Iterable<int> bookIdsFor(String tagId) =>
+      _bookTags.entries.where((entry) => entry.value.contains(tagId)).map((entry) => entry.key);
 
   /// 导出备份记录：标签定义 + 书籍归属，供 LibraryState 备份使用。
   Map<String, Object> exportTagRecords() => {
@@ -277,11 +320,15 @@ class TagStore extends ChangeNotifier {
             final list = jsonDecode(defsRaw);
             if (list is List) {
               for (final entry in list.whereType<Map<String, Object?>>()) {
+                try {
                 final tag = Tag.fromJson(entry);
-                if (tag.id.isEmpty || tag.name.isEmpty) continue;
+                if (tag.id.isEmpty || !isValidFilenameTag(tag.name)) continue;
                 if (tag.name.length > 64) continue;
                 if (_tags.any((t) => t.id == tag.id)) continue;
                 _tags.add(tag);
+                } catch (_) {
+                  continue;
+                }
               }
             }
           } catch (_) {}

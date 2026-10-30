@@ -20,6 +20,7 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
   String? _error;
   LibraryBackup? _preview;
   bool _preferences = false;
+  bool _clipboardPreview = false;
 
   Future<void> _run(String label, Future<void> Function() action) async {
     if (_busy != null) return;
@@ -31,8 +32,10 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     await WidgetsBinding.instance.endOfFrame;
     try {
       await action();
-    } on FormatException catch (error) {
+    } on LibraryBackupUnavailable catch (error) {
       if (mounted) setState(() => _error = error.message);
+    } on FormatException {
+      if (mounted) setState(() => _error = '备份格式无效、内容不受支持或超过大小限制');
     } catch (_) {
       if (mounted) setState(() => _error = '操作未完成，请检查文件或本地存储后重试');
     } finally {
@@ -40,19 +43,27 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     }
   }
 
-  Future<void> _export({bool clipboard = false}) => _run('正在生成备份…', () async {
-    final text = await (await widget.state.createBackup()).encode();
+  Future<void> _export({bool clipboard = false, bool beforeRestore = false}) => _run('正在生成备份…', () async {
+    final backup = beforeRestore ? null : await widget.state.createBackup();
+    final text = beforeRestore ? widget.state.preRestoreBackup : await backup!.encode();
+    final omitted = backup?.omittedCoverKeys.length ?? 0;
+    final coverNotice = omitted == 0 ? '' : '；已省略 $omitted 个不支持的封面，阅读记录已保留';
+    if (text == null) throw const FormatException('尚无恢复前备份');
     if (clipboard) {
       if (text.length > 256 * 1024) throw const FormatException('备份较大，请使用文件导出');
-      await Clipboard.setData(ClipboardData(text: text));
-      if (mounted) showNovelFeedback(context, '备份已复制');
+      if (LocalPlatform.android) {
+        await LocalPlatform.setSensitiveClipboard(text);
+      } else {
+        await Clipboard.setData(ClipboardData(text: text));
+      }
+      if (mounted) showNovelFeedback(context, '备份已复制$coverNotice');
     } else {
       final date = DateTime.now().toIso8601String().substring(0, 10);
       final saved = await LocalPlatform.exportBackup(
         text,
-        'wenku8-backup-$date.json',
+        'wenku8-backup-${beforeRestore ? 'before-restore-' : ''}$date.json',
       );
-      if (mounted && saved) showNovelFeedback(context, '备份文件已保存');
+      if (mounted && saved) showNovelFeedback(context, '备份文件已保存$coverNotice');
     }
   });
 
@@ -69,6 +80,7 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
       setState(() {
         _preview = backup;
         _preferences = false;
+        _clipboardPreview = clipboard;
       });
     }
   });
@@ -78,8 +90,17 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     if (backup == null) return;
     await widget.state.restoreBackup(backup, importPreferences: _preferences);
     if (mounted) {
-      setState(() => _preview = null);
-      showNovelFeedback(context, '备份已合并，较新的阅读进度已保留');
+      final fromClipboard = _clipboardPreview;
+      setState(() {
+        _preview = null;
+        _clipboardPreview = false;
+      });
+      showNovelFeedback(
+        context,
+        fromClipboard
+            ? '备份已合并，较新的阅读进度已保留；如不再使用，请清空剪贴板'
+            : '备份已合并，较新的阅读进度已保留',
+      );
     }
   });
 
@@ -118,17 +139,35 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                 MediaQuery.paddingOf(context).bottom + 32,
               ),
               children: [
+                if (widget.state.shelfLoadFailed) ...[
+                  const Text('书架读取失败，备份与恢复已暂停。修复会保留可读书目，并将原始记录存入本机隔离记录。'),
+                  GlassTextButton(
+                    key: const ValueKey('backup-repair-shelf'),
+                    onPressed: _busy == null
+                        ? () => _run('正在修复书架…', widget.state.repairShelf)
+                        : null,
+                    child: const Text('修复书架（保留可读条目）'),
+                  ),
+                ],
                 const Text(
                   '带走你的阅读记录',
                   style: TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 12),
                 const Text('备份书架、阅读进度、书签、阅读历史、最近搜索和偏好。离线正文与账号信息不包含在备份中。'),
+                if (!LocalPlatform.android)
+                  const Text('此平台仅支持剪贴板导入和导出，单次导出上限为 256 Ki 字符。恢复前请先导出当前记录。'),
                 const SizedBox(height: 24),
                 ContentPanel(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      if (widget.state.preRestoreBackup != null)
+                        GlassTextButton(
+                          onPressed: _busy == null ? () => _export(
+                            beforeRestore: true, clipboard: !LocalPlatform.android) : null,
+                          child: Text(LocalPlatform.android ? '导出恢复前备份' : '复制恢复前备份'),
+                        ),
                       if (LocalPlatform.android) ...[
                         GlassTextButton(
                           key: const ValueKey('backup-export-file'),
@@ -149,6 +188,7 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                             : null,
                         child: const Text('复制备份文本'),
                       ),
+                      const Text('复制备份会把书架、阅读历史和最近搜索放入系统剪贴板；内容可能被其他应用读取，使用后请清空。'),
                       GlassTextButton(
                         key: const ValueKey('backup-paste'),
                         onPressed: _busy == null

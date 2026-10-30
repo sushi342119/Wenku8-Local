@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'app_ui.dart';
 import 'cover_arrival.dart';
 import 'legacy_transport.dart';
+import 'reader_content.dart' show normalizeReaderIllustrationUrl;
 
 typedef IllustrationRequest = Future<Uint8List> Function(String url);
 
@@ -30,8 +33,14 @@ class ReaderIllustrationCache {
       _cache[url] = cached;
       return Future.value(cached);
     }
-    return _pending.putIfAbsent(url, () async {
-      final epoch = _epoch;
+    final pending = _pending[url];
+    if (pending != null) return pending;
+    final completer = Completer<Uint8List>();
+    final future = completer.future;
+    future.ignore();
+    final epoch = _epoch;
+    _pending[url] = future;
+    unawaited(() async {
       try {
         final bytes = await _request(url);
         if (bytes.isEmpty || bytes.length > 8 * 1024 * 1024) {
@@ -44,11 +53,14 @@ class ReaderIllustrationCache {
           _cache[url] = bytes;
           _bytes += bytes.length;
         }
-        return bytes;
+        completer.complete(bytes);
+      } catch (error, stack) {
+        completer.completeError(error, stack);
       } finally {
-        if (epoch == _epoch) _pending.remove(url);
+        if (identical(_pending[url], future)) _pending.remove(url);
       }
-    });
+    }());
+    return future;
   }
 
   void clearMemory() {
@@ -79,9 +91,11 @@ class _ReaderIllustrationState extends State<ReaderIllustration> {
   late Future<({Uint8List? bytes, Object? error})> _future = _load();
   Future<({Uint8List? bytes, Object? error})> _load() async {
     try {
+      final normalized = normalizeReaderIllustrationUrl(widget.url);
+      if (normalized == null) throw const FormatException('插图地址格式无效');
       return (
         bytes: await (widget.cache ?? ReaderIllustrationCache.shared).load(
-          widget.url,
+          normalized,
         ),
         error: null,
       );
@@ -132,12 +146,11 @@ class _ReaderIllustrationState extends State<ReaderIllustration> {
             child: Image.memory(
               bytes,
               fit: BoxFit.contain,
-              cacheWidth: widget.fullScreen
-                  ? 2400
-                  : (MediaQuery.sizeOf(context).width *
-                            MediaQuery.devicePixelRatioOf(context))
+              cacheWidth: (MediaQuery.sizeOf(context).width *
+                            MediaQuery.devicePixelRatioOf(context) *
+                            (widget.fullScreen ? .92 : 1))
                         .round()
-                        .clamp(1, 1600),
+                        .clamp(1, 2400),
               frameBuilder: (context, child, frame, sync) => CoverArrival(
                 bytes: bytes,
                 ready: frame != null,

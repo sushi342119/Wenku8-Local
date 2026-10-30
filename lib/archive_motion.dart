@@ -160,7 +160,7 @@ class ArchiveRevealRender extends _ArchiveAnimatedRender {
   final _clipLayer = LayerHandle<ClipRectLayer>();
   final _transformLayer = LayerHandle<TransformLayer>();
 
-  double get progress => Interval(
+  double get progress => _end <= _start ? (animation.value >= _end ? 1 : 0) : Interval(
     _start,
     _end,
     curve: Curves.easeOutCubic,

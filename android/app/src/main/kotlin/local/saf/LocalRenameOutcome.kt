@@ -13,6 +13,7 @@ fun <U> localRenameOutcome(
     var currentName: String? = null
     var originalName: String? = null
     var renamed = false
+    var attempted = false
     try {
         require(newFileName.isNotBlank() && !newFileName.contains('/') &&
             !newFileName.contains('\\') && !newFileName.contains('\u0000')) { "文件名不合法" }
@@ -22,6 +23,7 @@ fun <U> localRenameOutcome(
         check(expectedFileName == null || originalName == expectedFileName) {
             "源文件名已变化，请重新扫描后重试"
         }
+        attempted = true
         currentUri = rename(originalUri, newFileName)
             ?: throw UnsupportedOperationException("文件提供方拒绝重命名")
         renamed = true
@@ -30,7 +32,15 @@ fun <U> localRenameOutcome(
         check(currentName == newFileName) { "文件提供方未确认指定文件名" }
         return mapOf("renamed" to true, "fileUri" to currentUri.toString(), "fileName" to currentName)
     } catch (error: Exception) {
-        var rollbackError: String? = null
+        var rollbackFailed = false
+        if (attempted && !renamed) {
+            currentName = try { readName(originalUri)?.takeIf { it.isNotBlank() } } catch (_: Exception) { null }
+            if (currentName == null) {
+                return mapOf("renamed" to false, "code" to "unconfirmed",
+                    "message" to "无法确认改名结果，请重新扫描原文件夹", "fileUri" to null, "fileName" to null)
+            }
+            renamed = currentName != originalName
+        }
         if (renamed && originalName != null) {
             try {
                 currentUri = rename(currentUri, originalName)
@@ -39,7 +49,7 @@ fun <U> localRenameOutcome(
                 currentName = readName(currentUri)
                 check(currentName == originalName) { "无法确认恢复后的文件名" }
             } catch (rollback: Exception) {
-                rollbackError = rollback.message ?: "恢复原文件名失败"
+                rollbackFailed = true
             }
         }
         val code = when (error) {
@@ -50,8 +60,11 @@ fun <U> localRenameOutcome(
         return mapOf(
             "renamed" to false,
             "code" to code,
-            "message" to ((error.message ?: "文件改名失败") +
-                (rollbackError?.let { "；回滚未完成：$it" } ?: "")),
+            "message" to if (rollbackFailed) {
+                "文件改名失败；回滚未完成，请重新扫描原文件夹"
+            } else {
+                "文件改名失败，请重试"
+            },
             "fileUri" to currentUri.toString(),
             "fileName" to currentName,
         )

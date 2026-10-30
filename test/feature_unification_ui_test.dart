@@ -10,6 +10,7 @@ import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/backup_page.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_backup.dart';
+import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/local_platform.dart';
 import 'package:wenku8_flutter/pages.dart';
@@ -56,6 +57,7 @@ void main({
       );
     }
     SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    await TagStore.load();
     state = await LibraryState.load();
     repository = OfflineFixtureRepository();
     boundary = GlobalKey();

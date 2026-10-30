@@ -25,59 +25,150 @@ import 'performance_preferences.dart';
 import 'touch_sampling.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
+import 'wenku_errors.dart';
+
+class _StartupFailure implements Exception {
+  const _StartupFailure(this.item, this.error, this.stackTrace);
+
+  final String item;
+  final Object error;
+  final StackTrace stackTrace;
+}
+
+Future<T> _requiredStartup<T>(
+  String item,
+  Future<T> Function() action,
+) async {
+  try {
+    return await action();
+  } catch (error, stackTrace) {
+    throw _StartupFailure(item, error, stackTrace);
+  }
+}
 
 Future<void> main() async {
   final binding = WidgetsFlutterBinding.ensureInitialized();
-  registerAppLicenses();
-  TouchSamplingPolicy(binding);
-  // Do not hold the first frame while Android is applying window insets.
-  unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge));
-  final state = await LibraryState.load();
-  await state.ensureFontLoaded();
-  await TagStore.load();
-  if (state.performance.needsRuntimeEffects) await NativeEffects.prepare();
-  final brightness = switch (state.theme) {
-    ThemeMode.light => Brightness.light,
-    ThemeMode.dark => Brightness.dark,
-    ThemeMode.system =>
-      WidgetsBinding.instance.platformDispatcher.platformBrightness,
-  };
-  SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
-  final remote = LegacyWenkuRepository();
-  final repository = defaultTargetPlatform == TargetPlatform.android
-      ? CompositeNovelRepository(
-          local: await LocalLibraryStore.load(),
-          remote: OfflineNovelRepository(
-            remote: remote,
-            cache: await OfflineCacheStore.forApp(),
-          ),
-        )
-      : const DemoNovelRepository();
-  if (repository is CompositeNovelRepository) {
-    state.bindLocalChapters(repository.local);
-  }
-  final listening = defaultTargetPlatform == TargetPlatform.android
-      ? ListeningController(
+  try {
+    try {
+      registerAppLicenses();
+    } catch (_) {}
+    try {
+      TouchSamplingPolicy(binding);
+    } catch (_) {}
+    unawaited(
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge).catchError(
+        (Object _) {},
+      ),
+    );
+    final state = await _requiredStartup('本地阅读状态', LibraryState.load);
+    try {
+      await TagStore.load();
+    } catch (_) {}
+    try {
+      await state.ensureFontLoaded();
+    } catch (_) {}
+    if (state.performance.needsRuntimeEffects) {
+      try {
+        await NativeEffects.prepare();
+      } catch (_) {}
+    }
+    final brightness = switch (state.theme) {
+      ThemeMode.light => Brightness.light,
+      ThemeMode.dark => Brightness.dark,
+      ThemeMode.system =>
+        WidgetsBinding.instance.platformDispatcher.platformBrightness,
+    };
+    try {
+      SystemChrome.setSystemUIOverlayStyle(novelSystemUiStyle(brightness));
+    } catch (_) {}
+    final remote = LegacyWenkuRepository();
+    final NovelRepository repository;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      final local = await _requiredStartup('本地书库', LocalLibraryStore.load);
+      NovelRepository remoteRepository = remote;
+      try {
+        remoteRepository = OfflineNovelRepository(
+          remote: remote,
+          cache: await OfflineCacheStore.forApp(),
+        );
+      } catch (_) {}
+      repository = CompositeNovelRepository(
+        local: local,
+        remote: remoteRepository,
+      );
+    } else {
+      repository = const DemoNovelRepository();
+    }
+    if (repository is CompositeNovelRepository) {
+      state.bindLocalChapters(repository.local);
+    }
+    ListeningController? listening;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        listening = ListeningController(
           repository: repository,
           audio: await SpeechAudioCache.forApp(),
           store: ListeningStore(await SharedPreferences.getInstance()),
           outputFactory: createListeningOutput,
-        )
-      : null;
-  runApp(
-    NovelApp(
-      state: state,
-      repository: repository,
-      listening: listening,
-      updates: defaultTargetPlatform == TargetPlatform.android
-          ? AppUpdates(preferences: await SharedPreferences.getInstance())
-          : null,
-    ),
-  );
-  if (listening != null) {
-    // Register media commands without allocating a player or blocking the first
-    // frame. A service-created engine also gets a handler, with no auto-play.
-    unawaited(prepareListeningService(listening).catchError((Object _) {}));
+        );
+      } catch (_) {}
+    }
+    AppUpdates? updates;
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        updates = AppUpdates(
+          preferences: await SharedPreferences.getInstance(),
+        );
+      } catch (_) {}
+    }
+    runApp(
+      NovelApp(
+        state: state,
+        repository: repository,
+        listening: listening,
+        updates: updates,
+      ),
+    );
+    if (listening != null) {
+      unawaited(prepareListeningService(listening).catchError((Object _) {}));
+    }
+  } catch (error, stackTrace) {
+    final failure = error is _StartupFailure
+        ? error
+        : _StartupFailure('启动初始化', error, stackTrace);
+    runApp(_StartupFailureApp(failure: failure));
+  }
+}
+
+class _StartupFailureApp extends StatelessWidget {
+  const _StartupFailureApp({required this.failure});
+
+  final _StartupFailure failure;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '轻小说文库',
+      debugShowCheckedModeBanner: false,
+      home: Scaffold(
+        appBar: AppBar(title: const Text('应用启动失败')),
+        body: SafeArea(
+          child: ListView(
+            padding: const EdgeInsets.all(24),
+            children: [
+              Text(
+                '初始化失败项：${failure.item}',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 16),
+              Text(describeSafeError(failure.error, fallback: '本地数据暂时无法读取，请重试')),
+              const SizedBox(height: 24),
+              const Text('请重启应用后重试。应用没有自动删除本地书库、书架或恢复记录。'),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -168,18 +259,46 @@ class _NovelAppState extends State<NovelApp> {
                 ? content
                 : AppUpdateMonitor(updates: updates!, child: content);
           },
-          home: Builder(
-            builder: (context) {
-              // A newly attached Android surface can report a zero-sized view.
-              // Do not create a glass geometry texture until metrics are ready.
-              if (MediaQuery.sizeOf(context).isEmpty) {
-                return const SizedBox.shrink();
-              }
-              return HomeShell(state: state, repository: repository);
-            },
-          ),
+          home: _HomeViewport(state: state, repository: repository),
         );
       },
+    );
+  }
+}
+
+class _HomeViewport extends StatefulWidget {
+  const _HomeViewport({required this.state, required this.repository});
+  final LibraryState state;
+  final NovelRepository repository;
+
+  @override
+  State<_HomeViewport> createState() => _HomeViewportState();
+}
+
+class _HomeViewportState extends State<_HomeViewport> {
+  MediaQueryData? _lastMetrics;
+
+  @override
+  Widget build(BuildContext context) {
+    final metrics = MediaQuery.of(context);
+    final valid = !metrics.size.isEmpty &&
+        metrics.size.width.isFinite && metrics.size.height.isFinite;
+    if (valid) _lastMetrics = metrics;
+    final retained = _lastMetrics;
+    if (retained == null) return const SizedBox.shrink();
+    return Offstage(
+      offstage: !valid,
+      child: OverflowBox(
+        alignment: Alignment.topLeft,
+        minWidth: retained.size.width,
+        maxWidth: retained.size.width,
+        minHeight: retained.size.height,
+        maxHeight: retained.size.height,
+        child: MediaQuery(
+          data: retained,
+          child: HomeShell(state: widget.state, repository: widget.repository),
+        ),
+      ),
     );
   }
 }

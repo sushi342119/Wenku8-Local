@@ -131,15 +131,19 @@ class ListeningController {
     );
   }
   bool _updatingLocal = false;
+  bool _localUpdatePending = false;
   List<String> _bodyParagraphs = const [];
   void _localChanged() {
     final novel = snapshot.value.novel;
     final local = localLibraryOf(repository);
     if (_disposed ||
-        _updatingLocal ||
         novel == null ||
         local == null ||
         !isLocalNovelId(novel.id)) {
+      return;
+    }
+    if (_updatingLocal) {
+      _localUpdatePending = true;
       return;
     }
     if (!local.isMigrationPending(novel.id) &&
@@ -164,6 +168,10 @@ class ListeningController {
         _fail(error, _generation);
       } finally {
         _updatingLocal = false;
+        if (_localUpdatePending) {
+          _localUpdatePending = false;
+          _localChanged();
+        }
       }
     }());
   }
@@ -272,7 +280,7 @@ class ListeningController {
   }) {
     if (_disposed) return;
     final old = snapshot.value;
-    snapshot.value = ListeningSnapshot(
+    final next = ListeningSnapshot(
       novel: novel ?? old.novel,
       chapter: chapter ?? old.chapter,
       segment: segment ?? old.segment,
@@ -288,6 +296,22 @@ class ListeningController {
       sleepAfterChapter:
           sleepAfterChapter ?? (clearSleep ? false : old.sleepAfterChapter),
     );
+    if (next.novel == old.novel &&
+        next.chapter == old.chapter &&
+        next.segment == old.segment &&
+        identical(next.segments, old.segments) &&
+        next.phase == old.phase &&
+        next.voice == old.voice &&
+        next.speed == old.speed &&
+        next.follow == old.follow &&
+        next.playRequested == old.playRequested &&
+        next.skippedSegments == old.skippedSegments &&
+        next.error == old.error &&
+        next.sleepUntil == old.sleepUntil &&
+        next.sleepAfterChapter == old.sleepAfterChapter) {
+      return;
+    }
+    snapshot.value = next;
     _updateTimeline();
   }
 
@@ -349,6 +373,9 @@ class ListeningController {
     if (!_valid(generation) || error is SpeechCancelled) return;
     _desiredPlaying = false;
     _loading = false;
+    if (_currentFile != null) audio.unprotect(_currentFile!);
+    _currentFile = null;
+    _atSegmentEnd = false;
     _emit(
       phase: ListeningPhase.failed,
       error: error is SpeechFailure ? error.message : '这一段暂未播放成功，请重试',
@@ -778,7 +805,10 @@ class ListeningController {
     if (_disposed) return;
     _playEpoch++;
     _desiredPlaying = false;
-    if (snapshot.value.active) _emit(phase: ListeningPhase.paused);
+    if (snapshot.value.active &&
+        snapshot.value.phase != ListeningPhase.failed) {
+      _emit(phase: ListeningPhase.paused);
+    }
     await _command(() async {
       await _output?.pause();
     });
@@ -823,13 +853,16 @@ class ListeningController {
     _loading = false;
     _clearSleep();
     _emit(phase: ListeningPhase.stopped);
-    await saving;
-    await _command(() async {
-      await _output?.stop();
-    });
-    if (_currentFile != null) audio.unprotect(_currentFile!);
-    if (_nextFile != null) audio.unprotect(_nextFile!);
-    _currentFile = _nextFile = null;
+    try {
+      await saving;
+      await _command(() async {
+        await _output?.stop();
+      });
+    } finally {
+      if (_currentFile != null) audio.unprotect(_currentFile!);
+      if (_nextFile != null) audio.unprotect(_nextFile!);
+      _currentFile = _nextFile = null;
+    }
   }
 
   Future<void> seek(Duration position) async {
@@ -860,13 +893,17 @@ class ListeningController {
     final state = snapshot.value;
     if (!fraction.isFinite || state.current == null) return;
     final target = fraction.clamp(0.0, 1.0) * _textOffsets.last;
-    var index = state.segments.length - 1;
-    for (var i = 0; i < state.segments.length; i++) {
-      if (target < _textOffsets[i + 1]) {
-        index = i;
-        break;
+    var low = 0;
+    var high = state.segments.length - 1;
+    while (low < high) {
+      final middle = (low + high) ~/ 2;
+      if (target < _textOffsets[middle + 1]) {
+        high = middle;
+      } else {
+        low = middle + 1;
       }
     }
+    final index = low;
     final local =
         ((target - _textOffsets[index]) /
                 (_textOffsets[index + 1] - _textOffsets[index]))
@@ -976,13 +1013,17 @@ class ListeningController {
     _consecutiveFailures = 0;
     _loading = true;
     _emit(segment: index, phase: ListeningPhase.preparing);
-    await saving;
-    if (!_valid(generation)) return;
-    await _command(() async {
-      if (_valid(generation)) await _output?.suspend();
-    });
-    if (!_valid(generation)) return;
-    await _loadSegment(index, generation, seekFraction: fraction);
+    try {
+      await saving;
+      if (!_valid(generation)) return;
+      await _command(() async {
+        if (_valid(generation)) await _output?.suspend();
+      });
+      if (!_valid(generation)) return;
+      await _loadSegment(index, generation, seekFraction: fraction);
+    } catch (error) {
+      _fail(error, generation);
+    }
   }
 
   Future<void> moveChapter(int direction) async {
@@ -999,6 +1040,7 @@ class ListeningController {
       throw const SpeechFailure('系统离线语音待开发，请使用自然在线音色');
     }
     await store.saveVoice(voice);
+    if (_disposed) return;
     final state = snapshot.value;
     if (state.voice.id == voice.id && state.voice.engine == voice.engine) {
       return;
@@ -1008,11 +1050,23 @@ class ListeningController {
     _cancel = SpeechCancellation();
     final generation = ++_generation;
     _emit(voice: voice);
-    if (state.active && state.current != null) {
-      await _command(() async {
-        await _output?.suspend();
-      });
-      await _loadSegment(state.segment, generation);
+    try {
+      if (state.active && state.novel != null && state.current == null) {
+        await start(
+          state.novel!,
+          chapter: state.chapter,
+          resume: true,
+          autoplay: _desiredPlaying,
+        );
+      } else if (state.active && state.current != null) {
+        _loading = true;
+        await _command(() async {
+          await _output?.suspend();
+        });
+        await _loadSegment(state.segment, generation);
+      }
+    } catch (error) {
+      _fail(error, generation);
     }
   }
 
@@ -1036,7 +1090,9 @@ class ListeningController {
     _emit(clearSleep: true, sleepUntil: until, sleepAfterChapter: afterChapter);
     if (duration != null) {
       _sleep = Timer(duration, () {
-        unawaited(pause());
+        unawaited(
+          pause().catchError((Object error) => _fail(error, _generation)),
+        );
         _clearSleep();
       });
     }
@@ -1128,14 +1184,22 @@ class ListeningController {
   Future<void> dispose() => _disposing ??= _dispose();
   Future<void> _dispose() async {
     localLibraryOf(repository)?.removeListener(_localChanged);
-    await stop();
-    _disposed = true;
-    await _positions?.cancel();
-    await _completions?.cancel();
-    await _output?.dispose();
-    snapshot.dispose();
-    progress.dispose();
-    chapterProgress.dispose();
-    voices.dispose();
+    try {
+      await stop();
+    } finally {
+      _disposed = true;
+      try {
+        await Future.wait([
+          if (_positions != null) _positions!.cancel(),
+          if (_completions != null) _completions!.cancel(),
+          if (_output != null) _output!.dispose(),
+        ]);
+      } finally {
+        snapshot.dispose();
+        progress.dispose();
+        chapterProgress.dispose();
+        voices.dispose();
+      }
+    }
   }
 }

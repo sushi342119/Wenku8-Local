@@ -202,7 +202,8 @@ internal class Wenku8Bridge(context: Context, private val postToMain: (Runnable)
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         require(bounds.outWidth > 0 && bounds.outHeight > 0 &&
-            bounds.outWidth.toLong() * bounds.outHeight <= 50_000_000L)
+            bounds.outWidth <= 16384 && bounds.outHeight <= 16384 &&
+            bounds.outWidth.toLong() * bounds.outHeight <= 12_000_000L)
     }
 
     private fun readBounded(input: java.io.InputStream, limit: Int): ByteArray {

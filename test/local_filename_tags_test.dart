@@ -137,6 +137,60 @@ void main() {
     },
   );
 
+  test('corrupt primary index recovers backup without overwriting it', () async {
+    await source('原书.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final id = store.books.single.id;
+    final index = File('${root.path}/local_books/index.json');
+    final backup = await index.copy('${index.path}.bak');
+    final saved = await backup.readAsString();
+    await index.writeAsString('{broken');
+    final recovered = await load();
+    expect(recovered.bookFor(id), isNotNull);
+    await recovered.editBookFile(id, title: '新书', author: '');
+    expect(await backup.readAsString(), saved);
+    expect(await index.readAsString(), contains('新书'));
+    expect(await index.parent.list().where((file) => file.path.contains('.corrupt.')).length, 1);
+  });
+
+  test('unreadable index entries survive a subsequent save', () async {
+    await source('正常.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final index = File('${root.path}/local_books/index.json');
+    final decoded = jsonDecode(await index.readAsString()) as Map<String, dynamic>;
+    final malformed = {'id': localNovelIdBase + 99, 'chapters': 'broken', 'title': ['raw']};
+    (decoded['books'] as List).add(malformed);
+    await index.writeAsString(jsonEncode(decoded));
+    final recovered = await load();
+    expect(recovered.unreadableIndexRecordCount, 1);
+    await recovered.editBookFile(recovered.books.single.id, title: '更新', author: '');
+    final saved = jsonDecode(await index.readAsString()) as Map;
+    expect((saved['books'] as List).last, equals(malformed));
+  });
+
+  test('empty complete scan retains last known source and its copy', () async {
+    final file = await source('保留.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final book = store.books.single;
+    await file.delete();
+    await expectLater(store.scanAppFolder(), throwsA(isA<IncompleteScanException>()));
+    expect(store.bookFor(book.id), isNotNull);
+    expect(await File(store.textPathFor(book)).exists(), isTrue);
+  });
+
+  test('associated cleanup cannot target a live book', () async {
+    await source('保留.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final id = store.books.single.id;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setStringList('local_library_associated_cleanup', ['$id', '${id + 9}']);
+    expect(await store.peekAssociatedCleanupIds(), [id + 9]);
+  });
+
   test('new tags reject whitespace and marker at the store boundary', () async {
     for (final name in [
       '',
@@ -259,6 +313,40 @@ void main() {
     await blocker.delete();
     await store.scanAppFolder();
     expect(store.books.single.fileName, '书.txt');
+  });
+
+  test('rename rejects escaped source paths even for legacy records', () async {
+    await source('书.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final outside = File('${root.path}/outside.txt');
+    await outside.writeAsString('outside fixture');
+    final index = File('${root.path}/local_books/index.json');
+    final records = jsonDecode(await index.readAsString()) as Map;
+    final record = (records['books'] as List).single as Map;
+    record['sourceId'] = '';
+    record['sourceKey'] = outside.path;
+    record['fileUri'] = outside.uri.toString();
+    record['fileName'] = 'outside.txt';
+    await index.writeAsString(jsonEncode(records));
+    final reloaded = await load();
+    final tag = await TagStore.shared.createTag('已读');
+    await expectLater(reloaded.setTagsForBook(reloaded.books.single.id, [tag]), throwsStateError);
+    expect(await outside.readAsString(), 'outside fixture');
+  });
+
+  test('rename refuses a symlink outside the source root', () async {
+    final file = await source('书.txt');
+    final store = await load();
+    await store.scanAppFolder();
+    final outside = File('${root.path}/outside.txt');
+    await outside.writeAsString('outside fixture');
+    await file.delete();
+    await Link(file.path).create(outside.path);
+    final tag = await TagStore.shared.createTag('已读');
+    await expectLater(store.setTagsForBook(store.books.single.id, [tag]), throwsStateError);
+    expect(await outside.readAsString(), 'outside fixture');
+    expect(await Link(file.path).exists(), true);
   });
 
   test(

@@ -33,7 +33,8 @@ void main() {
     final failed = task.withFailure(StateError('boom'));
     expect(failed.status, 'failed');
     expect(failed.attempts, 1);
-    expect(failed.lastError, contains('boom'));
+    expect(failed.lastError, contains('章节迁移失败'));
+    expect(failed.lastError, isNot(contains('boom')));
     expect(failed.migrationId, task.migrationId);
   });
 

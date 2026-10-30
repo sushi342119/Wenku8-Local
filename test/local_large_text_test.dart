@@ -142,6 +142,54 @@ void main() {
     },
   );
 
+  test(
+    'rescan keeps an existing book when its TXT becomes BOM-only',
+    () async {
+      final folder = await store.appFolderPath;
+      final file = File('$folder/keep.txt');
+      await file.writeAsString('第一章 开始\n这是第一章的正文内容。\n', flush: true);
+
+      // 第一次扫描：正常导入。
+      final first = await store.scanAppFolder();
+      expect(first.failures, isEmpty);
+      expect(store.books, hasLength(1));
+      final firstCount = store.books.length;
+      final original = store.books.single;
+      final id = original.id;
+      final title = original.title;
+      final sourceKey = original.sourceKey;
+
+      // 覆写为纯 BOM。显式推后 mtime，避免文件系统时间精度导致变更检测跳过重导入。
+      await file.writeAsBytes([0xef, 0xbb, 0xbf], flush: true);
+      await file.setLastModified(
+        DateTime.now().add(const Duration(minutes: 1)),
+      );
+
+      // 第二次扫描：重导入失败，但记录必须保留。
+      final second = await store.scanAppFolder();
+      final failure = second.failures.entries.single;
+      expect(failure.key, contains('keep.txt'));
+      expect(failure.value, contains('文件为空'));
+      expect(second.skipped, 1);
+
+      expect(store.books.length, greaterThanOrEqualTo(firstCount));
+      expect(second.total, store.books.length);
+      final kept = store.books.where((b) => b.id == id).toList();
+      expect(kept, hasLength(1));
+      expect(kept.single.title, title);
+      expect(kept.single.sourceKey, sourceKey);
+
+      // 持久化层：换用新 store 从同一 root 与 prefs 重新加载。
+      store.dispose();
+      store = await LocalLibraryStore.load();
+
+      final reloaded = store.books.where((b) => b.id == id).toList();
+      expect(reloaded, hasLength(1));
+      expect(reloaded.single.title, title);
+      expect(reloaded.single.sourceKey, sourceKey);
+    },
+  );
+
   test('a huge single chapter is bounded before allocating its body', () async {
     final source = File('${await store.appFolderPath}/single.txt');
     final output = await source.open(mode: FileMode.write);

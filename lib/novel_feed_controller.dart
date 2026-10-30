@@ -111,7 +111,7 @@ class NovelFeedController extends ChangeNotifier {
   /// A closed search keeps its last result/query, without launching a request
   /// which the user can no longer see. Reopening can explicitly resume it.
   void cancelScheduledSearch() {
-    if (_searchDelay == null) return;
+    if (_disposed || _searchDelay == null) return;
     _searchDelay!.cancel();
     _searchDelay = null;
     loading = false;
@@ -222,6 +222,7 @@ class NovelFeedController extends ChangeNotifier {
   void dispose() {
     _disposed = true;
     _searchDelay?.cancel();
+    _searchDelay = null;
     _generation++;
     super.dispose();
   }

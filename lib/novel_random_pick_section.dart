@@ -37,6 +37,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   final Map<int, int> _drawCounts = {};
   SharedPreferences? _preferences;
   bool _countsLoaded = false;
+  bool _countsWritable = true;
   Future<void> _pendingWrite = Future<void>.value();
 
   @override
@@ -59,17 +60,22 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
       _preferences = preferences;
       final raw = preferences.get(_drawCountsKey);
       final decoded = raw is String ? jsonDecode(raw) : null;
+      if (raw != null && decoded is! Map<String, dynamic>) {
+        throw const FormatException('Invalid draw counts');
+      }
       if (decoded is Map<String, dynamic>) {
         for (final entry in decoded.entries) {
           final id = int.tryParse(entry.key);
           final count = entry.value;
           if (id != null && count is int && count > 0) {
             counts[id] = count;
+          } else {
+            _countsWritable = false;
           }
         }
       }
     } catch (_) {
-      // 损坏或不可用的本地记录不影响抽阅。
+      _countsWritable = false;
     }
     if (!mounted) return;
     setState(() {
@@ -86,6 +92,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   }
 
   Future<bool> _persistDrawCounts() {
+    if (!_countsWritable) return Future.value(false);
     // 保存快照并串行写入，防止较早的抽取覆盖后来的重置。
     final encoded = jsonEncode(
       _drawCounts.map((id, count) => MapEntry('$id', count)),

@@ -49,7 +49,9 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
 
     override fun onAttachedToActivity(binding: ActivityPluginBinding) {
         activityBinding = binding
-        tools = LocalTools(binding.activity)
+        val existing = tools
+        if (existing == null) tools = LocalTools(binding.activity)
+        else existing.attachActivity(binding.activity)
         binding.addActivityResultListener(this)
     }
     private fun detachActivity() {
@@ -59,7 +61,10 @@ class WenkuHostPlugin : FlutterPlugin, ActivityAware, PluginRegistry.ActivityRes
         tools = null
     }
     override fun onDetachedFromActivity() = detachActivity()
-    override fun onDetachedFromActivityForConfigChanges() = detachActivity()
+    override fun onDetachedFromActivityForConfigChanges() {
+        activityBinding?.removeActivityResultListener(this)
+        activityBinding = null
+    }
     override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) = onAttachedToActivity(binding)
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean =
         tools?.onActivityResult(requestCode, resultCode, data) ?: false

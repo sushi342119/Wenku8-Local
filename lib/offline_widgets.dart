@@ -109,7 +109,7 @@ class OfflineBookMenu extends StatelessWidget {
                 onPressed: () => Navigator.pop(menu, _BookAction.retry),
               ),
           ],
-          if (repository.cache.book(novel.id) != null)
+          if (repository.cache.book(novel.id) != null && job?.active != true)
             GlassMenuItem(
               order: 3,
               label: '清除这本缓存',
@@ -141,12 +141,14 @@ class OfflineBookMenu extends StatelessWidget {
         repository.cancel(novel.id);
         return;
       case _BookAction.remove:
+        if (repository.jobFor(novel.id)?.active == true) return;
         if (await _confirmClear(
           context,
           '清除这本缓存',
           reduceMotion: reduceMotion,
         )) {
           try {
+            if (repository.jobFor(novel.id)?.active == true) return;
             await repository.removeCachedBook(novel.id);
           } catch (_) {
             if (context.mounted) _storageFailure(context);
@@ -365,6 +367,10 @@ class _OfflineCachePageState extends State<OfflineCachePage> {
   );
 
   Future<void> _clear(BuildContext context) async {
+    if (widget.repository.jobs.any((job) => job.active)) {
+      showNovelFeedback(context, '请先取消或等待下载完成');
+      return;
+    }
     if (!await _confirmClear(
       context,
       '清空全部缓存',
@@ -373,6 +379,7 @@ class _OfflineCachePageState extends State<OfflineCachePage> {
       return;
     }
     try {
+      if (widget.repository.jobs.any((job) => job.active)) return;
       await widget.repository.clearCache();
     } catch (_) {
       if (context.mounted) _storageFailure(context);

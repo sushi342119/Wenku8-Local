@@ -13,13 +13,12 @@ fun localDeleteOutcome(
 ): Map<String, Any?> {
     fun failure(
         code: String,
-        error: Exception? = null,
         outcome: String = "failed"
     ): Map<String, Any?> = mapOf(
         "deleted" to false,
         "outcome" to outcome,
         "code" to code,
-        "message" to error?.message
+        "message" to "无法完成文件操作，请重试"
     )
 
     return try {
@@ -34,18 +33,17 @@ fun localDeleteOutcome(
     } catch (e: FileNotFoundException) {
         failure(
             code = "io_error",
-            error = e,
             outcome = "unconfirmed"
         )
     } catch (e: SecurityException) {
-        failure("permission", e)
+        failure("permission")
     } catch (e: UnsupportedOperationException) {
-        failure("unsupported", e)
+        failure("unsupported")
     } catch (e: IllegalArgumentException) {
-        failure("invalid_uri", e)
+        failure("invalid_uri")
     } catch (e: IOException) {
-        failure("io_error", e, outcome = "unconfirmed")
+        failure("io_error", outcome = "unconfirmed")
     } catch (e: Exception) {
-        failure("unknown", e)
+        failure("unknown")
     }
 }

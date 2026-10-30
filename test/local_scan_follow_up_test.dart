@@ -51,11 +51,11 @@ void main() {
     expect(result.unrecordedFailures, greaterThan(0));
   });
 
-  test('重授权换目录处理清理队列、迁移确认和迁移失败记录', () async {
+  test('重授权原目录处理清理队列、迁移确认和迁移失败记录', () async {
     final calls = <String>[];
     final result = await finishLocalReauthorization(
       previousFolder: 'old',
-      pickedFolder: 'new',
+      pickedFolder: 'old',
       permission: readWrite,
       scanAndApply: () async {
         calls.add('scan');
@@ -86,8 +86,8 @@ void main() {
       'migrate:2',
       'persist-failure:2',
     ]);
-    expect(result.folderChanged, isTrue);
-    expect(result.canRetryDelete, isFalse);
+    expect(result.folderChanged, isFalse);
+    expect(result.canRetryDelete, isTrue);
     expect(result.followUp.failedMigrations, 1);
     expect(result.followUp.handled, isTrue);
   });
@@ -96,12 +96,24 @@ void main() {
     await expectLater(
       finishLocalReauthorization(
         previousFolder: 'old',
-        pickedFolder: 'new',
+        pickedFolder: 'old',
         permission: readWrite,
         scanAndApply: () async => throw StateError('offline'),
       ),
       throwsStateError,
     );
+  });
+
+  test('选错重授权目录时不执行扫描及关联清理', () async {
+    var scanned = false;
+    await expectLater(finishLocalReauthorization(
+      previousFolder: 'old', pickedFolder: 'new', permission: readWrite,
+      scanAndApply: () async {
+        scanned = true;
+        return const LocalScanFollowUp();
+      },
+    ), throwsStateError);
+    expect(scanned, isFalse);
   });
 
   test('清理失败仍处理迁移，但总体结果不是完成', () async {
@@ -153,7 +165,7 @@ void main() {
     expect(result.failedMigrations, 1);
   });
 
-  test('迁移成功但确认失败时走失败记录，且同书后继任务暂停', () async {
+  test('迁移成功但确认失败时保留确认待办，且同书后继任务暂停', () async {
     final calls = <String>[];
     final result = await applyLocalScanFollowUp<({int bookId, String id})>(
       remaps: [
@@ -177,12 +189,12 @@ void main() {
     expect(calls, [
       'migrate:a-b',
       'confirm:a-b',
-      'persist-failure:a-b',
       'migrate:x-y',
       'confirm:x-y',
     ]);
-    expect(result.failedMigrations, 1);
-    expect(result.handled, isTrue);
+    expect(result.failedMigrations, 0);
+    expect(result.unrecordedFailures, 1);
+    expect(result.handled, isFalse);
   });
 
   test('清理部分完成后续抛异常时，清理错误仍要上报、整体不算完成', () async {

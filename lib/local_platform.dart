@@ -70,7 +70,7 @@ Future<void> deleteLocalDocumentWithChannel(
   } on PlatformException catch (error) {
     throw LocalDeleteException(
       _knownLocalDeleteCodes.contains(error.code) ? error.code : 'unknown',
-      error.message,
+      '文件删除失败，请检查文件夹权限后重试',
     );
   }
   final outcome = result?['outcome'];
@@ -88,12 +88,11 @@ Future<void> deleteLocalDocumentWithChannel(
     );
   }
   final rawCode = result?['code'];
-  final rawMessage = result?['message'];
   throw LocalDeleteException(
     rawCode is String && _knownLocalDeleteCodes.contains(rawCode)
         ? rawCode
         : 'unknown',
-    rawMessage is String ? rawMessage : '未收到可确认的删除结果',
+    '未收到可确认的删除结果',
   );
 }
 
@@ -110,6 +109,9 @@ abstract final class LocalPlatform {
         'name': name,
       }) ??
       false;
+  static Future<void> setSensitiveClipboard(String text) async {
+    await channel.invokeMethod<void>('setSensitiveClipboard', {'text': text});
+  }
   static Future<String?> importBackup() =>
       channel.invokeMethod<String>('importBackup');
   static Future<Map<Object?, Object?>?> importLegacyData() =>
@@ -146,8 +148,18 @@ abstract final class LocalPlatform {
             .toList()
         : <Map<String, Object?>>[];
     // 缺少 complete 字段时按不完整处理（兼容旧原生版本）。
-    final bool complete = result['complete'] == true;
-    final String? reason = result['reason'] as String?;
+    final uris = <String>{};
+    bool validNumber(Object? value) => value == null ||
+        value is num && value.isFinite && value >= 0;
+    final valid = rawEntries is List && entries.length == rawEntries.length &&
+        entries.every((entry) => entry['uri'] is String &&
+            (entry['uri'] as String).isNotEmpty &&
+            uris.add(entry['uri'] as String) &&
+            (entry['name'] == null || entry['name'] is String) &&
+            validNumber(entry['size']) && validNumber(entry['modified']));
+    final bool complete = result['complete'] == true && valid;
+    final String? reason = !valid ? 'enumeration_failed' :
+        result['reason'] is String ? result['reason'] as String : null;
     return (entries: entries, complete: complete, reason: reason);
   }
 
@@ -280,15 +292,20 @@ abstract final class LocalPlatform {
           'expectedFileName': ?expectedFileName},
       );
     } on PlatformException catch (error) {
-      throw LocalRenameException(error.code, error.message ?? '请检查文件夹写权限');
+      throw LocalRenameException(
+        const {'permission', 'unsupported', 'rename_failed'}.contains(error.code)
+            ? error.code : 'unconfirmed',
+        '文件改名失败，请检查文件夹权限后重试',
+      );
     }
     final uri = res?['fileUri'];
     final name = res?['fileName'];
     if (res?['renamed'] != true || uri is! String ||
         !uri.startsWith('content:') || name != newFileName) {
       throw LocalRenameException(
-        res?['code'] as String? ?? 'unconfirmed',
-        res?['message'] as String? ?? '未收到可确认的改名结果',
+        const {'permission', 'unsupported', 'rename_failed'}.contains(res?['code'])
+            ? res!['code'] as String : 'unconfirmed',
+        '未收到可确认的改名结果，请重新扫描原文件夹',
         fileUri: uri is String && uri.startsWith('content:') ? uri : null,
         fileName: name is String ? name : null,
       );

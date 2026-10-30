@@ -7,6 +7,7 @@ import 'book_tags.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'wenku_errors.dart';
 
 /// 为某本书勾选标签；本地书籍保存时同步改原文件名。
 Future<void> showTagEditor(
@@ -54,7 +55,9 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
         setState(() => _selected.add(id));
       }
     } catch (error) {
-      if (mounted) setState(() => _error = '新建失败：$error');
+      if (mounted) {
+        setState(() => _error = describeSafeError(error, fallback: '新建失败'));
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -81,7 +84,7 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
     } catch (error) {
       if (mounted) {
         setState(() {
-          _error = '保存失败：$error';
+          _error = describeSafeError(error, fallback: '保存失败');
           _busy = false;
         });
       }
@@ -195,6 +198,18 @@ class TagManagePage extends StatefulWidget {
 
 class _TagManagePageState extends State<TagManagePage> {
   final _controller = TextEditingController();
+  bool _busy = false;
+
+  int _localCount(Tag tag) => TagStore.shared.bookIdsFor(tag.id).where(isLocalNovelId).length;
+
+  bool _canChange(Tag tag) {
+    if (_busy) return false;
+    if (widget.local == null && _localCount(tag) > 0) {
+      showNovelFeedback(context, '本地书库尚未加载，请稍后再修改此标签');
+      return false;
+    }
+    return true;
+  }
 
   @override
   void dispose() {
@@ -203,15 +218,20 @@ class _TagManagePageState extends State<TagManagePage> {
   }
 
   Future<void> _rename(Tag tag) async {
+    if (!_canChange(tag)) return;
+    setState(() => _busy = true);
+    try {
     final controller = TextEditingController(text: tag.name);
-    final name = await showDialog<String>(
+    final name = await showDialogWithControllers<String>(
       context: context,
+      controllers: [controller],
       builder: (context) => AlertDialog(
         title: const Text('重命名标签'),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: '标签名'),
+          decoration: InputDecoration(hintText: '标签名',
+              helperText: '将同步修改 ${_localCount(tag)} 个本地文件名'),
         ),
         actions: [
           TextButton(
@@ -225,8 +245,7 @@ class _TagManagePageState extends State<TagManagePage> {
         ],
       ),
     );
-    controller.dispose();
-    if (name != null && name.isNotEmpty) {
+    if (mounted && name != null && name.isNotEmpty) {
       try {
         if (widget.local != null) {
           await widget.local!.renameTag(tag.id, name);
@@ -235,21 +254,32 @@ class _TagManagePageState extends State<TagManagePage> {
         }
         if (mounted) setState(() {});
       } catch (error) {
-        if (mounted) showNovelFeedback(context, '保存失败：$error');
+        if (mounted) {
+          showNovelFeedback(
+            context,
+            describeSafeError(error, fallback: '保存失败'),
+          );
+        }
       }
+    }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _delete(Tag tag) async {
+    if (!_canChange(tag)) return;
+    setState(() => _busy = true);
+    try {
     final count = TagStore.shared.bookCountFor(tag.id);
     final confirmed = await confirmNovelAction(
       context,
       title: '删除标签「${tag.name}」？',
-      message: count > 0 ? '该标签已用于 $count 本书，将一并清除。' : '该标签尚未使用。',
+      message: count > 0 ? '该标签已用于 $count 本书，将一并清除，并同步修改 ${_localCount(tag)} 个本地文件名。' : '该标签尚未使用。',
       confirmLabel: '删除',
       reduceMotion: widget.state.reduceMotion,
     );
-    if (confirmed) {
+    if (mounted && confirmed) {
       try {
         if (widget.local != null) {
           await widget.local!.deleteTag(tag.id);
@@ -258,8 +288,16 @@ class _TagManagePageState extends State<TagManagePage> {
         }
         if (mounted) setState(() {});
       } catch (error) {
-        if (mounted) showNovelFeedback(context, '删除失败：$error');
+        if (mounted) {
+          showNovelFeedback(
+            context,
+            describeSafeError(error, fallback: '删除失败'),
+          );
+        }
       }
+    }
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
@@ -287,7 +325,7 @@ class _TagManagePageState extends State<TagManagePage> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                GlassTextButton(onPressed: _create, child: const Text('添加')),
+                GlassTextButton(onPressed: _busy ? null : _create, child: const Text('添加')),
               ],
             ),
             const SizedBox(height: 16),
@@ -337,11 +375,11 @@ class _TagManagePageState extends State<TagManagePage> {
                       ),
                       IconButton(
                         icon: const Icon(CupertinoIcons.pencil, size: 18),
-                        onPressed: () => _rename(tag),
+                        onPressed: _busy ? null : () => _rename(tag),
                       ),
                       IconButton(
                         icon: const Icon(CupertinoIcons.delete, size: 18),
-                        onPressed: () => _delete(tag),
+                        onPressed: _busy ? null : () => _delete(tag),
                       ),
                     ],
                   ),
@@ -354,16 +392,22 @@ class _TagManagePageState extends State<TagManagePage> {
   }
 
   Future<void> _create() async {
+    if (_busy) return;
     final name = _controller.text;
     if (name.isEmpty) return;
+    setState(() => _busy = true);
     try {
       await TagStore.shared.createTag(name);
-      _controller.clear();
+      if (mounted) _controller.clear();
       if (mounted) setState(() {});
-    } on ArgumentError catch (error) {
+    } on ArgumentError {
       if (mounted) {
-        showNovelFeedback(context, error.message?.toString() ?? '标签名不合法');
+        showNovelFeedback(context, '标签名不合法');
       }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '标签保存失败，请重试');
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 }

@@ -253,6 +253,7 @@ class _ReaderToolsState extends State<ReaderTools> {
                 const Divider(height: 24),
                 ReaderValueSlider(
                   sliderKey: const ValueKey('reader-progress-slider'),
+                  commitOnDispose: false,
                   label: '本章进度',
                   value: widget.position?.fraction ?? 0,
                   min: 0,
@@ -492,6 +493,7 @@ class ReaderValueSlider extends StatefulWidget {
     this.divisions,
     this.onPreview,
     this.onInteractionChanged,
+    this.commitOnDispose = true,
   });
   final Key sliderKey;
   final String label;
@@ -503,6 +505,7 @@ class ReaderValueSlider extends StatefulWidget {
   final ValueChanged<double>? onCommitted;
   final ValueChanged<double>? onPreview;
   final ValueChanged<bool>? onInteractionChanged;
+  final bool commitOnDispose;
 
   @override
   State<ReaderValueSlider> createState() => _ReaderValueSliderState();
@@ -531,13 +534,13 @@ class _ReaderValueSliderState extends State<ReaderValueSlider> {
   void _finish() {
     if (!_dragging) return;
     _dragging = false;
-    widget.onCommitted?.call(_draft);
     widget.onInteractionChanged?.call(false);
+    widget.onCommitted?.call(_draft);
   }
 
   @override
   void dispose() {
-    if (_dragging) {
+    if (_dragging && widget.commitOnDispose) {
       // Back navigation can remove the slider before Cupertino's end callback.
       // Retain the last visible value without calling the disposed sheet.
       final commit = widget.onCommitted, draft = _draft;

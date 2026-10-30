@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:wenku8_flutter/catalog.dart';
+import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/library_backup.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/reader_content.dart';
@@ -45,6 +46,7 @@ void main() {
     SharedPreferences.resetStatic();
     storage = _Storage();
     SharedPreferencesStorePlatform.instance = storage;
+    await TagStore.load();
     state = await LibraryState.load();
   });
   tearDown(() => state.dispose());
@@ -282,8 +284,13 @@ void main() {
         restoreJournalKey,
         jsonEncode({'TOKEN': 'overwrite'}),
       );
-      await expectLater(recoverLibraryRestore(prefs), throwsFormatException);
+      await recoverLibraryRestore(prefs);
       expect(prefs.getString('TOKEN'), 'preserved');
+      expect(prefs.containsKey(restoreJournalKey), isFalse);
+      final quarantine = prefs.getStringList(restoreJournalQuarantineKey);
+      expect(quarantine, hasLength(1));
+      expect(jsonDecode(quarantine!.single)['raw'],
+          jsonEncode({'TOKEN': 'overwrite'}));
     },
   );
 

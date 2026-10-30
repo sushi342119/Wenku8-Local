@@ -47,8 +47,11 @@ import 'text_anchor.dart';
 import 'tag_pages.dart';
 import 'updates/update_page.dart';
 import 'updates/app_updates.dart';
+import 'wenku_errors.dart';
 
 export 'app_ui.dart' show sectionHeader;
+
+final _readerWhitespace = RegExp(r'\s');
 
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key, required this.state, required this.repository});
@@ -66,8 +69,12 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     await Future<void>.delayed(const Duration(seconds: 2));
     if (!mounted) return;
     if (local.tagMigrationFailures.isNotEmpty) {
-      showNovelFeedback(context, local.tagMigrationFailures.entries
-          .map((entry) => '${entry.key}：${entry.value}').join('\n'));
+      showNovelFeedback(
+        context,
+        local.tagMigrationFailures.entries
+            .map((entry) => '${entry.key}：${entry.value}')
+            .join('\n'),
+      );
     }
     if (local.folderUri == null) return;
     try {
@@ -95,12 +102,12 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
           '${followUp.failedMigrations} 本书的阅读进度迁移失败，已保存待重试任务',
         );
       }
+      if (!followUp.handled && mounted) {
+        showNovelFeedback(context, '进度已迁移，但确认尚未保存，已保留待重试任务');
+      }
       if (!mounted) return;
       if (result.failures.isNotEmpty) {
-        showNovelFeedback(
-          context,
-          result.failures.entries.map((e) => '${e.key}：${e.value}').join('\n'),
-        );
+        showNovelFeedback(context, '部分本地文件扫描失败，请打开本地书库查看详情');
       }
       // 文件夹切换：清理旧来源书籍的书架/标签/阅读进度。
       // peek→逐个幂等清理→confirm：中断后未确认的 ID 下次重试。
@@ -108,32 +115,41 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       // 手动扫描重试；重授权路径的同名清理见 _applyLocalScanAfterReauth，
       // 那里异常必须向上传，不能吞掉。
       final state = widget.state;
-      final cleanupIds = await local.peekAssociatedCleanupIds();
-      final cleanupDone = <int>[];
-      for (final id in cleanupIds) {
-        try {
-          await state.setShelfMembership(id, false);
-          await TagStore.shared.setTagsForBook(id, const {});
-          await state.clearBookProgress(id);
-          cleanupDone.add(id);
-        } catch (_) {
-          break;
+      try {
+        final cleanupIds = await local.peekAssociatedCleanupIds();
+        final cleanupDone = <int>[];
+        for (final id in cleanupIds) {
+          try {
+            await state.setShelfMembership(id, false);
+            await TagStore.shared.setTagsForBook(id, const {});
+            await state.clearBookProgress(id);
+            cleanupDone.add(id);
+          } catch (_) {
+            if (mounted) showNovelFeedback(context, '部分关联记录未清理，已保留待重试任务');
+          }
         }
+        await local.confirmAssociatedCleanupIds(cleanupDone);
+      } catch (_) {
+        if (mounted) showNovelFeedback(context, '关联清理未完成，已保留待重试任务');
       }
-      await local.confirmAssociatedCleanupIds(cleanupDone);
       // 字数静默补算后刷新首页 feed，详情页简介才能显示最新字数。
       if (result.backfilled > 0) {
-        await _catalog.refresh();
+        if (!mounted) return;
+        try {
+          await _catalog.refresh();
+        } catch (_) {
+          if (mounted) showNovelFeedback(context, '书库已扫描，首页刷新失败，请重试');
+        }
         if (!mounted) return;
       }
       final changed = result.added + result.refreshed + result.removed;
-      if (changed == 0 && result.switchedRemovedIds.isEmpty) return;
       final shelfAdditions = [
         for (final book in local.books)
           if (!state.contains(book.id)) local.toNovel(book),
       ];
       await state.addShelfBooks(shelfAdditions);
       if (!mounted) return;
+      if (changed == 0 && result.switchedRemovedIds.isEmpty) return;
       final parts = <String>[];
       if (result.added > 0) parts.add('新增 ${result.added} 本');
       if (result.refreshed > 0) parts.add('更新 ${result.refreshed} 本');
@@ -207,8 +223,8 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     _searchText.addListener(_searchEdited);
     _searchFeed.addListener(_searchSucceeded);
     final repository = widget.repository;
-    final OfflineNovelRepository? offline = repository
-            is CompositeNovelRepository
+    final OfflineNovelRepository? offline =
+        repository is CompositeNovelRepository
         ? (repository.remote is OfflineNovelRepository
               ? repository.remote as OfflineNovelRepository
               : null)
@@ -681,21 +697,21 @@ class DiscoverPage extends StatefulWidget {
 
   /// 顶部栏由 HomeShell 通过 widget 实例直接取用，不依赖 State。
   Widget buildHeader(BuildContext context) => Row(
-        children: [
-          const Expanded(
-            child: ArchiveMasthead(
-              title: '轻小说文库',
-              code: 'WENKU8 / READING ARCHIVE',
-              brand: true,
-            ),
-          ),
-          GlassIconButton(
-            icon: CupertinoIcons.search,
-            label: '搜索',
-            onPressed: onSearch,
-          ),
-        ],
-      );
+    children: [
+      const Expanded(
+        child: ArchiveMasthead(
+          title: '轻小说文库',
+          code: 'WENKU8 / READING ARCHIVE',
+          brand: true,
+        ),
+      ),
+      GlassIconButton(
+        icon: CupertinoIcons.search,
+        label: '搜索',
+        onPressed: onSearch,
+      ),
+    ],
+  );
 
   @override
   State<DiscoverPage> createState() => _DiscoverPageState();
@@ -703,6 +719,7 @@ class DiscoverPage extends StatefulWidget {
 
 class _DiscoverPageState extends State<DiscoverPage> {
   final TagStore _tagStore = TagStore.shared;
+  bool _loadMoreQueued = false;
 
   /// 当前选中的标签 id；null 表示“全部”。纯展示状态，不持久化。
   String? _selectedTagId;
@@ -724,8 +741,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
     // 标签改名、增删、书籍归属变化都要刷新；选中标签被删除则回退到全部。
     setState(() {
       final selectedTagId = _selectedTagId;
-      if (selectedTagId != null &&
-          _tagStore.tagById(selectedTagId) == null) {
+      if (selectedTagId != null && _tagStore.tagById(selectedTagId) == null) {
         _selectedTagId = null;
       }
     });
@@ -810,12 +826,12 @@ class _DiscoverPageState extends State<DiscoverPage> {
     final List<Novel> carouselBooks = selectedTagId == null
         ? allBooks
         : allBooks
-            .where(
-              (book) => _tagStore
-                  .tagsForBook(book.id)
-                  .any((tag) => tag.id == selectedTagId),
-            )
-            .toList(growable: false);
+              .where(
+                (book) => _tagStore
+                    .tagsForBook(book.id)
+                    .any((tag) => tag.id == selectedTagId),
+              )
+              .toList(growable: false);
 
     final featuredCount = allBooks.length.clamp(0, 10);
     Widget body;
@@ -838,9 +854,16 @@ class _DiscoverPageState extends State<DiscoverPage> {
               feed?.error == null &&
               notification.metrics.extentAfter <
                   math.max(800, notification.metrics.viewportDimension * 1.5)) {
-            WidgetsBinding.instance.addPostFrameCallback(
-              (_) => feed?.loadMore(),
-            );
+            if (!_loadMoreQueued) {
+              _loadMoreQueued = true;
+              WidgetsBinding.instance.addPostFrameCallback((_) async {
+                try {
+                  await feed?.loadMore();
+                } finally {
+                  _loadMoreQueued = false;
+                }
+              });
+            }
           }
           return false;
         },
@@ -946,8 +969,9 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
   Widget _categoryHeader(BuildContext context) {
     final selectedTagId = _selectedTagId;
-    final selectedTag =
-        selectedTagId == null ? null : _tagStore.tagById(selectedTagId);
+    final selectedTag = selectedTagId == null
+        ? null
+        : _tagStore.tagById(selectedTagId);
     final title = selectedTag?.name ?? widget.categoryTitle ?? '全部';
     return Row(
       children: [
@@ -978,8 +1002,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         builder: (context, _) {
           final tags = _tagStore.tags.toList(growable: false);
           final selectedTagId = _selectedTagId;
-          final effectiveSelectedTagId = selectedTagId != null &&
-                  _tagStore.tagById(selectedTagId) != null
+          final effectiveSelectedTagId =
+              selectedTagId != null && _tagStore.tagById(selectedTagId) != null
               ? selectedTagId
               : null;
           return ConstrainedBox(
@@ -1020,8 +1044,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
 
     final requestedTagId = choice.tagId;
     // 标签可能在点击与菜单 Future 返回之间被删除。
-    final String? nextTagId = requestedTagId != null &&
-            _tagStore.tagById(requestedTagId) != null
+    final String? nextTagId =
+        requestedTagId != null && _tagStore.tagById(requestedTagId) != null
         ? requestedTagId
         : null;
 
@@ -1232,7 +1256,8 @@ class _ShelfBookTags extends StatelessWidget {
             maxLines: 1,
             softWrap: false,
             overflow: TextOverflow.ellipsis,
-            style: theme.textTheme.labelLarge?.copyWith(
+            style:
+                theme.textTheme.labelLarge?.copyWith(
                   fontSize: 9,
                   height: 1.2,
                 ) ??
@@ -1353,9 +1378,13 @@ enum _ShelfSort { recentRead, recentAdded, title }
 class _ShelfPageState extends State<ShelfPage> {
   final Map<int, Future<Novel?>> _requests = {};
   final _query = TextEditingController();
+  Timer? _queryDelay;
+  Map<int, Novel?> _buildKnown = const {};
   String? _activeTagId;
-  _ShelfSort get _sort =>
-      _ShelfSort.values.firstWhere((sort) => sort.name == state.shelfSort);
+  _ShelfSort get _sort => _ShelfSort.values.firstWhere(
+    (sort) => sort.name == state.shelfSort,
+    orElse: () => _ShelfSort.recentRead,
+  );
   LibraryState get state => widget.state;
   late final _changes = Listenable.merge([
     state,
@@ -1367,6 +1396,7 @@ class _ShelfPageState extends State<ShelfPage> {
 
   @override
   void dispose() {
+    _queryDelay?.cancel();
     _query.dispose();
     super.dispose();
   }
@@ -1394,7 +1424,7 @@ class _ShelfPageState extends State<ShelfPage> {
     };
   }
 
-  Novel? _known(int id) {
+  Novel? _knownFromSources(int id) {
     final local = localLibraryOf(widget.repository);
     final source = local?.bookFor(id);
     if (source != null) return local!.toNovel(source);
@@ -1405,6 +1435,9 @@ class _ShelfPageState extends State<ShelfPage> {
     }
     return null;
   }
+
+  Novel? _known(int id) =>
+      _buildKnown.containsKey(id) ? _buildKnown[id] : _knownFromSources(id);
 
   Future<Novel?> _resolve(int id) async {
     final book = await widget.repository.find(id);
@@ -1430,6 +1463,7 @@ class _ShelfPageState extends State<ShelfPage> {
   Widget build(BuildContext context) => ActiveListenableBuilder(
     listenable: _changes,
     builder: (context) {
+      _buildKnown = {for (final id in state.shelf) id: _knownFromSources(id)};
       final saved = state.shelf.where(_matches).toList()..sort(_compare);
       return GlassHeaderLayout(
         showHeader: widget.showHeader,
@@ -1460,7 +1494,15 @@ class _ShelfPageState extends State<ShelfPage> {
                       ),
                       backgroundColor: Theme.of(context).colorScheme.surface,
                       placeholder: '在书架中查找书名、作者或 ID',
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        _queryDelay?.cancel();
+                        _queryDelay = Timer(
+                          const Duration(milliseconds: 180),
+                          () {
+                            if (mounted) setState(() {});
+                          },
+                        );
+                      },
                     ),
                     const SizedBox(height: 10),
                     Row(
@@ -1743,7 +1785,9 @@ class _ShelfPageState extends State<ShelfPage> {
 
   Future<void> _bookMenu(BuildContext context, int id, {Novel? book}) async {
     final repository = widget.repository;
-    final local = repository is CompositeNovelRepository ? repository.local : null;
+    final local = repository is CompositeNovelRepository
+        ? repository.local
+        : null;
     final localBook = local?.bookFor(id);
     final action = await showGlassMenu<_ShelfBookAction>(
       context: context,
@@ -1788,6 +1832,7 @@ class _ShelfPageState extends State<ShelfPage> {
     Novel? book,
   }) async {
     if (!state.contains(id)) return;
+    final snapshot = state.cachedNovel(id) ?? book;
     final addedAt = state.addedAt(id);
     try {
       await state.setShelfMembership(id, false);
@@ -1806,7 +1851,7 @@ class _ShelfPageState extends State<ShelfPage> {
           await state.setShelfMembership(
             id,
             true,
-            novel: book,
+            novel: snapshot,
             restoredAddedAt: addedAt,
           );
         }
@@ -1824,16 +1869,16 @@ class _ShelfPageState extends State<ShelfPage> {
     if (book == null || !context.mounted) return;
     final titleController = TextEditingController(text: book.displayTitle);
     final authorController = TextEditingController(text: book.displayAuthor);
-    final result = await showDialog<(String, String)?>(
+    final result = await showDialogWithControllers<(String, String)?>(
       context: context,
+      controllers: [titleController, authorController],
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) {
           final preview = LocalLibraryStore.safeFileNameForTitle(
             book.fileName,
             titleController.text.trim(),
           );
-          final willRename =
-              preview != null && preview != book.fileName;
+          final willRename = preview != null && preview != book.fileName;
           return AlertDialog(
             title: const Text('编辑书籍信息'),
             content: Column(
@@ -1875,8 +1920,6 @@ class _ShelfPageState extends State<ShelfPage> {
         },
       ),
     );
-    titleController.dispose();
-    authorController.dispose();
     if (result == null || !mounted) return;
     LocalBook updated;
     try {
@@ -1895,7 +1938,10 @@ class _ShelfPageState extends State<ShelfPage> {
     if (state.shelf.contains(id)) {
       try {
         await state.rememberNovel(local.toNovel(updated));
-      } catch (_) {}
+      } catch (_) {
+        if (context.mounted) showNovelFeedback(context, '文件已改名，书架信息保存失败，请重试');
+        return;
+      }
     }
     if (context.mounted) showNovelFeedback(context, '已保存');
   }
@@ -2099,10 +2145,10 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
           title: '没有删除权限',
           message: canReauth
               ? 'App 当前没有该文件夹的删除（写）权限，无法删除或改名源文件。'
-                  '重新授权一次文件夹（仍选原来的文件夹），并在系统授权时确认授予写权限；'
-                  '也可以先把这本书移出书库，源文件保留在手机里。'
+                    '重新授权一次文件夹（仍选原来的文件夹），并在系统授权时确认授予写权限；'
+                    '也可以先把这本书移出书库，源文件保留在手机里。'
               : '重新授权后仍无法删除这本书的源文件。'
-                  '可以先把这本书移出书库，源文件保留在手机里。',
+                    '可以先把这本书移出书库，源文件保留在手机里。',
           choices: [
             if (canReauth) (value: 'reauth', label: '重新授权文件夹'),
             (value: 'recordOnly', label: '仅移出书库（源文件保留）'),
@@ -2111,10 +2157,17 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
         );
         if (choice == 'reauth') {
           if (!context.mounted) return _DeleteFileResult.failed;
-          final previousFolder = local.folderUri;
+          final sourceId = local.bookFor(id)?.sourceId;
+          final previousFolder = sourceId != null && sourceId.startsWith('saf:')
+              ? sourceId.substring(4)
+              : local.folderUri;
+          if (previousFolder == null) {
+            showNovelFeedback(context, '无法确认原文件夹，请先在本地书库中重新授权');
+            return _DeleteFileResult.failed;
+          }
           String? picked;
           try {
-            picked = await local.pickFolder();
+            picked = await local.pickFolder(requiredFolder: previousFolder);
           } catch (_) {
             // pickFolder 的异常发生在本 catch 块内，外层 catch 捕获不到，
             // 必须就地处理，不能逸出成未捕获异步错误。
@@ -2147,10 +2200,12 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
           // 查询本身抛异常时也按保守失败处理，不让异常逸出删除流程。
           LocalTreePermission permission;
           try {
-            permission =
-                await LocalPlatform.queryTreePermission(picked);
-          } catch (error, stackTrace) {
-            debugPrint('failed to query tree permission: $error\n$stackTrace');
+            permission = await LocalPlatform.queryTreePermission(picked);
+          } catch (error, _) {
+            debugPrint(
+              'failed to query tree permission: '
+              '${describeSafeError(error, fallback: '权限查询失败')}',
+            );
             if (context.mounted) {
               showNovelFeedback(context, '无法确认文件夹写权限；为避免误删，本次不会重试删除，请检查授权后重试');
             }
@@ -2208,7 +2263,8 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
         final choice = await showNovelChoiceSheet(
           context,
           title: '这个存储位置不让 App 删除',
-          message: '源文件所在的存储不允许 App 删除文件，需要用文件管理器手动删除。'
+          message:
+              '源文件所在的存储不允许 App 删除文件，需要用文件管理器手动删除。'
               '可以先把这本书移出书库，源文件保留在手机里。',
           choices: [(value: 'recordOnly', label: '仅移出书库（源文件保留）')],
           reduceMotion: reduceMotion,
@@ -2222,7 +2278,8 @@ Future<_DeleteFileResult> _deleteLocalBookWithFallback(
         final choice = await showNovelChoiceSheet(
           context,
           title: '源文件已找不到',
-          message: '这本书的源文件可能已被移动或删除，无法再彻底删除。'
+          message:
+              '这本书的源文件可能已被移动或删除，无法再彻底删除。'
               '可以把它的书库记录移出。',
           choices: [(value: 'recordOnly', label: '移出书库记录')],
           reduceMotion: reduceMotion,
@@ -2587,10 +2644,7 @@ class SettingsPage extends StatelessWidget {
               subtitle: '新建、重命名或删除书架标签',
               onTap: () => pushNovelPage<void>(
                 context,
-                TagManagePage(
-                  state: state,
-                  local: localLibraryOf(repository),
-                ),
+                TagManagePage(state: state, local: localLibraryOf(repository)),
                 reduceMotion: state.reduceMotion,
               ),
             ),
@@ -2700,8 +2754,8 @@ class SettingsPage extends StatelessWidget {
                               fontFamily: font.family,
                               fontFamilyFallback:
                                   font.source == AppFontSource.imported
-                                      ? const ['SourceHanSerifCN']
-                                      : null,
+                                  ? const ['SourceHanSerifCN']
+                                  : null,
                             ),
                           ),
                           subtitle: font.source == AppFontSource.imported
@@ -3106,9 +3160,7 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
   final _disposed = Completer<void>();
   void _localChanged() {
     final book = _local?.bookFor(widget.novel.id);
-    if (!mounted ||
-        _loadingLocal ||
-        book?.revision == _revision) {
+    if (!mounted || _loadingLocal || book?.revision == _revision) {
       return;
     }
     setState(() {
@@ -3140,9 +3192,14 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
     final generation = _loadGeneration;
     if (widget.repository case final OfflineNovelRepository offline) {
       try {
-        final cached = await offline.cachedBook(widget.novel.id).timeout(widget.loadTimeout);
-        if (mounted && generation == _loadGeneration && _loadingLocal &&
-            cached != null && cached.chapters.isNotEmpty) {
+        final cached = await offline
+            .cachedBook(widget.novel.id)
+            .timeout(widget.loadTimeout);
+        if (mounted &&
+            generation == _loadGeneration &&
+            _loadingLocal &&
+            cached != null &&
+            cached.chapters.isNotEmpty) {
           setState(() => _cached = cached);
         }
       } catch (_) {
@@ -3169,35 +3226,66 @@ class _DetailLoaderPageState extends State<DetailLoaderPage> {
         throw StateError('详情加载已取消');
       }
     }
+
     Future<Novel> loadBody() async {
-      if (_local case final local?) {
-        widget.state.bindLocalChapters(local);
-        await local.ensureReady(widget.novel.id);
+      while (true) {
         checkActive();
+        if (_local case final local?) {
+          widget.state.bindLocalChapters(local);
+          await local.ensureReady(widget.novel.id);
+          checkActive();
+        }
+        final revision = _local?.bookFor(widget.novel.id)?.revision;
+        final detail = await widget.repository.detail(widget.novel);
+        checkActive();
+        final chapters = await widget.repository.chapters(widget.novel.id);
+        checkActive();
+        if (_local?.bookFor(widget.novel.id)?.revision != revision) continue;
+        final loaded = detail.withChapters(chapters);
+        unawaited(
+          widget.state
+              .rememberNovel(
+                loaded,
+                accepts: () =>
+                    !expired &&
+                    mounted &&
+                    generation == _loadGeneration &&
+                    _local?.bookFor(widget.novel.id)?.revision == revision,
+              )
+              .catchError((Object error) {
+                if (mounted) showNovelFeedback(context, '书籍详情保存失败，请重试');
+              }),
+        );
+        checkActive();
+        if (_local?.bookFor(widget.novel.id)?.revision != revision) continue;
+        _revision = revision;
+        return loaded;
       }
-      final detail = await widget.repository.detail(widget.novel);
-      checkActive();
-      final chapters = await widget.repository.chapters(widget.novel.id);
-      checkActive();
-      final loaded = detail.withChapters(chapters);
-      unawaited(widget.state.rememberNovel(loaded).catchError((Object error) {
-        debugPrint('书籍详情保存失败：$error');
-      }));
-      return loaded;
     }
+
     try {
-      final loaded = await Future.any<Novel>([
-        loadBody(),
-        _disposed.future.then<Novel>((_) => throw StateError('详情页已关闭')),
-      ]).timeout(widget.loadTimeout, onTimeout: () {
-        expired = true;
-        throw const LocalOperationTimeoutException('详情加载');
-      });
+      final loaded =
+          await Future.any<Novel>([
+            loadBody(),
+            _disposed.future.then<Novel>((_) => throw StateError('详情页已关闭')),
+          ]).timeout(
+            widget.loadTimeout,
+            onTimeout: () {
+              expired = true;
+              throw const LocalOperationTimeoutException('详情加载');
+            },
+          );
       checkActive();
-      _revision = _local?.bookFor(widget.novel.id)?.revision;
       return loaded;
     } finally {
-      if (generation == _loadGeneration) _loadingLocal = false;
+      if (generation == _loadGeneration) {
+        _loadingLocal = false;
+        if (mounted &&
+            !expired &&
+            _local?.bookFor(widget.novel.id)?.revision != _revision) {
+          WidgetsBinding.instance.addPostFrameCallback((_) => _localChanged());
+        }
+      }
     }
   }
 
@@ -3635,7 +3723,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
                                                   context,
                                                   widget.state,
                                                   novel.id,
-                                                  local: localLibraryOf(repository),
+                                                  local: localLibraryOf(
+                                                    repository,
+                                                  ),
                                                 ),
                                               ),
                                             ],
@@ -3783,9 +3873,17 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (novel.chapters[index].volume.isNotEmpty)
-                  Text(novel.chapters[index].volume, style: const TextStyle(fontSize: 11)),
-                Text(novel.chapters[index].title,
-                  style: const TextStyle(fontWeight: FontWeight.w500, fontSize: 14)),
+                  Text(
+                    novel.chapters[index].volume,
+                    style: const TextStyle(fontSize: 11),
+                  ),
+                Text(
+                  novel.chapters[index].title,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w500,
+                    fontSize: 14,
+                  ),
+                ),
               ],
             ),
           ),
@@ -3876,13 +3974,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         children: [
           GlassMenuItem(
             label: '编辑书籍信息',
-            onPressed: () =>
-                Navigator.of(menuContext).pop('edit'),
+            onPressed: () => Navigator.of(menuContext).pop('edit'),
           ),
           GlassMenuItem(
             label: '删除文件',
-            onPressed: () =>
-                Navigator.of(menuContext).pop('delete'),
+            onPressed: () => Navigator.of(menuContext).pop('delete'),
           ),
         ],
       ),
@@ -3907,16 +4003,16 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     final titleController = TextEditingController(text: book.displayTitle);
     final authorController = TextEditingController(text: book.displayAuthor);
     try {
-      final result = await showDialog<(String, String)?>(
+      final result = await showDialogWithControllers<(String, String)?>(
         context: context,
+        controllers: [titleController, authorController],
         builder: (dialogContext) => StatefulBuilder(
           builder: (dialogContext, setDialogState) {
             final preview = LocalLibraryStore.safeFileNameForTitle(
               book.fileName,
               titleController.text.trim(),
             );
-            final willRename =
-                preview != null && preview != book.fileName;
+            final willRename = preview != null && preview != book.fileName;
             return AlertDialog(
               title: const Text('编辑书籍信息'),
               content: Column(
@@ -3976,7 +4072,7 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
         );
       } catch (e) {
         if (context.mounted) {
-          showNovelFeedback(context, '保存失败：${e.toString()}');
+          showNovelFeedback(context, describeSafeError(e, fallback: '保存失败'));
         }
         return;
       }
@@ -3984,7 +4080,11 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       if (state.shelf.contains(id)) {
         try {
           await state.rememberNovel(local.toNovel(updated));
-        } catch (_) {}
+        } catch (_) {
+          if (mounted) setState(() => _novelOverride = local.toNovel(updated));
+          if (context.mounted) showNovelFeedback(context, '文件已改名，书架信息保存失败，请重试');
+          return;
+        }
       }
       if (mounted && context.mounted) {
         showNovelFeedback(context, '已保存');
@@ -3993,11 +4093,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
       }
     } catch (e) {
       if (context.mounted) {
-        showNovelFeedback(context, '保存失败：${e.toString()}');
+        showNovelFeedback(context, describeSafeError(e, fallback: '保存失败'));
       }
-    } finally {
-      titleController.dispose();
-      authorController.dispose();
     }
   }
 
@@ -4060,8 +4157,9 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     // pop 前先取到 ScaffoldMessenger：pop 后再用 context 找 messenger，
     // 可能拿到正在退场路由的，反馈挂上去用户看不到；
     // 也不依赖"pop 后 context 仍 mounted"这一时序。
-    final messenger =
-        context.mounted ? ScaffoldMessenger.maybeOf(context) : null;
+    final messenger = context.mounted
+        ? ScaffoldMessenger.maybeOf(context)
+        : null;
     if (context.mounted) Navigator.of(context).pop();
     messenger
       ?..hideCurrentSnackBar()
@@ -4076,8 +4174,8 @@ class _DetailPageState extends State<DetailPage> with TickerProviderStateMixin {
     _readerOpening = true;
     try {
       final local = localLibraryOf(repository);
-      final Widget page = local != null &&
-              local.kindFor(novel.id) == LocalBookKind.pdf
+      final Widget page =
+          local != null && local.kindFor(novel.id) == LocalBookKind.pdf
           ? LocalPdfReaderPage(novel: novel, state: state, local: local)
           : ReaderPage(
               novel: novel,
@@ -4121,16 +4219,22 @@ class _ReaderPageState extends State<ReaderPage>
   late Novel _novel = widget.novel;
   LocalLibraryStore? get _local => localLibraryOf(widget.repository);
   bool _reloadingLocal = false;
+  bool _localReloadPending = false;
 
   void _localChanged() {
     final local = _local;
     final book = local?.bookFor(_novel.id);
-    if (!mounted || local == null || book == null || _reloadingLocal) return;
+    if (!mounted || local == null || book == null) return;
+    if (_reloadingLocal) {
+      _localReloadPending = true;
+      return;
+    }
     if (!local.isMigrationPending(_novel.id) &&
         _novel.chapters.isNotEmpty &&
         _novel.chapters.first.revision == book.revision) {
       return;
     }
+    _savePosition(notify: false);
     _idleSave?.cancel();
     _ready = false;
     _currentContent = null;
@@ -4144,8 +4248,9 @@ class _ReaderPageState extends State<ReaderPage>
     });
   }
 
-  Future<({ReaderContent? content, Object? error})>
-  _reloadLocalContent({bool initial = false}) async {
+  Future<({ReaderContent? content, Object? error})> _reloadLocalContent({
+    bool initial = false,
+  }) async {
     _reloadingLocal = true;
     try {
       final chapters = await widget.repository.chapters(_novel.id);
@@ -4153,10 +4258,15 @@ class _ReaderPageState extends State<ReaderPage>
         return (content: null, error: const StaleLocalChapterException());
       }
       final saved = widget.state.positionFor(_novel.id);
-      final freshSelection = initial && _novel.chapters.isNotEmpty && chapters.isNotEmpty &&
+      final freshSelection =
+          initial &&
+          _novel.chapters.isNotEmpty &&
+          chapters.isNotEmpty &&
           _novel.chapters.first.revision == chapters.first.revision;
       _novel = _novel.withChapters(chapters);
-      final savedIndex = saved == null ? null : widget.state.chapterForPosition(_novel, saved);
+      final savedIndex = saved == null
+          ? null
+          : widget.state.chapterForPosition(_novel, saved);
       final index = freshSelection ? widget.initialChapter : savedIndex ?? 0;
       if (index < 0 || index >= chapters.length) {
         throw const StaleLocalChapterException();
@@ -4171,6 +4281,12 @@ class _ReaderPageState extends State<ReaderPage>
       return (content: null, error: error);
     } finally {
       _reloadingLocal = false;
+      if (_localReloadPending && mounted) {
+        _localReloadPending = false;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _localChanged();
+        });
+      }
     }
   }
 
@@ -4192,8 +4308,9 @@ class _ReaderPageState extends State<ReaderPage>
   final _paragraphRegistry = ReaderParagraphRegistry();
   // 阅读进度条：章节字数权重 + 章内滚动比例。
   List<int> _chapterWeights = const [];
+  List<int> _chapterPrefix = const [0];
   int _totalWeight = 0;
-  double _progressValue = 0;
+  final _progressValue = ValueNotifier<double>(0);
   bool _progressDragging = false;
   double _dragValue = 0;
   // 拖拽 accepted 后底层指针取消可能走 onEnd 而非 onCancel，
@@ -4258,7 +4375,9 @@ class _ReaderPageState extends State<ReaderPage>
             : saved.chapter == _chapter)) {
       _restorePending = saved;
     }
-    _content = _local != null ? _reloadLocalContent(initial: true) : _loadContent();
+    _content = _local != null
+        ? _reloadLocalContent(initial: true)
+        : _loadContent();
   }
 
   @override
@@ -4279,6 +4398,7 @@ class _ReaderPageState extends State<ReaderPage>
     _savePosition(notify: false, finalSave: true);
     _highlightTimer?.cancel();
     _findMatch.dispose();
+    _progressValue.dispose();
     _bookmarkLandingTimer?.cancel();
     _bookmarkLanding.dispose();
     _listening?.snapshot.removeListener(_listeningChanged);
@@ -4309,10 +4429,11 @@ class _ReaderPageState extends State<ReaderPage>
       });
     }
     if (!_ready || _restoring || _layoutWidth <= 0) return;
-    final media = MediaQuery.of(context);
+    final width = MediaQuery.sizeOf(context).width;
     final scale =
-        media.textScaler.scale(widget.state.fontSize) / widget.state.fontSize;
-    if ((media.size.width - _layoutWidth).abs() >= 1 ||
+        MediaQuery.textScalerOf(context).scale(widget.state.fontSize) /
+        widget.state.fontSize;
+    if ((width - _layoutWidth).abs() >= 1 ||
         (scale - _layoutTextScale).abs() >= .01 ||
         _layoutFontId != widget.state.appFontId) {
       final position = _currentPosition();
@@ -4528,10 +4649,23 @@ class _ReaderPageState extends State<ReaderPage>
       final chapters = _novel.chapters;
       _chapterWeights = [
         for (final c in chapters)
-          c.content.replaceAll(RegExp(r'\s'), '').length,
+          c.content.runes
+              .where(
+                (rune) =>
+                    !_readerWhitespace.hasMatch(String.fromCharCode(rune)),
+              )
+              .length,
       ];
     }
     _totalWeight = _chapterWeights.fold(0, (a, b) => a + b);
+    if (_totalWeight <= 0 && _chapterWeights.isNotEmpty) {
+      _chapterWeights = List.filled(_chapterWeights.length, 1);
+      _totalWeight = _chapterWeights.length;
+    }
+    _chapterPrefix = <int>[0];
+    for (final weight in _chapterWeights) {
+      _chapterPrefix.add(_chapterPrefix.last + weight);
+    }
   }
 
   /// 章内滚动比例（0~1）。
@@ -4545,10 +4679,9 @@ class _ReaderPageState extends State<ReaderPage>
   /// 全书进度（0~1）：前面章节权重 + 当前章权重 × 章内比例。
   double _bookProgress() {
     if (_totalWeight <= 0 || _chapterWeights.isEmpty) return 0;
-    var before = 0;
-    for (var i = 0; i < _chapter && i < _chapterWeights.length; i++) {
-      before += _chapterWeights[i];
-    }
+    final before = _chapter < _chapterPrefix.length
+        ? _chapterPrefix[_chapter]
+        : _totalWeight;
     final current = _chapter < _chapterWeights.length
         ? _chapterWeights[_chapter]
         : 0;
@@ -4562,8 +4695,8 @@ class _ReaderPageState extends State<ReaderPage>
   void _updateProgressFromScroll() {
     if (_progressDragging) return;
     final v = _bookProgress();
-    if ((v - _progressValue).abs() > 0.0005) {
-      setState(() => _progressValue = v);
+    if ((v - _progressValue.value).abs() > 0.0005) {
+      _progressValue.value = v;
     }
   }
 
@@ -4686,7 +4819,7 @@ class _ReaderPageState extends State<ReaderPage>
     if (_scroll.hasClients) _scroll.jumpTo(0);
     // 章节切换后刷新进度条（新章节从头开始）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _progressValue = _bookProgress());
+      if (mounted) _progressValue.value = _bookProgress();
     });
   }
 
@@ -4714,7 +4847,11 @@ class _ReaderPageState extends State<ReaderPage>
               : null,
         ),
       );
-      if (mounted && index != null && _novel.chapters.first.revision == catalogueRevision && !(_local?.isMigrationPending(_novel.id) ?? false)) _go(index);
+      if (mounted &&
+          index != null &&
+          _novel.chapters.first.revision == catalogueRevision &&
+          !(_local?.isMigrationPending(_novel.id) ?? false))
+        _go(index);
     } finally {
       _catalogueOpen = false;
       _listeningTarget = null;
@@ -4883,14 +5020,12 @@ class _ReaderPageState extends State<ReaderPage>
   ) {
     final url = readerIllustrationUrl(paragraphs[index]);
     if (url != null) {
+      final illustrations = _currentContent?.illustrations ?? [url];
       return ReaderIllustration(
         url: url,
         onOpen: () => pushNovelPage<void>(
           context,
-          ReaderIllustrationGallery(
-            urls: _currentContent!.illustrations,
-            initialUrl: url,
-          ),
+          ReaderIllustrationGallery(urls: illustrations, initialUrl: url),
           reduceMotion: widget.state.reduceMotion,
         ),
       );
@@ -5173,25 +5308,28 @@ class _ReaderPageState extends State<ReaderPage>
     _restoring = true;
     // A lazy sliver refines its estimate after a large jump. Follow that new
     // extent for a bounded number of frames, including an exact chapter end.
-    for (var step = 0; step < 4; step++) {
-      if (!mounted ||
-          generation != _contentGeneration ||
-          ticket != _restoreTicket ||
-          !_scroll.hasClients) {
-        return;
+    try {
+      for (var step = 0; step < 4; step++) {
+        if (!mounted ||
+            generation != _contentGeneration ||
+            ticket != _restoreTicket ||
+            !_scroll.hasClients) {
+          return;
+        }
+        final maximum = _scroll.position.maxScrollExtent;
+        _scroll.jumpTo(value * maximum);
+        await WidgetsBinding.instance.endOfFrame;
+        if (!mounted ||
+            generation != _contentGeneration ||
+            ticket != _restoreTicket ||
+            !_scroll.hasClients) {
+          return;
+        }
+        if ((_scroll.position.maxScrollExtent - maximum).abs() < .5) break;
       }
-      final maximum = _scroll.position.maxScrollExtent;
-      _scroll.jumpTo(value * maximum);
-      await WidgetsBinding.instance.endOfFrame;
-      if (!mounted ||
-          generation != _contentGeneration ||
-          ticket != _restoreTicket ||
-          !_scroll.hasClients) {
-        return;
-      }
-      if ((_scroll.position.maxScrollExtent - maximum).abs() < .5) break;
+    } finally {
+      if (ticket == _restoreTicket) _restoring = false;
     }
-    _restoring = false;
     _savePosition(notify: false);
   }
 
@@ -5202,120 +5340,132 @@ class _ReaderPageState extends State<ReaderPage>
     final ticket = ++_restoreTicket;
     _restoring = true;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (!mounted ||
-          generation != _contentGeneration ||
-          ticket != _restoreTicket ||
-          !_scroll.hasClients ||
-          !_ready) {
-        return;
-      }
-      final saved = _restorePending;
-      _restorePending = null;
-      int? landingParagraph;
-      if (saved != null) {
-        final centreBookmark = _bookmarkLandingPending;
-        final viewportBottom = centreBookmark
-            ? (_scroll.position.viewportDimension -
-                      MediaQuery.paddingOf(context).bottom -
-                      96)
-                  .clamp(_readingInset + 1, double.infinity)
-            : null;
-        final sameLayout =
-            (saved.fontSize - widget.state.fontSize).abs() < .01 &&
-            (saved.lineHeight - widget.state.lineHeight).abs() < .01 &&
-            (saved.width - _layoutWidth).abs() < 1 &&
-            (saved.textScale - _textScale).abs() < .01 &&
-            saved.typeface == widget.state.appFontId;
-        var anchor =
-            saved.paragraphIndex != null &&
-                saved.paragraphIndex! >= 0 &&
-                saved.paragraphIndex! < _paragraphCount
-            ? (index: saved.paragraphIndex!, fraction: saved.paragraphFraction)
-            : null;
-        for (var step = 0; step < 10; step++) {
-          if (!mounted ||
-              generation != _contentGeneration ||
-              ticket != _restoreTicket ||
-              !_scroll.hasClients) {
-            return;
-          }
-          final maximum = _scroll.position.maxScrollExtent;
-          final paragraph = anchor == null
-              ? null
-              : _paragraphRegistry.target(
-                  anchor,
-                  _readingInset,
-                  viewportBottom: viewportBottom,
-                  trailingSpace: centreBookmark ? 12 : 0,
-                );
-          final target = sameLayout && step == 0 && !centreBookmark
-              ? saved.offset
-              : paragraph?.offset ??
-                    (sameLayout && saved.fraction < .999
-                        ? saved.offset
-                        : saved.fraction * maximum);
-          _scroll.jumpTo(
-            target.clamp(
-              0.0,
-              centreBookmark && paragraph?.exact == true
-                  ? maximum.clamp(0.0, double.infinity)
-                  : double.infinity,
-            ),
-          );
-          await WidgetsBinding.instance.endOfFrame;
-          if (!mounted ||
-              generation != _contentGeneration ||
-              ticket != _restoreTicket ||
-              !_scroll.hasClients) {
-            return;
-          }
-          // Older bookmarks stored only pixels. Resolve that position once,
-          // then use the same paragraph-centred refinement as newer bookmarks.
-          if (centreBookmark && anchor == null) {
-            anchor = _paragraphRegistry.capture(
-              _scroll.offset + _readingInset,
-              clampToLast: true,
-            );
-          }
-          final refined = anchor == null
-              ? null
-              : _paragraphRegistry.target(
-                  anchor,
-                  _readingInset,
-                  viewportBottom: viewportBottom,
-                  trailingSpace: centreBookmark ? 12 : 0,
-                );
-          if (refined?.exact == true &&
-              (_scroll.offset -
-                          refined!.offset.clamp(
-                            0.0,
-                            centreBookmark
-                                ? _scroll.position.maxScrollExtent.clamp(
-                                    0.0,
-                                    double.infinity,
-                                  )
-                                : double.infinity,
-                          ))
-                      .abs() <
-                  .5) {
-            break;
-          }
-          if (anchor == null &&
-              (_scroll.position.maxScrollExtent - maximum).abs() < .5) {
-            break;
-          }
+      var completed = false;
+      try {
+        if (!mounted ||
+            generation != _contentGeneration ||
+            ticket != _restoreTicket ||
+            !_scroll.hasClients ||
+            !_ready) {
+          return;
         }
-        landingParagraph = anchor?.index;
+        final saved = _restorePending;
+        _restorePending = null;
+        int? landingParagraph;
+        if (saved != null) {
+          final centreBookmark = _bookmarkLandingPending;
+          final viewportBottom = centreBookmark
+              ? (_scroll.position.viewportDimension -
+                        MediaQuery.paddingOf(context).bottom -
+                        96)
+                    .clamp(_readingInset + 1, double.infinity)
+              : null;
+          final sameLayout =
+              (saved.fontSize - widget.state.fontSize).abs() < .01 &&
+              (saved.lineHeight - widget.state.lineHeight).abs() < .01 &&
+              (saved.width - _layoutWidth).abs() < 1 &&
+              (saved.textScale - _textScale).abs() < .01 &&
+              saved.typeface == widget.state.appFontId;
+          var anchor =
+              saved.paragraphIndex != null &&
+                  saved.paragraphIndex! >= 0 &&
+                  saved.paragraphIndex! < _paragraphCount
+              ? (
+                  index: saved.paragraphIndex!,
+                  fraction: saved.paragraphFraction,
+                )
+              : null;
+          for (var step = 0; step < 10; step++) {
+            if (!mounted ||
+                generation != _contentGeneration ||
+                ticket != _restoreTicket ||
+                !_scroll.hasClients) {
+              return;
+            }
+            final maximum = _scroll.position.maxScrollExtent;
+            final paragraph = anchor == null
+                ? null
+                : _paragraphRegistry.target(
+                    anchor,
+                    _readingInset,
+                    viewportBottom: viewportBottom,
+                    trailingSpace: centreBookmark ? 12 : 0,
+                  );
+            final target = sameLayout && step == 0 && !centreBookmark
+                ? saved.offset
+                : paragraph?.offset ??
+                      (sameLayout && saved.fraction < .999
+                          ? saved.offset
+                          : saved.fraction * maximum);
+            _scroll.jumpTo(
+              target.clamp(
+                0.0,
+                centreBookmark && paragraph?.exact == true
+                    ? maximum.clamp(0.0, double.infinity)
+                    : double.infinity,
+              ),
+            );
+            await WidgetsBinding.instance.endOfFrame;
+            if (!mounted ||
+                generation != _contentGeneration ||
+                ticket != _restoreTicket ||
+                !_scroll.hasClients) {
+              return;
+            }
+            // Older bookmarks stored only pixels. Resolve that position once,
+            // then use the same paragraph-centred refinement as newer bookmarks.
+            if (centreBookmark && anchor == null) {
+              anchor = _paragraphRegistry.capture(
+                _scroll.offset + _readingInset,
+                clampToLast: true,
+              );
+            }
+            final refined = anchor == null
+                ? null
+                : _paragraphRegistry.target(
+                    anchor,
+                    _readingInset,
+                    viewportBottom: viewportBottom,
+                    trailingSpace: centreBookmark ? 12 : 0,
+                  );
+            if (refined?.exact == true &&
+                (_scroll.offset -
+                            refined!.offset.clamp(
+                              0.0,
+                              centreBookmark
+                                  ? _scroll.position.maxScrollExtent.clamp(
+                                      0.0,
+                                      double.infinity,
+                                    )
+                                  : double.infinity,
+                            ))
+                        .abs() <
+                    .5) {
+              break;
+            }
+            if (anchor == null &&
+                (_scroll.position.maxScrollExtent - maximum).abs() < .5) {
+              break;
+            }
+          }
+          landingParagraph = anchor?.index;
+        }
+        if (!mounted ||
+            generation != _contentGeneration ||
+            ticket != _restoreTicket) {
+          return;
+        }
+        _restoring = false;
+        _revealChapter();
+        _landBookmark(saved, paragraphIndex: landingParagraph);
+        _savePosition();
+        completed = true;
+      } finally {
+        if (ticket == _restoreTicket) {
+          _restoring = false;
+          if (!completed) _restoreQueued = false;
+        }
       }
-      if (!mounted ||
-          generation != _contentGeneration ||
-          ticket != _restoreTicket) {
-        return;
-      }
-      _restoring = false;
-      _revealChapter();
-      _landBookmark(saved, paragraphIndex: landingParagraph);
-      _savePosition();
     });
   }
 
@@ -5462,40 +5612,45 @@ class _ReaderPageState extends State<ReaderPage>
                             right: 56,
                             bottom: 8,
                           ),
-                          child: _ReaderProgressBar(
-                            value: _progressDragging ? _dragValue : _progressValue,
-                            dragging: _progressDragging,
-                            previewText: _dragPreviewText(
-                              _progressDragging ? _dragValue : _progressValue,
-                            ),
-                            onDragStart: () =>
-                                setState(() {
-                              _progressDragging = true;
-                              _progressPointerCancelled = false;
-                              _dragValue = _progressValue;
-                            }),
-                            onDragUpdate: (v) =>
-                                setState(() => _dragValue = v),
-                            onDragEnd: () async {
-                              // 底层指针取消可能绕开 onCancel 直接进 onEnd：
-                              // 此时只重置状态，不跳转。
-                              final cancelled = _progressPointerCancelled;
-                              final target = _dragValue;
-                              setState(() {
-                                _progressDragging = false;
-                                _progressPointerCancelled = false;
-                              });
-                              if (!cancelled) {
-                                await _jumpToProgress(target);
-                              }
-                            },
-                            onPointerCancel: () =>
-                                _progressPointerCancelled = true,
-                            // 取消只重置状态，不跳转。
-                            onDragCancel: () => setState(() {
-                              _progressDragging = false;
-                              _progressPointerCancelled = false;
-                            }),
+                          child: ValueListenableBuilder<double>(
+                            valueListenable: _progressValue,
+                            builder: (context, progress, _) =>
+                                _ReaderProgressBar(
+                                  value: _progressDragging
+                                      ? _dragValue
+                                      : progress,
+                                  dragging: _progressDragging,
+                                  previewText: _dragPreviewText(
+                                    _progressDragging ? _dragValue : progress,
+                                  ),
+                                  onDragStart: () => setState(() {
+                                    _progressDragging = true;
+                                    _progressPointerCancelled = false;
+                                    _dragValue = _progressValue.value;
+                                  }),
+                                  onDragUpdate: (v) =>
+                                      setState(() => _dragValue = v),
+                                  onDragEnd: () async {
+                                    // 底层指针取消可能绕开 onCancel 直接进 onEnd：
+                                    // 此时只重置状态，不跳转。
+                                    final cancelled = _progressPointerCancelled;
+                                    final target = _dragValue;
+                                    setState(() {
+                                      _progressDragging = false;
+                                      _progressPointerCancelled = false;
+                                    });
+                                    if (!cancelled) {
+                                      await _jumpToProgress(target);
+                                    }
+                                  },
+                                  onPointerCancel: () =>
+                                      _progressPointerCancelled = true,
+                                  // 取消只重置状态，不跳转。
+                                  onDragCancel: () => setState(() {
+                                    _progressDragging = false;
+                                    _progressPointerCancelled = false;
+                                  }),
+                                ),
                           ),
                         ),
                       GlassDock(
@@ -5621,7 +5776,9 @@ class _ReaderPageState extends State<ReaderPage>
                           Row(
                             children: [
                               Text(
-                                isLocalNovelId(_novel.id) ? '目录项 ${_chapter + 1}' : '第 ${_chapter + 1} 章',
+                                isLocalNovelId(_novel.id)
+                                    ? '目录项 ${_chapter + 1}'
+                                    : '第 ${_chapter + 1} 章',
                                 style: TextStyle(
                                   color: Theme.of(
                                     context,
@@ -5877,55 +6034,59 @@ class _ReaderPageState extends State<ReaderPage>
       });
       final ticket = ++_restoreTicket;
       _restoring = true;
-      for (var step = 0; step < 20; step++) {
+      try {
+        for (var step = 0; step < 20; step++) {
+          if (!mounted ||
+              generation != _contentGeneration ||
+              ticket != _restoreTicket ||
+              !_scroll.hasClients) {
+            return;
+          }
+          final precise = _paragraphRegistry.matchOffset(
+            match.paragraph,
+            match.start,
+            match.end,
+            _readingInset + 8,
+          );
+          final estimate = _paragraphRegistry.target((
+            index: match.paragraph,
+            fraction: 0,
+          ), _readingInset + 8);
+          final target = precise ?? estimate?.offset;
+          if (target == null) break;
+          _scroll.jumpTo(target.clamp(0.0, double.infinity));
+          await WidgetsBinding.instance.endOfFrame;
+          if (!mounted ||
+              generation != _contentGeneration ||
+              ticket != _restoreTicket ||
+              !_scroll.hasClients) {
+            return;
+          }
+          final refined = _paragraphRegistry.matchOffset(
+            match.paragraph,
+            match.start,
+            match.end,
+            _readingInset + 8,
+          );
+          if (refined != null &&
+              (_scroll.offset -
+                          refined.clamp(0.0, _scroll.position.maxScrollExtent))
+                      .abs() <
+                  1) {
+            break;
+          }
+        }
         if (!mounted ||
             generation != _contentGeneration ||
-            ticket != _restoreTicket ||
-            !_scroll.hasClients) {
+            ticket != _restoreTicket) {
           return;
         }
-        final precise = _paragraphRegistry.matchOffset(
-          match.paragraph,
-          match.start,
-          match.end,
-          _readingInset + 8,
-        );
-        final estimate = _paragraphRegistry.target((
-          index: match.paragraph,
-          fraction: 0,
-        ), _readingInset + 8);
-        final target = precise ?? estimate?.offset;
-        if (target == null) break;
-        _scroll.jumpTo(target.clamp(0.0, double.infinity));
-        await WidgetsBinding.instance.endOfFrame;
-        if (!mounted ||
-            generation != _contentGeneration ||
-            ticket != _restoreTicket ||
-            !_scroll.hasClients) {
-          return;
-        }
-        final refined = _paragraphRegistry.matchOffset(
-          match.paragraph,
-          match.start,
-          match.end,
-          _readingInset + 8,
-        );
-        if (refined != null &&
-            (_scroll.offset -
-                        refined.clamp(0.0, _scroll.position.maxScrollExtent))
-                    .abs() <
-                1) {
-          break;
-        }
+        _restoring = false;
+        _savePosition(notify: false);
+        _showChrome(true);
+      } finally {
+        if (ticket == _restoreTicket) _restoring = false;
       }
-      if (!mounted ||
-          generation != _contentGeneration ||
-          ticket != _restoreTicket) {
-        return;
-      }
-      _restoring = false;
-      _savePosition(notify: false);
-      _showChrome(true);
     } finally {
       _findOpen = false;
     }
@@ -6015,7 +6176,9 @@ class _ReaderProgressBar extends StatelessWidget {
                                 width: w,
                                 height: 4,
                                 decoration: BoxDecoration(
-                                  color: scheme.onSurface.withValues(alpha: 0.15),
+                                  color: scheme.onSurface.withValues(
+                                    alpha: 0.15,
+                                  ),
                                   borderRadius: BorderRadius.circular(2),
                                 ),
                               ),
@@ -6033,7 +6196,7 @@ class _ReaderProgressBar extends StatelessWidget {
                                 Positioned(
                                   left: (w * value.clamp(0.0, 1.0) - 7).clamp(
                                     0.0,
-                                    w - 14,
+                                    math.max(0.0, w - 14),
                                   ),
                                   top: -5,
                                   child: Container(
@@ -6044,7 +6207,9 @@ class _ReaderProgressBar extends StatelessWidget {
                                       shape: BoxShape.circle,
                                       boxShadow: [
                                         BoxShadow(
-                                          color: Colors.black.withValues(alpha: 0.2),
+                                          color: Colors.black.withValues(
+                                            alpha: 0.2,
+                                          ),
                                           blurRadius: 4,
                                         ),
                                       ],

@@ -33,7 +33,6 @@ internal class AccountSessionStore(context: Context) {
                 .takeIf { Regex("[A-Za-z0-9,-]{8,256}").matches(it) }
         }
     } catch (_: Exception) {
-        preferences.edit().clear().commit()
         null
     }
     fun write(cookie: String?) {

@@ -152,7 +152,7 @@ class SpeechAudioCache implements SpeechAudioSource {
         cancellation.check();
         return file;
       }
-      final temporary = File('${file.path}.part');
+      final temporary = File('${file.path}.${EdgeSpeechClient.connectionId()}.part');
       try {
         if (voice.source == ListeningSource.edge) {
           final data = await edge.synthesize(text, voice, cancellation);
@@ -222,7 +222,9 @@ class SpeechAudioCache implements SpeechAudioSource {
           },
         );
       } finally {
-        if (await temporary.exists()) await temporary.delete();
+        try {
+          if (await temporary.exists()) await temporary.delete();
+        } on FileSystemException catch (_) {}
       }
     } on SpeechCancelled {
       rethrow;

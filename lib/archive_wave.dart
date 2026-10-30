@@ -240,7 +240,8 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
     _reduced = widget.reduceMotion || MediaQuery.disableAnimationsOf(context);
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width = constraints.maxWidth;
+        final width = constraints.hasBoundedWidth ? constraints.maxWidth : MediaQuery.sizeOf(context).width;
+        if (!width.isFinite || width <= 0) return const SizedBox.shrink();
         final spine = _WavePose.spineFor(width);
         final pitch = _WavePose.pitchFor(width);
         final cover = _WavePose.coverFor(width);
@@ -259,7 +260,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
         )..addListener(_scrolled);
         final rowHeight = ArchiveShelfGeometry.rowHeight(cover, height);
         final dark = Theme.of(context).brightness == Brightness.dark;
-        return Column(
+        return SizedBox(width: width, child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -408,7 +409,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               .72,
             ),
           ],
-        );
+        ));
       },
     );
   }
@@ -1173,7 +1174,9 @@ class ArchiveShelfSceneRender extends RenderBox
 
   @override
   void applyPaintTransform(RenderBox child, Matrix4 transform) {
-    final offset = _offset(_boxes.indexOf(child));
+    final index = _boxes.indexOf(child);
+    if (index < 0 || index >= _x.length) return;
+    final offset = _offset(index);
     transform.translateByDouble(offset.dx, offset.dy, 0, 1);
   }
 

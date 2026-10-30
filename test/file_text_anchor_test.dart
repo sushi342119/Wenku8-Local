@@ -12,6 +12,31 @@ void main() {
   });
   tearDown(() => root.delete(recursive: true));
 
+  test('chapter longer than slice limit anchors without materializing the chapter', () async {
+    final body = '甲😀乙\n\n' * 800000;
+    final text = '  $body  ';
+    final file = await File('${root.path}/long.txt').writeAsString(text);
+    final anchor = await FileTextAnchor.open(file.path);
+    final chapters = [LocalChapterIndex('正文', 0, text.length)];
+    final global = text.length - 200;
+    expect(await anchor.locate(chapters, global), locateTextAnchor(text, chapters, global));
+  });
+
+  test('expired text range reports a recoverable state error', () {
+    expect(() => locateTextAnchor('短', [LocalChapterIndex('旧', 0, 50)], 1), throwsStateError);
+  });
+
+  test('same path overwritten after open relocates retained text', () async {
+    final original = '${'旧段落' * 40}\n\n${'独特目标' * 40}';
+    final file = await File('${root.path}/same.txt').writeAsString(original);
+    final old = await FileTextAnchor.open(file.path);
+    final updated = '前方新增内容。\n\n$original';
+    await file.writeAsString(updated);
+    final fresh = await FileTextAnchor.open(file.path);
+    final offset = original.indexOf('独特目标') + 24;
+    expect(await fresh.relocateFrom(old, offset), relocateTextOffset(original, updated, offset));
+  });
+
   test(
     'streamed anchors match string anchors across edits and repeated passages',
     () async {

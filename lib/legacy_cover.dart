@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/services.dart';
 
+import 'local_library.dart';
+
 /// Reuses the original Android cover API, with bounded encoded memory and
 /// stable cached futures. Eviction leaves the native disk cache untouched.
 abstract final class LegacyCover {
@@ -10,7 +12,14 @@ abstract final class LegacyCover {
     request: (aid) => _channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
   );
   static Uint8List? peek(int aid) => _cache.peek(aid);
-  static Future<Uint8List> bytes(int aid) => _cache.load(aid);
+  static Future<Uint8List> bytes(int aid) {
+    if (isLocalNovelId(aid)) {
+      final cached = _cache.peek(aid);
+      if (cached != null) return Future.value(cached);
+      return Future.error(const FormatException('本地书籍没有远程封面'));
+    }
+    return _cache.load(aid);
+  }
 
   /// Explicit local fixtures never query a remote cover endpoint.
   static void seedLocalBytes(int aid, Uint8List bytes) =>
@@ -79,6 +88,7 @@ class LegacyCoverCache {
     if (pending != null) return pending;
     final completer = Completer<Uint8List>();
     final future = completer.future;
+    future.ignore();
     _pending[aid] = future;
     unawaited(() async {
       try {

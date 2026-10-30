@@ -58,6 +58,14 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   }
 
   @override
+  void didUpdateWidget(ReaderCatalogue oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.novel.chapters, widget.novel.chapters)) {
+      _matches = _filter(_search.text);
+    }
+  }
+
+  @override
   void dispose() {
     _search.dispose();
     _scroll.dispose();

@@ -51,11 +51,22 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                     Uri.parse("package:${context.packageName}")))
                 result.success(null)
             }
-            "openRelease" -> withActivity(result) { page ->
+            "openRelease" -> {
                 val uri = Uri.parse(call.arguments as? String ?: "")
-                require(uri.scheme == "https" && uri.host == "github.com" && uri.userInfo == null && uri.path.orEmpty().contains("/releases/"))
+                val segments = uri.pathSegments
+                val valid = uri.scheme == "https" && uri.host == "github.com" &&
+                    uri.userInfo == null && uri.port in setOf(-1, 443) &&
+                    segments.size >= 4 && segments[0] == "sushi342119" &&
+                    segments[1] == "Wenku8-Local" && segments[2] == "releases" &&
+                    segments[3] in setOf("tag", "download")
+                if (!valid) {
+                    result.error("INVALID_RELEASE", "更新页面地址无效", null)
+                    return
+                }
+                withActivity(result) { page ->
                 page.startActivity(Intent(Intent.ACTION_VIEW, uri))
                 result.success(null)
+                }
             }
             "install" -> {
                 val path = call.argument<String>("path") ?: ""
@@ -78,8 +89,8 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                                 }
                             }
                         }
-                    } catch (failure: Exception) {
-                        main.post { if (attached) result.error("APK_REJECTED", failure.message ?: "安装包无法验证，请重新下载", null) }
+                    } catch (_: Exception) {
+                        main.post { if (attached) result.error("APK_REJECTED", "安装包无法验证，请重新下载", null) }
                     }
                 }
             }
