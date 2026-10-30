@@ -12,13 +12,13 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.4.0';
-const currentAppBuild = 40;
+const currentAppVersion = '1.5.0';
+const currentAppBuild = 41;
 const currentReleaseNotes = '''
-1. 新增 EPUB 支持：SAF 文件夹与应用文件夹扫描均可发现 EPUB 并进库
-2. EPUB 阅读器按章节顺序显示文字与插图，支持封面、章节标题回退
-3. EPUB 与 TXT/PDF 同机制：标签改名、备份/恢复、阅读进度、删除清理
-4. 坏 EPUB（截断、非 ZIP、畸形 OPF、加密正文/图片）干净拒绝，不中断整轮扫描、不留孤立缓存
+1. EPUB 阅读器补齐 TXT 同款界面：顶部书签/字号、底部上一章/目录/下一章、点正文显隐
+2. 目录支持搜索、当前章高亮、点选跳转；字号/行距可调并持久化，专注阅读
+3. 书签增删/列表/跳转到章首；翻章与重进恢复章节进度
+4. 暂未接上：朗读、章内查找、本章进度滑块；目录跳章后在已有旧阅读位置且遇迁移/修订变化/写入失败时，重进可能回旧章
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
