@@ -12,13 +12,14 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.5.0';
-const currentAppBuild = 41;
+const currentAppVersion = '1.6.0';
+const currentAppBuild = 42;
 const currentReleaseNotes = '''
-1. EPUB 阅读器补齐 TXT 同款界面：顶部书签/字号、底部上一章/目录/下一章、点正文显隐
-2. 目录支持搜索、当前章高亮、点选跳转；字号/行距可调并持久化，专注阅读
-3. 书签增删/列表/跳转到章首；翻章与重进恢复章节进度
-4. 暂未接上：朗读、章内查找、本章进度滑块；目录跳章后在已有旧阅读位置且遇迁移/修订变化/写入失败时，重进可能回旧章
+1. EPUB 阅读器底部新增全书进度条：可拖动跳转，拖动时显示第 N 章 · X%
+2. EPUB 章内进度改为真实保存：重进回到上次读到的位置，不再只回章首
+3. 设置→关于→“GitHub 项目与版本”可正常打开版本列表页
+4. EPUB 图片与指纹缓存：换章回看、重进不再重复解压与重算整本指纹，首次打开某章仍需解压本章图片
+5. 暂未接上：朗读、章内查找
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
