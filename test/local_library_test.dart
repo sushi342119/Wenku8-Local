@@ -699,6 +699,41 @@ void main() {
       );
     });
 
+    test('EPUB 图片字节换章复用缓存，指纹缓存在文件变化后失效', () async {
+      final file = await localSource();
+      final store = await loadStore();
+      await store.scanAppFolder();
+      final book = store.books.single;
+      final first = await store.epubChapter(book.id, 0);
+      final image = first.images['Images/a b.jpg'];
+      expect(image, imgAbBytes);
+      await store.epubChapter(book.id, 1);
+      final again = await store.epubChapter(book.id, 0);
+      expect(identical(again.images['Images/a b.jpg'], image), isTrue);
+
+      // 同长度改写并推后修改时间：必须重算指纹并走“请重新扫描”，不读旧缓存。
+      final changed = epubBytes(changedEpubFiles());
+      expect(changed.length, book.size);
+      await file.writeAsBytes(changed);
+      await file.setLastModified(DateTime.now().add(const Duration(minutes: 1)));
+      await expectLater(
+        store.epubChapter(book.id, 0),
+        throwsA(isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'EPUB 源文件已变化，请重新扫描',
+        )),
+      );
+
+      expect((await store.scanAppFolder(force: true)).refreshed, 1);
+      final refreshed = store.books.single;
+      expect(refreshed.sourceFingerprint, isNot(book.sourceFingerprint));
+      final reread = await store.epubChapter(refreshed.id, 0);
+      expect(reread.blocks.map((block) => block.text).join(), contains('新版'));
+      expect(reread.images['Images/a b.jpg'], imgAbBytes);
+      expect(identical(reread.images['Images/a b.jpg'], image), isFalse);
+    });
+
     for (final missingCache in [false, true]) {
       test('SAF ${missingCache ? '缓存被清除' : '缓存损坏'}且源指纹变化拒绝读取且只重试一次', () async {
         final store = await loadStore();

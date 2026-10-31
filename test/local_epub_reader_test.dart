@@ -418,6 +418,106 @@ void main() {
     expect(local.loads, [0, 0]);
   });
 
+  Finder progressBar() => find.byKey(const ValueKey('epub-book-progress'));
+
+  Rect progressTrack(WidgetTester tester) => tester.getRect(
+    find
+        .descendant(of: progressBar(), matching: find.byType(GestureDetector))
+        .first,
+  );
+
+  testWidgets('EPUB 全书进度条随控件显隐，单章不可滚动时不显示', (tester) async {
+    await state.setReduceMotion(false);
+    await reader(tester, chapter: 1);
+    expect(progressBar().hitTestable(), findsOneWidget);
+    await tester.tap(find.text(local.data(1).blocks.first.text!));
+    await tester.pumpAndSettle();
+    expectChrome(tester, false);
+    expect(progressBar().hitTestable(), findsNothing);
+    await tester.tap(find.text(local.data(1).blocks.first.text!));
+    await tester.pumpAndSettle();
+    expect(progressBar().hitTestable(), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    local = _EpubStore(count: 1, imageOnly: true);
+    await reader(tester);
+    expect(progressBar(), findsNothing);
+    await tester.pumpWidget(const SizedBox.shrink());
+    local = _EpubStore(count: 1);
+    await reader(tester);
+    expect(progressBar(), findsOneWidget);
+  });
+
+  testWidgets('EPUB 点按进度条跳到目标章并按比例滚动，取消拖动不跳转', (tester) async {
+    await reader(tester);
+    final track = progressTrack(tester);
+    await tester.tapAt(Offset(track.left + track.width * .9, track.center.dy));
+    await _settle(tester);
+    expect(_dock(tester).items[1].label, '3 / 3');
+    final position = _article(tester).position;
+    expect(position.pixels / position.maxScrollExtent, closeTo(.7, .02));
+    expect(find.text('第 3 章 · 90%'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 700));
+    final saved = state.positionFor(_novel.id)!;
+    expect(saved.chapter, 2);
+    expect(saved.fraction, closeTo(.7, .02));
+
+    final gesture = await tester.startGesture(
+      Offset(track.left + track.width * .1, track.center.dy),
+    );
+    await gesture.moveBy(const Offset(40, 0));
+    await tester.pump();
+    await gesture.moveBy(const Offset(4, 0));
+    await tester.pump();
+    expect(find.textContaining(RegExp(r'^第 1 章 · \d+%$')), findsOneWidget);
+    await gesture.cancel();
+    await _settle(tester);
+    expect(_dock(tester).items[1].label, '3 / 3');
+    expect(state.chapterFor(_novel.id), 2);
+  });
+
+  testWidgets('EPUB 恢复章内位置后才保存，滚动后保存真实 offset', (tester) async {
+    final seededNovel = _novel.withChapters([
+      for (var index = 0; index < 3; index++)
+        NovelChapter(
+          '章节 ${index + 1}',
+          '',
+          id: index,
+          revision: local.book.revision,
+        ),
+    ]);
+    await tester.runAsync(
+      () => state.savePosition(
+        novel: seededNovel,
+        chapter: 1,
+        offset: 120,
+        maximum: 240,
+        width: 420,
+      ),
+    );
+    await reader(tester, chapter: -1);
+    expect(_dock(tester).items[1].label, '2 / 3');
+    var position = _article(tester).position;
+    expect(position.pixels / position.maxScrollExtent, closeTo(.5, .02));
+    expect(state.positionFor(_novel.id)!.chapter, 1);
+    expect(state.positionFor(_novel.id)!.fraction, closeTo(.5, .02));
+
+    position.jumpTo(100);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 700));
+    position = _article(tester).position;
+    expect(state.positionFor(_novel.id)!.offset, closeTo(100, .5));
+    expect(
+      state.positionFor(_novel.id)!.fraction,
+      closeTo(100 / position.maxScrollExtent, .001),
+    );
+
+    await openTools(tester);
+    final percent = (100 / position.maxScrollExtent * 100).round();
+    expect(find.text('本章已读 $percent%'), findsOneWidget);
+    expect(find.text('阅读进度按章节保存。'), findsNothing);
+  });
+
   testWidgets('EPUB 快速切章不显示旧加载结果', (tester) async {
     await reader(tester);
     final delayed = Completer<_ChapterData>();

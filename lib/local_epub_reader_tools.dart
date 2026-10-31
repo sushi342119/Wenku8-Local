@@ -14,6 +14,7 @@ class LocalEpubReaderTools extends StatefulWidget {
     required this.chapter,
     required this.onAddBookmark,
     this.initialBookmarks = false,
+    this.chapterProgress = 0,
   });
 
   final Novel novel;
@@ -21,6 +22,9 @@ class LocalEpubReaderTools extends StatefulWidget {
   final int chapter;
   final Future<ReaderBookmark?> Function() onAddBookmark;
   final bool initialBookmarks;
+
+  /// 打开面板时当前章的滚动比例（0~1）。
+  final double chapterProgress;
 
   @override
   State<LocalEpubReaderTools> createState() => _LocalEpubReaderToolsState();
@@ -158,7 +162,10 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
     const Divider(height: 24),
     Text('第 ${widget.chapter + 1} 章 / 共 ${widget.novel.chapters.length} 章'),
     const SizedBox(height: 8),
-    const Text('阅读进度按章节保存。'),
+    Text(
+      '本章已读 ${(widget.chapterProgress.clamp(0.0, 1.0) * 100).round()}%',
+      key: const ValueKey('epub-chapter-progress'),
+    ),
     GlassTextButton(
       onPressed: () => Navigator.pop(context, const ReaderEnterFocus()),
       child: const Text('专注阅读 · 隐藏控件'),

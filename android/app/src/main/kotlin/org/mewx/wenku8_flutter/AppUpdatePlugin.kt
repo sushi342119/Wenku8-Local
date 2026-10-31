@@ -54,11 +54,15 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
             "openRelease" -> {
                 val uri = Uri.parse(call.arguments as? String ?: "")
                 val segments = uri.pathSegments
+                // 允许两类地址：releases/tag|download/...（具体版本），
+                // 以及恰好 3 段的 releases 列表页（关于页“GitHub 项目与版本”）。
+                val releasePage = segments.size == 3 ||
+                    (segments.size >= 4 && segments[3] in setOf("tag", "download"))
                 val valid = uri.scheme == "https" && uri.host == "github.com" &&
                     uri.userInfo == null && uri.port in setOf(-1, 443) &&
-                    segments.size >= 4 && segments[0] == "sushi342119" &&
+                    segments.size >= 3 && segments[0] == "sushi342119" &&
                     segments[1] == "Wenku8-Local" && segments[2] == "releases" &&
-                    segments[3] in setOf("tag", "download")
+                    releasePage
                 if (!valid) {
                     result.error("INVALID_RELEASE", "更新页面地址无效", null)
                     return

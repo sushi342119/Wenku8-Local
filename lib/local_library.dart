@@ -607,6 +607,17 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   final Set<int> _dirtyBookIds = {};
   final Map<String, String> _tagMigrationFailures = {};
 
+  /// EPUB 源文件指纹缓存：路径 -> (大小, 修改时间, 已算出的 sha256)。
+  /// 只有大小或修改时间变化才重算；书修订变化/删除/重扫时整体清空。
+  final Map<String, ({int size, int modified, String digest})>
+  _epubFingerprintCache = {};
+
+  /// 已解压的 EPUB 图片字节，键为“书 id + 修订 + entryPath”。
+  /// 总量超过 [_epubImageCacheBudget] 时按插入顺序淘汰旧条目。
+  final LinkedHashMap<String, Uint8List> _epubImageCache = LinkedHashMap();
+  static const _epubImageCacheBudget = 64 * 1024 * 1024;
+  var _epubImageCacheBytes = 0;
+
   /// 串行化所有变更操作，防止扫描/删除/编辑竞态（修复#4）。
   Future<void> _mutationLock = Future.value();
 
@@ -772,7 +783,10 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (index < 0 || index >= _books.length || _books[index].id != book.id) {
       throw StateError('书籍记录已变化，请重新扫描');
     }
-    if (_books[index].revision != book.revision) _invalidateTextCache(book.id);
+    if (_books[index].revision != book.revision ||
+        _books[index].sourceFingerprint != book.sourceFingerprint) {
+      _invalidateTextCache(book.id);
+    }
     _books[index] = book;
     _bookPositions[book.id] = index;
     _dirtyBookIds.add(book.id);
@@ -808,6 +822,46 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final old = _textCache.remove(id);
     if (old != null) _textCacheBytes -= old.length * 2;
     _textReads.remove(id);
+    _invalidateEpubCaches(id);
+  }
+
+  /// 书修订变化、删除或重扫时调用：清掉该书的图片字节缓存，
+  /// 指纹缓存按路径存放，无法可靠映射到书，直接整体清空（代价只是下次重算一次）。
+  void _invalidateEpubCaches(int id) {
+    _epubFingerprintCache.clear();
+    final prefix = '$id\u0000';
+    final stale = [
+      for (final key in _epubImageCache.keys)
+        if (key.startsWith(prefix)) key,
+    ];
+    for (final key in stale) {
+      _epubImageCacheBytes -= _epubImageCache.remove(key)!.length;
+    }
+  }
+
+  void _clearEpubCaches() {
+    _epubFingerprintCache.clear();
+    _epubImageCache.clear();
+    _epubImageCacheBytes = 0;
+  }
+
+  /// EPUB 的 revision 只由章节标题等组成，不含源文件内容；
+  /// 键里再加已校验的源文件指纹，图片换了但标题没变时也不会命中旧字节。
+  String _epubImageKey(LocalBook book, String entryPath) =>
+      '${book.id}\u0000${book.revision}\u0000${book.sourceFingerprint}'
+      '\u0000$entryPath';
+
+  void _cacheEpubImage(String key, Uint8List bytes) {
+    if (bytes.length > _epubImageCacheBudget) return;
+    final old = _epubImageCache.remove(key);
+    if (old != null) _epubImageCacheBytes -= old.length;
+    while (_epubImageCache.isNotEmpty &&
+        _epubImageCacheBytes + bytes.length > _epubImageCacheBudget) {
+      final oldest = _epubImageCache.keys.first;
+      _epubImageCacheBytes -= _epubImageCache.remove(oldest)!.length;
+    }
+    _epubImageCache[key] = bytes;
+    _epubImageCacheBytes += bytes.length;
   }
 
   void _cacheText(int id, String text) {
@@ -2089,6 +2143,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         _textCache.clear();
         _textReads.clear();
         _textCacheBytes = 0;
+        _clearEpubCaches();
       }
       rethrow;
     } finally {
@@ -3071,9 +3126,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
+  /// 整本 sha256；按“路径 + 大小 + 修改时间”缓存，未变化时不重读文件。
+  /// 文件被改写（大小或修改时间变化）时必然重算，调用方据此走“请重新扫描”。
   Future<String> _epubSourceFingerprint(String path) async {
-    final digest = await sha256.bind(File(path).openRead()).first;
-    return digest.toString();
+    final file = File(path);
+    final before = await file.stat();
+    final cached = _epubFingerprintCache[path];
+    final modified = before.modified.microsecondsSinceEpoch;
+    if (cached != null &&
+        before.type == FileSystemEntityType.file &&
+        cached.size == before.size &&
+        cached.modified == modified) {
+      return cached.digest;
+    }
+    final digest = (await sha256.bind(file.openRead()).first).toString();
+    final after = await file.stat();
+    // 哈希期间文件被改写时不缓存，下次重算。
+    if (before.type == FileSystemEntityType.file &&
+        after.size == before.size &&
+        after.modified.microsecondsSinceEpoch == modified) {
+      _epubFingerprintCache[path] = (
+        size: before.size,
+        modified: modified,
+        digest: digest,
+      );
+    } else {
+      _epubFingerprintCache.remove(path);
+    }
+    return digest;
   }
 
   Future<LocalBook?> _importEpub({
@@ -3413,6 +3493,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       _readerWorker.dispose();
       _textCache.clear();
       _textCacheBytes = 0;
+      _clearEpubCaches();
     });
     super.dispose();
   }
@@ -3716,6 +3797,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         throw StateError('EPUB 章节对应关系已变化，请重新扫描');
       }
       final source = await package.chapterBlocks(chapterIndex);
+      // 首次打开某章仍需逐张解压本章图片后才返回正文；缓存只省去
+      // 换章回看/重进阅读器时的重复解压。无源指纹的旧记录无法校验内容，不走缓存。
+      final useImageCache = book.sourceFingerprint.isNotEmpty;
       final images = <String, Uint8List>{};
       final failed = <String>{};
       for (final block in source) {
@@ -3724,12 +3808,25 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         if (path == null || images.containsKey(path) || failed.contains(path)) {
           continue;
         }
+        final key = _epubImageKey(book, path);
+        final hit = useImageCache ? _epubImageCache[key] : null;
+        if (hit != null) {
+          images[path] = hit;
+          continue;
+        }
         try {
           final bytes = await package.readEntry(path);
           if (bytes.isEmpty) {
             failed.add(path);
           } else {
             images[path] = bytes;
+            final current = bookFor(novelId);
+            if (useImageCache &&
+                !_disposed &&
+                current?.revision == book.revision &&
+                current?.sourceFingerprint == book.sourceFingerprint) {
+              _cacheEpubImage(key, bytes);
+            }
           }
         } catch (_) {
           failed.add(path);
