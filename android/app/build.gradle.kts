@@ -30,7 +30,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "org.mewx.wenku8_flutter"
+        applicationId = "com.github.sushi342119.wenku8local"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
@@ -57,11 +57,11 @@ android {
             applicationIdSuffix = ".profile_probe"
         }
         release {
-            // Local previews remain install-compatible. Public distributions
-            // use an owner's untracked key.properties, never an embedded key.
-            signingConfig = signingConfigs.getByName(
-                if (releaseKeyFile.isFile) "distribution" else "debug"
-            )
+            // A release without a distribution key must never silently use a
+            // different debug certificate. Preview builds use the debug variant.
+            if (releaseKeyFile.isFile) {
+                signingConfig = signingConfigs.getByName("distribution")
+            }
         }
     }
 
