@@ -7,16 +7,16 @@
 <p align="center">基于 Flutter 的 Android 轻小说阅读客户端</p>
 
 <p align="center">
-  <a href="https://github.com/mikufoxxx/Wenku8_Flutter/releases"><img src="https://img.shields.io/github/v/release/mikufoxxx/Wenku8_Flutter?style=flat-square&color=60786B" alt="Release" /></a>
-  <a href="https://github.com/mikufoxxx/Wenku8_Flutter/actions/workflows/flutter-ci.yml"><img src="https://github.com/mikufoxxx/Wenku8_Flutter/actions/workflows/flutter-ci.yml/badge.svg?branch=master" alt="Build" /></a>
+  <a href="https://github.com/sushi342119/Wenku8-Local/releases"><img src="https://img.shields.io/github/v/release/sushi342119/Wenku8-Local?style=flat-square&color=60786B" alt="Release" /></a>
+  <a href="https://github.com/sushi342119/Wenku8-Local/actions/workflows/flutter-ci.yml"><img src="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml/badge.svg?branch=main" alt="Build" /></a>
   <img src="https://img.shields.io/badge/Platform-Android-60786B?style=flat-square" alt="Android" />
   <a href="assets/licenses/GPL-3.0.txt"><img src="https://img.shields.io/badge/License-GPL--3.0-60786B?style=flat-square" alt="GPL 3.0" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/mikufoxxx/Wenku8_Flutter/releases">下载</a> ·
+  <a href="https://github.com/sushi342119/Wenku8-Local/releases">下载</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
-  <a href="https://github.com/mikufoxxx/Wenku8_Flutter/issues">问题反馈</a> ·
+  <a href="https://github.com/sushi342119/Wenku8-Local/issues">问题反馈</a> ·
   <a href="docs/RELEASING.md">构建指南</a>
 </p>
 
@@ -51,7 +51,7 @@ Wenku8 Flutter 是轻小说文库客户端的 Flutter 重构版本，面向 Andr
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/mikufoxxx/Wenku8_Flutter/releases) 下载 APK。提供 `arm64-v8a`、`armeabi-v7a` 与 `x86_64` 三种架构，常见 Android 手机请选择 **arm64-v8a**。
+从 [GitHub Releases](https://github.com/sushi342119/Wenku8-Local/releases) 下载 APK。当前版本提供 **arm64-v8a** 架构的 APK。
 
 安装后，可在 **设置 → 关于轻小说文库** 查看版本信息、更新说明并检查更新。
 
@@ -60,26 +60,25 @@ Wenku8 Flutter 是轻小说文库客户端的 Flutter 重构版本，面向 Andr
 开发环境：**Flutter 3.41.5 / Dart 3.11.3、JDK 17、Android SDK**。
 
 ```sh
-git clone https://github.com/mikufoxxx/Wenku8_Flutter.git
-cd Wenku8_Flutter
+git clone https://github.com/sushi342119/Wenku8-Local.git
+cd Wenku8-Local
 flutter pub get
 flutter build apk --release --target-platform android-arm64
 ```
 
 ### GitHub Actions
 
-- [Flutter Android](https://github.com/mikufoxxx/Wenku8_Flutter/actions/workflows/flutter-ci.yml)：代码检查、自动测试与 ARM64 APK 构建。
-- [Build Android APKs](https://github.com/mikufoxxx/Wenku8_Flutter/actions/workflows/android-release.yml)：三架构签名 APK、源码归档与版本发布候选，支持版本标签触发和手动运行。
+- [Build Local APK](https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml)：代码检查、本地书库测试和 ARM64 APK 构建。
 
 签名配置与发布流程见 [构建发布指南](docs/RELEASING.md)。
 
 ## 贡献
 
-欢迎通过 [Issues](https://github.com/mikufoxxx/Wenku8_Flutter/issues) 反馈问题或提出建议，通过 Pull Request 参与开发。提交问题时请提供应用版本、Android 版本和复现步骤。
+欢迎通过 [Issues](https://github.com/sushi342119/Wenku8-Local/issues) 反馈问题或提出建议，通过 Pull Request 参与开发。提交问题时请提供应用版本、Android 版本和复现步骤。
 
 ## 致谢与许可
 
-本项目基于 [MewX/light-novel-library_Wenku8_Android](https://github.com/MewX/light-novel-library_Wenku8_Android) 重构。感谢 MewX、Baby Pepper（SeraphRoy）、Jack Liu（aaassseee）及原项目贡献者。
+本项目借鉴了 [mikufoxxx/Wenku8_Flutter](https://github.com/mikufoxxx/Wenku8_Flutter)，并基于 [MewX/light-novel-library_Wenku8_Android](https://github.com/MewX/light-novel-library_Wenku8_Android) 重构。感谢 MewX、Baby Pepper（SeraphRoy）、Jack Liu（aaassseee）及原项目贡献者。
 
 - 应用源码：保留原项目 [GPL v2 或后续版本声明](LICENSE)，本 Flutter 组合版本按 [GPL v3](assets/licenses/GPL-3.0.txt) 分发。
 - 内置字体：[Adobe Source Han Serif CN](https://github.com/adobe-fonts/source-han-serif)，[SIL OFL 1.1](assets/fonts/OFL-SourceHanSerif.txt)。
