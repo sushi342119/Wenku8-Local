@@ -8,10 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-const updateRepository = String.fromEnvironment(
-  'UPDATE_REPOSITORY',
-  defaultValue: 'sushi342119/Wenku8-Local',
-);
+const updateRepository = 'sushi342119/Wenku8-Local';
 const currentAppVersion = '1.6.0';
 const currentAppBuild = 42;
 const currentReleaseNotes = '''
