@@ -172,8 +172,10 @@ void main({Capture? capture}) {
 
         final switched = feed.selectSort(NovelSort.allVisit);
         await tester.pumpAndSettle();
-        expect(find.text('总人气'), findsOneWidget);
-        expect(find.text('最近更新'), findsNothing);
+        // The local-first header is a tag filter; repository sort changes must
+        // not replace its title with an obsolete online ranking label.
+        expect(find.text('全部'), findsOneWidget);
+        expect(find.text('总人气'), findsNothing);
         expect(find.byType(ArchiveShelfSkeleton), findsOneWidget);
         expect(find.byKey(const ValueKey('skeleton-library')), findsNothing);
         if (capture != null) {

@@ -166,6 +166,8 @@ void main() {
       await tester.pumpAndSettle();
       final glass = find.byKey(const ValueKey('performanceGlass'));
       expect(tester.widget<CupertinoSwitch>(glass).value, false);
+      await tester.ensureVisible(glass);
+      await tester.pumpAndSettle();
       await tester.tap(glass);
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),

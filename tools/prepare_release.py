@@ -14,9 +14,20 @@ def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
         raise ValueError("pubspec.yaml needs a semantic version and a positive Android build number")
     name, build = version[1], int(version[2])
     dart = (root / "lib/updates/app_updates.dart").read_text()
-    app_version = re.search(r"const currentAppVersion\s*=\s*'([^']+)'", dart)
-    app_build = re.search(r"const currentAppBuild\s*=\s*(\d+)", dart)
-    if app_version is None or app_build is None or app_version[1] != name or int(app_build[1]) != build:
+    # Release builds inject pubspec's values. Defaults are for development/tests
+    # and need not be bumped with every release. Still reject a misspelled key
+    # or a declaration that cannot receive the injected value.
+    injected_version = re.search(
+        r"const currentAppVersion\s*=\s*String\.fromEnvironment\(\s*"
+        r"'APP_VERSION'\s*,\s*defaultValue:\s*'\d+\.\d+\.\d+'\s*,?\s*\)\s*;", dart)
+    injected_build = re.search(
+        r"const currentAppBuild\s*=\s*int\.fromEnvironment\(\s*"
+        r"'APP_BUILD'\s*,\s*defaultValue:\s*[1-9]\d*\s*,?\s*\)\s*;", dart)
+    app_version = re.search(r"const currentAppVersion\s*=\s*'([^']+)'\s*;", dart)
+    app_build = re.search(r"const currentAppBuild\s*=\s*(\d+)\s*;", dart)
+    version_ok = injected_version is not None or (app_version is not None and app_version[1] == name)
+    build_ok = injected_build is not None or (app_build is not None and int(app_build[1]) == build)
+    if not version_ok or not build_ok:
         raise ValueError("Update the app's version constants together with pubspec.yaml")
     if tag is not None and tag not in {f"v{name}", f"v{name}+{build}"}:
         raise ValueError(f"Tag {tag!r} does not match pubspec version {name}+{build}")

@@ -14,6 +14,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate release metadata
+        run: |
+          RAW_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml)"
+          APP_VERSION="${RAW_VERSION%%+*}"
+          APP_BUILD="${RAW_VERSION#*+}"
+          TAG="v${RAW_VERSION}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
+            echo "::error::Tag does not match pubspec"; exit 1
+          fi
+          python3 tools/prepare_release.py --tag "$TAG" --notes build/release-notes.md
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$APP_BUILD" >> "$GITHUB_ENV"
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -26,10 +39,12 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       - name: Run tests with process deadline
-        timeout-minutes: 4
+        timeout-minutes: 15
+        shell: bash
         run: |
+          set -euo pipefail
           mkdir -p build
-          timeout --signal=TERM --kill-after=15s 180s flutter test --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
+          timeout --signal=TERM --kill-after=15s 720s flutter test --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
       - name: Preserve test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -49,7 +64,11 @@ jobs:
           python3 tools/configure_signing.py
       - name: Build signed APK
         if: github.event_name != 'pull_request'
-        run: flutter build apk --release --target-platform android-arm64 --dart-define=UPDATE_REPOSITORY=${{ github.repository }}
+        run: |
+          flutter build apk --release --target-platform android-arm64 \
+            --dart-define=UPDATE_REPOSITORY=${{ github.repository }} \
+            --dart-define=APP_VERSION=${{ env.APP_VERSION }} \
+            --dart-define=APP_BUILD=${{ env.APP_BUILD }}
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:

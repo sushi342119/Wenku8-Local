@@ -23,6 +23,7 @@ void main() {
     'degraded tag startup explains refusal without writing clipboard',
     (tester) async {
       SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      TagStore.resetForTesting();
       expect(TagStore.maybeShared, isNull);
       final state = await LibraryState.load();
       addTearDown(state.dispose);

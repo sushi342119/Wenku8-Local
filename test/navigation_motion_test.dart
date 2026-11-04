@@ -466,7 +466,7 @@ void main() {
     'cover tags stay scoped when the same book appears in shelf and discovery',
     (tester) async {
       final state = await mountApp(tester);
-      await state.toggleShelf(demoNovels.first.id);
+      await tester.runAsync(() => state.toggleShelf(demoNovels.first.id));
       await tester.tap(find.byKey(const ValueKey('dock-tab-1')));
       await tester.pumpAndSettle();
       await tester.tap(find.text(demoNovels.first.title).last);

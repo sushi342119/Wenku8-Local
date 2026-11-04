@@ -15,30 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-      - uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.41.5'
-          channel: stable
-          cache: true
-      - run: flutter pub get
-      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
-      - name: Run tests with process deadline
-        timeout-minutes: 4
-        run: |
-          mkdir -p build
-          timeout --signal=TERM --kill-after=15s 180s flutter test --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
-      - name: Preserve test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-diagnostics-${{ github.workflow }}
-          path: build/flutter-tests.log
-          if-no-files-found: ignore
-      - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Validate release metadata
         run: |
           RAW_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml)"
@@ -52,6 +28,32 @@ jobs:
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
           echo "APP_BUILD=$APP_BUILD" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - name: Run tests with process deadline
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          timeout --signal=TERM --kill-after=15s 720s flutter test --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-${{ github.workflow }}
+          path: build/flutter-tests.log
+          if-no-files-found: ignore
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:

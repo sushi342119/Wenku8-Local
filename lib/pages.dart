@@ -850,6 +850,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
         onNotification: (notification) {
           if (notification.depth == 0 &&
               notification.metrics.axis == Axis.vertical &&
+              notification.metrics.pixels > notification.metrics.minScrollExtent &&
               feed?.loading == false &&
               feed?.hasMore == true &&
               feed?.error == null &&

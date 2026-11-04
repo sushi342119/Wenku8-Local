@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/app_ui.dart';
+import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/main.dart';
@@ -120,7 +121,7 @@ Future<void> _reader(
 
 void main() {
   testWidgets(
-    'catalogue loads page two lazily and rank picker reuses the glass menu',
+    'local catalogue loads all pages and tag filter reuses the glass menu',
     (tester) async {
       final repository = _Repository();
       await _mount(tester, repository);
@@ -134,15 +135,18 @@ void main() {
       expect(feed.page, 2);
       expect(feed.items.length, 40);
       expect(find.byType(NovelRow).evaluate().length, lessThan(25));
+      final tag = await TagStore.shared.createTag('待读');
+      await TagStore.shared.setTagsForBook(feed.items.first.id, [tag]);
       scroll.position.jumpTo(0);
       await tester.pumpAndSettle();
-      await tester.tap(_control('分类与排序'));
+      await tester.tap(_control('标签筛选'));
       await tester.pumpAndSettle();
       expect(find.byType(GlassOverlaySurface), findsOneWidget);
-      await tester.tap(find.text('总人气'));
+      await tester.tap(find.text('待读'));
       await tester.pumpAndSettle();
-      expect(feed.sort, NovelSort.allVisit);
-      expect(repository.calls, contains((NovelSort.allVisit, 1)));
+      expect(feed.sort, NovelSort.lastUpdate);
+      expect(find.text('待读'), findsOneWidget);
+      expect(repository.calls, [(NovelSort.lastUpdate, 1), (NovelSort.lastUpdate, 2)]);
       expect(tester.takeException(), isNull);
     },
   );

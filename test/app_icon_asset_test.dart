@@ -41,33 +41,29 @@ void main() {
       }
     },
   );
-  test(
-    'adaptive and themed launcher resources preserve the source geometry',
-    () async {
-      final source = XmlDocument.parse(
-        await File('assets/branding/app-icon.svg').readAsString(),
-      );
-      final foreground = XmlDocument.parse(
-        await File(
-          'android/app/src/main/res/drawable/ic_archive_foreground.xml',
-        ).readAsString(),
-      );
-      expect(
-        foreground
-            .findAllElements('path')
-            .map(
-              (p) => p.getAttribute(
-                'pathData',
-                namespaceUri: 'http://schemas.android.com/apk/res/android',
-              ),
-            ),
-        source.findAllElements('path').map((p) => p.getAttribute('d')),
-      );
-      final themed = await File(
-        'android/app/src/main/res/mipmap-anydpi-v33/ic_launcher.xml',
-      ).readAsString();
-      expect(themed, contains('<monochrome'));
-      expect(themed, contains('@drawable/ic_archive_monochrome'));
-    },
-  );
+  test('adaptive and themed launcher resources use the current fox assets', () async {
+    for (final version in [26, 33]) {
+      final document = XmlDocument.parse(await File(
+        'android/app/src/main/res/mipmap-anydpi-v$version/ic_launcher.xml',
+      ).readAsString());
+      final foreground = document.findAllElements('foreground').single;
+      expect(foreground.getAttribute('drawable', namespaceUri:
+        'http://schemas.android.com/apk/res/android'), '@drawable/ic_fox_foreground');
+      if (version == 33) {
+        expect(document.findAllElements('monochrome').single.getAttribute(
+          'drawable', namespaceUri: 'http://schemas.android.com/apk/res/android'),
+          '@drawable/ic_fox_monochrome');
+      }
+    }
+    for (final (name, colorType) in [('foreground', 2), ('monochrome', 6)]) {
+      final bytes = await File(
+        'android/app/src/main/res/drawable-nodpi/ic_fox_$name.png',
+      ).readAsBytes();
+      expect(bytes.sublist(0, 8), [137, 80, 78, 71, 13, 10, 26, 10]);
+      final header = ByteData.sublistView(bytes);
+      expect(header.getUint32(16), 432);
+      expect(header.getUint32(20), 432);
+      expect(bytes[25], colorType);
+    }
+  });
 }

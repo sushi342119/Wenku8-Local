@@ -340,7 +340,7 @@ void main() {
       // Decorative scroll blur must not consume navigation taps.
       await tester.tap(find.text('发现').last);
       await tester.pumpAndSettle();
-      expect(find.text('最近更新'), findsOneWidget);
+      expect(find.text('本地书库'), findsOneWidget);
     },
   );
 }

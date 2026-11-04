@@ -151,7 +151,7 @@ void main() {
     await recovered.editBookFile(id, title: '新书', author: '');
     expect(await backup.readAsString(), saved);
     expect(await index.readAsString(), contains('新书'));
-    expect(await index.parent.list().where((file) => file.path.contains('.corrupt.')).length, 1);
+    expect(await File('${index.path}.corrupt').readAsString(), '{broken');
   });
 
   test('unreadable index entries survive a subsequent save', () async {

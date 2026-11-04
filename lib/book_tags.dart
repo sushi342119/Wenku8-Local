@@ -56,6 +56,12 @@ class TagStore extends ChangeNotifier {
   /// 调用方应在 TagStore 未就绪时降级跳过，避免崩溃。
   static TagStore? get maybeShared => _shared;
 
+  @visibleForTesting
+  static void resetForTesting() {
+    _shared?.dispose();
+    _shared = null;
+  }
+
   static Future<void> load() async {
     final store = TagStore._(await SharedPreferences.getInstance());
     await store._read();

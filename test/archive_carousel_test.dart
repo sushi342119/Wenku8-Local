@@ -118,7 +118,8 @@ void main({Future<void> Function(WidgetTester, GlobalKey, String)? capture}) {
       final layouts = [
         for (var i = 0; i < 20; i++) _box(tester, i).debugLayoutCount,
       ];
-      final sceneLayouts = scene.debugLayoutCount;
+      var sceneLayouts = scene.debugLayoutCount;
+      var firstSlot = scene.debugFirstSlot;
       final basis = crest.debugTransform.storage.take(12).toList();
       final spineSize = tester.getSize(_spine(tester, 2));
       final coverSize = tester.getSize(_cover(tester, 2));
@@ -156,7 +157,14 @@ void main({Future<void> Function(WidgetTester, GlobalKey, String)? capture}) {
           scene.debugPaintOrder,
           orderedEquals([...scene.debugPaintOrder]..sort()),
         );
-        expect(scene.debugLayoutCount, sceneLayouts);
+        // Moving the virtual window lays out its new slot once. Fractional
+        // scrolling within the same window must remain paint-only.
+        expect(
+          scene.debugLayoutCount,
+          sceneLayouts + (scene.debugFirstSlot == firstSlot ? 0 : 1),
+        );
+        sceneLayouts = scene.debugLayoutCount;
+        firstSlot = scene.debugFirstSlot;
         for (var i = 0; i < 20; i++) {
           expect(_box(tester, i).debugLayoutCount, layouts[i]);
         }
