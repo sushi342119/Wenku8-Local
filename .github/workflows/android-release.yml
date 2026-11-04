@@ -55,7 +55,8 @@ jobs:
           name: test-diagnostics-${{ github.workflow }}
           path: build/flutter-tests.log
           if-no-files-found: ignore
-      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Verify release tooling
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:

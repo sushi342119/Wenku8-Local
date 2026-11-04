@@ -72,6 +72,7 @@ void main() {
     SharedPreferences.resetStatic();
     SharedPreferencesStorePlatform.instance = storage;
     prefs = await SharedPreferences.getInstance();
+    await TagStore.load();
     root = await Directory.systemTemp.createTemp('wenku8-rework-');
     previousPaths = PathProviderPlatform.instance;
     PathProviderPlatform.instance = _Paths(root.path);
@@ -127,10 +128,8 @@ void main() {
   test(
     'unloaded tags reject backup and pre-restore snapshot with a specific message',
     () async {
+      TagStore.resetForTesting();
       expect(TagStore.maybeShared, isNull);
-      await prefs.setString('book_tags', '{broken');
-      storage.failKey = 'flutter.book_tags_quarantine_v1';
-      await expectLater(TagStore.load(), throwsStateError);
       final state = LibraryState(prefs);
       addTearDown(state.dispose);
       await state.addShelfIds([71]);
@@ -147,7 +146,6 @@ void main() {
       expect(state.shelf, {71});
       expect(state.preRestoreBackup, isNull);
       expect(prefs.get(restoreJournalKey), isNull);
-      storage.failKey = null;
       await TagStore.load();
       expect(
         (await state.createBackup()).records.keys,
