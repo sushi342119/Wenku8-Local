@@ -70,6 +70,7 @@ flutter:
   # the material Icons class.
   uses-material-design: true
   assets:
+    - assets/branding/app-icon.png
     - assets/fonts/OFL-SourceHanSerif.txt
     - assets/licenses/GPL-3.0.txt
     - assets/licenses/edge-tts.txt

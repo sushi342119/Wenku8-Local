@@ -54,16 +54,13 @@ class ArchiveMasthead extends StatelessWidget {
             width: 30,
             height: 34,
             alignment: Alignment.center,
-            color: Theme.of(context).colorScheme.onSurface,
-            child: Text(
-              'W8',
-              textScaler: TextScaler.noScaling,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.surface,
-                fontWeight: FontWeight.w800,
-                fontSize: 14,
-                letterSpacing: -.7,
-              ),
+            color: Colors.black,
+            child: Image.asset(
+              'assets/branding/app-icon.png',
+              width: 30,
+              height: 34,
+              fit: BoxFit.contain,
+              excludeFromSemantics: true,
             ),
           ),
         ),
