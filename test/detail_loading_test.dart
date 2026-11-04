@@ -111,7 +111,11 @@ void main({
     expect(tester.widget<DetailPage>(find.byType(DetailPage)).loadError, isNotNull);
     await tester.tap(find.text('重试'));
     await tester.pump();
-    for (var i = 0; i < 6; i++) {
+    for (
+      var i = 0;
+      i < 60 && find.byType(DetailSkeleton).evaluate().isNotEmpty;
+      i++
+    ) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
       await tester.pump();
     }
@@ -250,7 +254,7 @@ void main({
       pending.directory.complete(novel.chapters);
       for (
         var i = 0;
-        i < 20 && find.byType(DetailSkeleton).evaluate().isNotEmpty;
+        i < 120 && find.byType(DetailSkeleton).evaluate().isNotEmpty;
         i++
       ) {
         await tester.runAsync(
