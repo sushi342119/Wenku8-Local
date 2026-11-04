@@ -6,7 +6,6 @@ import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
-import org.mozilla.universalchardet.UniversalDetector
 
 /** Bounded buffers, including charset fallback. No whole-book Java String or
  * platform-channel payload is needed for large TXT imports. */
@@ -27,10 +26,28 @@ internal object BookTextDecoder {
     // Keep the UTF-8 fast path and the existing GB18030 fallback. Statistical
     // detection is only needed to distinguish legacy Traditional Chinese TXT.
     internal fun legacyCharset(sample: ByteArray, start: Int = 0, length: Int = sample.size): Charset {
-        val detector = UniversalDetector(null)
-        detector.handleData(sample, start, length)
-        detector.dataEnd()
-        return Charset.forName(if (detector.detectedCharset?.startsWith("BIG5", ignoreCase = true) == true) "Big5-HKSCS" else "GB18030")
+        val safeStart = start.coerceIn(0, sample.size)
+        val safeLen = length.coerceIn(0, sample.size - safeStart)
+        val slice = ByteBuffer.wrap(sample, safeStart, safeLen)
+        val big5Ok = try {
+            Charset.forName("Big5-HKSCS").newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(slice.duplicate())
+            true
+        } catch (_: Exception) {
+            false
+        }
+        val gbOk = try {
+            Charset.forName("GB18030").newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(slice.duplicate())
+            true
+        } catch (_: Exception) {
+            false
+        }
+        return Charset.forName(if (big5Ok && !gbOk) "Big5-HKSCS" else "GB18030")
     }
 
     /** Preserve the older, small-text bridge's explicit Charset contract. */
