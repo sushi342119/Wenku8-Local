@@ -2326,8 +2326,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               book.revision != existing.revision) {
             chapterRemaps.add(_remapFor(existing, book));
           }
-          if (existing.wordCount == null && book.wordCount != null)
+          if (existing.wordCount == null && book.wordCount != null) {
             backfilled++;
+          }
           chapterUpdates[book.id] = book;
           refreshed++;
         } else {
@@ -2666,8 +2667,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
               book.revision != existing.revision) {
             chapterRemaps.add(_remapFor(existing, book));
           }
-          if (existing.wordCount == null && book.wordCount != null)
+          if (existing.wordCount == null && book.wordCount != null) {
             backfilled++;
+          }
           chapterUpdates[book.id] = book;
           refreshed++;
         } else {

@@ -25,6 +25,9 @@ import 'reader_annotation_range.dart';
 import 'reading_activity.dart';
 import 'reading_moments.dart';
 import 'user_fonts.dart';
+import 'font_catalog.dart';
+import 'app_palette.dart';
+import 'palette_platform.dart';
 
 const _libraryWriteTimeout = Duration(seconds: 8);
 const _maxImportedFontBytes = 100 * 1024 * 1024;
@@ -323,6 +326,7 @@ class LibraryState extends ChangeNotifier {
     this._prefs, {
     this.writeWaitTimeout = _libraryWriteTimeout,
     UserFontStore? fonts,
+    this.palettePlatform = const PalettePlatform(),
   }) : fonts = fonts ?? UserFontStore() {
     final activity = _prefs.get(ReadingActivityStore.preferenceKey);
     try {
@@ -448,6 +452,17 @@ class LibraryState extends ChangeNotifier {
       ),
     });
     _loadFontState();
+    try {
+      _appPalette = AppPalettePreferences.decode(
+        _prefs.get(AppPalettePreferences.key),
+      );
+    } on FormatException {
+      /* Preserve an unreadable record; use the original theme until edited. */
+    }
+    _readerTypeface = switch (_prefs.get('readerTypeface')) {
+      final String value when value.isNotEmpty => value,
+      _ => followAppFont,
+    };
     _performance = PerformancePreferences.fromRecords({
       for (final key in [
         PerformancePreferences.modeKey,
@@ -486,6 +501,157 @@ class LibraryState extends ChangeNotifier {
   final Duration writeWaitTimeout;
   final SharedPreferences _prefs;
   final UserFontStore fonts;
+  final PalettePlatform palettePlatform;
+  AppPalettePreferences _appPalette = const AppPalettePreferences();
+  AppPalettePreferences get appPalette => _appPalette;
+  SystemTonalColors? systemTonalColors;
+  bool paletteLoaded = false, themedIconSupported = false;
+  String? paletteError;
+  Future<void>? _paletteLoad;
+  Future<void> refreshSystemPalette() => _paletteLoad ??= _readSystemPalette()
+      .whenComplete(() => _paletteLoad = null);
+  Future<void> _readSystemPalette() async {
+    try {
+      final info = await palettePlatform.read();
+      if (_disposed) return;
+      final changed = systemTonalColors?.signature != info.colors?.signature;
+      systemTonalColors = info.colors;
+      themedIconSupported = info.iconSupported;
+      paletteError = null;
+      if (info.iconSupported) {
+        await _queuePositionWrite(() async {
+          if (_appPalette.themedIcon != info.themedIcon) {
+            await palettePlatform.setThemedIcon(_appPalette.themedIcon);
+          }
+        });
+      }
+      if (changed &&
+          !_disposed &&
+          _appPalette.source == AppPaletteSource.system) {
+        _application.notifyListeners();
+        _appearance.notifyListeners();
+      }
+    } catch (_) {
+      if (!_disposed) paletteError = '系统配色读取未完成，请重试';
+    } finally {
+      if (!_disposed) {
+        paletteLoaded = true;
+        _settings.notifyListeners();
+      }
+    }
+  }
+
+  Future<void> setAppPalette(AppPalettePreferences value) async {
+    if (_restoreBarrier case final barrier?) {
+      await barrier.future;
+      return setAppPalette(value);
+    }
+    AppPalettePreferences.decode(value.encode());
+    if (value.source == AppPaletteSource.system && systemTonalColors == null) {
+      throw const FormatException('当前设备未提供系统配色，请选择自选配色');
+    }
+    await _queuePositionWrite(() async {
+      final before = _appPalette;
+      if (before == value) return;
+      final iconChanged = before.themedIcon != value.themedIcon;
+      if (iconChanged) {
+        if (!themedIconSupported) throw const FormatException('当前设备不支持切换主题图标');
+        await palettePlatform.setThemedIcon(value.themedIcon);
+      }
+      try {
+        await writeLibraryPreference(
+          _prefs,
+          AppPalettePreferences.key,
+          value.encode(),
+        );
+      } catch (_) {
+        if (iconChanged) await palettePlatform.setThemedIcon(before.themedIcon);
+        rethrow;
+      }
+      _appPalette = value;
+      if (!_disposed) {
+        if (before.source != value.source || before.seed != value.seed) {
+          _application.notifyListeners();
+          _appearance.notifyListeners();
+        }
+        _settings.notifyListeners();
+      }
+    });
+  }
+
+  String? fontError;
+  String _readerTypeface = followAppFont;
+  String get appFontChoice => _appFontId == appFontSystem.id
+      ? 'system'
+      : _appFontId == appFontSourceHanSerif.id
+      ? 'sourceHanSerif'
+      : _appFontId;
+  bool independentReaderStyle(int id) => false;
+  String readerTypefaceFor(int? id) => _readerTypeface;
+  String fontLabel(String choice) {
+    if (choice == followAppFont) {
+      return '跟随应用（${fontLabel(appFontChoice)}）';
+    }
+    for (final f in allFonts) {
+      if (f.id == choice) return f.displayName;
+    }
+    return fonts.label(choice);
+  }
+
+  Future<void> loadFonts() async {
+    try {
+      await fonts.load();
+      await ensureFontLoaded();
+      fontError = null;
+      if (!_disposed) {
+        _application.notifyListeners();
+        _appearance.notifyListeners();
+        _readerSettings.notifyListeners();
+        _settings.notifyListeners();
+      }
+    } catch (_) {
+      fontError = '自定义字体读取失败，暂用系统字体；可在字体设置中重试。';
+    }
+  }
+
+  Future<void> downloadReadingFont([String id = sourceHanFontId]) async {
+    await fonts.downloadFont(id);
+    await loadFonts();
+  }
+
+  Future<void> setReaderTypeface(String choice, {int? bookId}) async {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => setReaderTypeface(choice, bookId: bookId),
+      );
+    }
+    if (choice != followAppFont && !fonts.available(choice)) {
+      final hasLocal = allFonts.any((f) => f.id == choice);
+      if (!hasLocal) throw const FormatException('请先导入这款字体');
+    }
+    await fonts.ensureLoaded(choice);
+    await _queuePositionWrite(() async {
+      if (_readerTypeface == choice) return;
+      await _commitLibraryRecords({'readerTypeface': choice});
+      _readerTypeface = choice;
+      if (!_disposed) {
+        _readerSettings.notifyListeners();
+        _settings.notifyListeners();
+        notifyListeners();
+      }
+    });
+  }
+
+  Future<void> removeUserFont(String id) async {
+    if (appFontChoice == id) await setAppFont(appFontSystem.id);
+    if (_readerTypeface == id) await setReaderTypeface(followAppFont);
+    if (_importedFonts.any((f) => f.id == id)) {
+      await removeImportedFont(id);
+    }
+    await fonts.remove(id);
+    if (!_disposed) _settings.notifyListeners();
+  }
+
   late final ReadingActivityStore readingActivity;
   late final ReadingMomentsStore readingMoments;
   final _appearance = _StateNotifier();

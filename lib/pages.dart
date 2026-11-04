@@ -40,6 +40,9 @@ import 'reader_tools.dart';
 import 'reading_history.dart';
 import 'reading_statistics_page.dart';
 import 'bookmark_library_page.dart';
+import 'font_settings_page.dart';
+import 'palette_settings_page.dart';
+import 'reading_widget_settings_page.dart';
 import 'recent_searches.dart';
 import 'ui_notifiers.dart';
 import 'feature_pages.dart';
@@ -2521,6 +2524,81 @@ class SettingsPage extends StatelessWidget {
                     ),
                   ),
                 ),
+                const Divider(height: 22),
+                JellyTapSurface(
+                  key: const ValueKey('settings-font-settings-page'),
+                  onTap: () => pushNovelPage<void>(
+                    context,
+                    FontSettingsPage(state: state),
+                    reduceMotion: state.reduceMotion,
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(CupertinoIcons.textformat, size: 21),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '字体管理与按需下载',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(CupertinoIcons.chevron_forward, size: 14),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 22),
+                JellyTapSurface(
+                  key: const ValueKey('settings-palette-page'),
+                  onTap: () => pushNovelPage<void>(
+                    context,
+                    PaletteSettingsPage(state: state),
+                    reduceMotion: state.reduceMotion,
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(CupertinoIcons.paintbrush, size: 21),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '主题调色盘',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(CupertinoIcons.chevron_forward, size: 14),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 22),
+                JellyTapSurface(
+                  key: const ValueKey('settings-reading-widget-page'),
+                  onTap: () => pushNovelPage<void>(
+                    context,
+                    ReadingWidgetSettingsPage(state: state),
+                    reduceMotion: state.reduceMotion,
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(CupertinoIcons.rectangle_on_rectangle, size: 21),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '桌面阅读小组件',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(CupertinoIcons.chevron_forward, size: 14),
+                      ],
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -4978,8 +5056,9 @@ class _ReaderPageState extends State<ReaderPage>
       if (mounted &&
           index != null &&
           _novel.chapters.first.revision == catalogueRevision &&
-          !(_local?.isMigrationPending(_novel.id) ?? false))
+          !(_local?.isMigrationPending(_novel.id) ?? false)) {
         _go(index);
+      }
     } finally {
       _catalogueOpen = false;
       _listeningTarget = null;

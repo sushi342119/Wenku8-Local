@@ -402,12 +402,13 @@ class InlineSkeleton extends StatelessWidget {
 }
 
 class ReaderSkeleton extends StatelessWidget {
-  const ReaderSkeleton({super.key});
+  const ReaderSkeleton({super.key, this.vertical = false, this.expand = false});
+  final bool vertical, expand;
   @override
-  Widget build(BuildContext context) => const SizedBox(
-    height: 300,
+  Widget build(BuildContext context) => SizedBox(
+    height: expand ? double.infinity : 300,
     width: double.infinity,
-    child: LoadingSkeleton(layout: SkeletonLayout.reader, label: '正在加载正文'),
+    child: const LoadingSkeleton(layout: SkeletonLayout.reader, label: '正在加载正文'),
   );
 }
 

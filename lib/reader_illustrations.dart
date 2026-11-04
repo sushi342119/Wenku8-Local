@@ -63,6 +63,13 @@ class ReaderIllustrationCache {
     return future;
   }
 
+  Future<Map<String, Size>> measureLocalImages(
+    Iterable<String> urls, {
+    required bool Function() current,
+    Iterable<String> prioritize = const [],
+    bool retainPriority = false,
+  }) async => const <String, Size>{};
+
   void clearMemory() {
     _epoch++;
     _cache.clear();
