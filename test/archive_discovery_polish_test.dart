@@ -234,15 +234,21 @@ void main({Capture? capture}) {
       expect(scene.debugMountedCount, mounted);
       expect(scene.debugMountedCount, lessThanOrEqualTo(41));
       repo.requests[(NovelSort.lastUpdate, 3)]!.complete(
-        NovelPage(items: _books(970700, 20), page: 3, totalPages: 5),
+        NovelPage(items: _books(970700, 20), page: 3, totalPages: 3),
       );
       await load;
       clock.value = 1;
       await tester.pumpAndSettle();
       expect(feed.items.length, 60);
+      expect(_clock(tester), same(clock));
+      // The random-pick section can fill the first viewport. Scroll the lazy
+      // list into view before looking for its sliver/delegate.
+      await tester.drag(
+        find.byKey(const PageStorageKey('discover')), const Offset(0, -900),
+      );
+      await tester.pumpAndSettle();
       final list = tester.widget<SliverList>(find.byType(SliverList));
       expect(list.delegate.estimatedChildCount, 50);
-      expect(_clock(tester), same(clock));
       expect(tester.binding.transientCallbackCount, 0);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
