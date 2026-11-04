@@ -30,16 +30,6 @@
 
 感谢原作者及所有贡献者，保留原项目版权与开源许可声明。
 
-## 界面预览
-
-<p align="center">
-  <img src="docs/images/discovery.png" width="30%" alt="发现" />
-  &nbsp;
-  <img src="docs/images/reader.png" width="30%" alt="阅读器" />
-  &nbsp;
-  <img src="docs/images/settings.png" width="30%" alt="设置" />
-</p>
-
 ## 功能特性
 
 - **书籍发现**：分类、排行、书名与作者搜索（匿名使用，无需账号）。
