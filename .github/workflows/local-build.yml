@@ -1,72 +1,49 @@
 name: Build Local APK
-
-
 on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
-      - 'lib/**'
-      - 'android/**'
-      - 'pubspec.yaml'
-
-
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-
-      - name: Setup JDK 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
+          distribution: temurin
           java-version: '17'
-
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.5'
-          channel: 'stable'
+          channel: stable
           cache: true
-
-
-      - name: Get dependencies
-        run: flutter pub get
-
-
-      - name: Analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
-
-
-      - name: Run tests
-        run: flutter test test/local_library_test.dart
-
-
-      - name: Setup release signing
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Configure persistent release signing
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-            echo "::error::签名 Secrets 未配置，拒绝用临时调试签名构建（会导致无法覆盖安装）"
-            exit 1
-          fi
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/release.keystore
-          cat > android/key.properties <<'PROPEOF'
-          storeFile=release.keystore
-          storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
-          keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
-          keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}
-          PROPEOF
-          echo "key.properties 已生成，release 将使用固定签名"
-
-
-      - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64
-
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+          python3 tools/configure_signing.py
+      - name: Build signed APK
+        if: github.event_name != 'pull_request'
+        run: flutter build apk --release --target-platform android-arm64 --dart-define=UPDATE_REPOSITORY=${{ github.repository }}
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
         with:
-          name: wenku8-local-apk
+          name: shuyu-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/key.properties android/release.keystore

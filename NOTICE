@@ -1,4 +1,4 @@
-Wenku8 Flutter
+书屿 / Shuyu (formerly Wenku8 Flutter)
 
 Based on MewX/light-novel-library_Wenku8_Android and its contributors.
 https://github.com/MewX/light-novel-library_Wenku8_Android
@@ -34,3 +34,8 @@ See docs/THIRD_PARTY.md for component provenance and license boundaries.
 Liquid Glass Easy 5.0.0: Copyright (c) 2025 Ahmed Gamil, MIT License.
 Source and license: third_party/liquid_glass_easy/. Modified 2026-10-15 to
 bound unnecessary single-lens shader output; see its PATCHES.md.
+
+Release maintenance, November 2026: Shuyu branding, release signing checks,
+release automation and privacy disclosure. The binary redistribution statement
+above is an inherited maintainer assertion; supporting authorization has not
+been independently verified by this fork.

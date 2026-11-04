@@ -122,6 +122,8 @@ class AppUpdatePage extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
+              const Text('隐私与联网：收藏、进度及缓存保存在本机。在线书库会访问内容服务；在线听书会将待朗读文本发送给 Microsoft 在线语音服务；检查更新会访问 GitHub。系统备份和设备迁移由系统设置控制。'),
+              const SizedBox(height: 24),
               if (service != null) ...[
                 ContentPanel(
                   child: Column(

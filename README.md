@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="assets/branding/app-icon.svg" width="96" alt="Wenku8 Flutter" />
+  <img src="assets/branding/app-icon.png" width="96" alt="书屿" />
 </p>
 
-<h1 align="center">Wenku8 Flutter</h1>
+<h1 align="center">书屿</h1>
 
 <p align="center">基于 Flutter 的 Android 轻小说阅读客户端</p>
 
 <p align="center">
   <a href="https://github.com/sushi342119/Wenku8-Local/releases"><img src="https://img.shields.io/github/v/release/sushi342119/Wenku8-Local?style=flat-square&color=60786B" alt="Release" /></a>
-  <a href="https://github.com/sushi342119/Wenku8-Local/actions/workflows/flutter-ci.yml"><img src="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml/badge.svg?branch=main" alt="Build" /></a>
+  <a href="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml"><img src="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml/badge.svg?branch=main" alt="Build" /></a>
   <img src="https://img.shields.io/badge/Platform-Android-60786B?style=flat-square" alt="Android" />
   <a href="assets/licenses/GPL-3.0.txt"><img src="https://img.shields.io/badge/License-GPL--3.0-60786B?style=flat-square" alt="GPL 3.0" /></a>
 </p>
@@ -22,7 +22,7 @@
 
 ## 简介
 
-Wenku8 Flutter 是轻小说文库客户端的 Flutter 重构版本，面向 Android，集成书籍发现、书架管理、阅读、离线缓存与在线听书。界面采用半透明材质与档案式排版，提供立体书架、连贯的页面过渡和可自定义的阅读体验。
+书屿是轻小说文库客户端的 Flutter 重构版本，面向 Android，集成书籍发现、书架管理、阅读、离线缓存与在线听书。界面采用半透明材质与档案式排版，提供立体书架、连贯的页面过渡和可自定义的阅读体验。
 
 ## 界面预览
 
@@ -42,8 +42,8 @@ Wenku8 Flutter 是轻小说文库客户端的 Flutter 重构版本，面向 Andr
 - **阅读工具**：章节目录、书签定位与高亮、章内查找、插图查看与分享。
 - **离线阅读**：章节缓存、缓存管理、阅读历史、进度续读与本地备份。
 - **在线听书**：中文音色、语速调节、段落跟随、睡眠定时、后台与锁屏控制。
-- **纯本机数据**：无账号体系，所有收藏、进度与缓存仅保存在本机，可通过本地备份迁移。
-- **本地书库**：选择文件夹，扫描导入 TXT / PDF；TXT 自动识别 UTF-8 / GB18030 编码并切分章节，PDF 逐页渲染阅读；新书自动上架，启动时静默自动扫描。
+- **本地阅读数据**：无账号体系，所有收藏、进度与缓存仅保存在本机，可通过本地备份迁移。
+- **本地书库**：选择文件夹，扫描导入 TXT / PDF / EPUB；TXT 自动识别 UTF-8 / GB18030 编码并切分章节，PDF 逐页渲染阅读；新书自动上架，启动时静默自动扫描。
 - **标签与整理**：自建标签库，给任意书打标签并在书架按标签筛选；详情页可编辑标签，设置页可管理标签。
 - **随机选书**：书架一键随机抽一本，附带"换一本"。
 - **信息修正**：本地书可在书库管理页手动修正书名/作者。
@@ -85,3 +85,9 @@ flutter build apk --release --target-platform android-arm64
 - 在线语音协议适配：[rany2/edge-tts](https://github.com/rany2/edge-tts)，[LGPL v3](assets/licenses/edge-tts.txt)。
 
 完整版权声明与接口运行库分发条件见 [NOTICE](NOTICE) 和 [第三方组件许可](docs/THIRD_PARTY.md)。
+
+## 隐私说明
+
+收藏、进度与缓存保存在设备本地。在线书库会访问内容服务；在线听书会把待朗读文本发送给 Microsoft 在线语音服务；检查更新会访问 GitHub。详见 [隐私说明](docs/PRIVACY.md)。
+
+图标源文件为 `assets/branding/app-icon.png`。安装 Pillow 后执行 `python3 tools/generate_app_icons.py` 重新生成 Android 图标。

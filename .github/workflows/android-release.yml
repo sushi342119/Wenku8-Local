@@ -1,0 +1,60 @@
+name: Prepare Release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      - run: flutter test
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: Validate release metadata
+        run: python3 tools/prepare_release.py --tag "${GITHUB_REF_NAME}" --notes build/release-notes.md
+      - name: Configure persistent release signing
+        if: github.event_name != 'pull_request'
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          python3 tools/configure_signing.py
+      - name: Build signed APK
+        if: github.event_name != 'pull_request'
+        run: flutter build apk --release --target-platform android-arm64 --dart-define=UPDATE_REPOSITORY=${{ github.repository }}
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: shuyu-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+      - name: Export matching source
+        run: |
+          python3 tools/export_public_source.py ../shuyu-source
+          cd ..
+          zip -qr "${GITHUB_WORKSPACE}/build/shuyu-source.zip" shuyu-source
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "书屿 $GITHUB_REF_NAME" --notes-file build/release-notes.md build/app/outputs/flutter-apk/app-release.apk build/shuyu-source.zip
+      - name: Remove signing material
+        if: always()
+        run: rm -f android/key.properties android/release.keystore

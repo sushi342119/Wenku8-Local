@@ -7,9 +7,9 @@ import shutil
 ROOT = Path(__file__).resolve().parent.parent
 FILES = (
     "README.md", "LICENSE", "NOTICE", ".gitignore", "pubspec.yaml", "pubspec.lock",
-    "analysis_options.yaml", ".github/workflows/flutter-ci.yml", ".github/workflows/android-release.yml",
+    "analysis_options.yaml", ".github/workflows/local-build.yml", ".github/workflows/android-release.yml",
     "tools/export_public_source.py", "tools/test_public_source_export.py", "tools/generate_app_icons.dart",
-    "docs/RELEASING.md", "docs/THIRD_PARTY.md", "CHANGELOG.md", "tools/prepare_release.py", "tools/test_prepare_release.py",
+    "docs/PRIVACY.md", "tools/configure_signing.py", "tools/generate_app_icons.py", "docs/RELEASING.md", "docs/THIRD_PARTY.md", "CHANGELOG.md", "tools/prepare_release.py", "tools/test_prepare_release.py",
     "tools/check_public_source.py", "tools/test_public_source_policy.py",
     "tools/verify_apk_runtime.py", "tools/test_verify_apk_runtime.py",
 )

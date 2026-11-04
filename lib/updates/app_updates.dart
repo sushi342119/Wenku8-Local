@@ -12,14 +12,12 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.6.0';
-const currentAppBuild = 42;
+const currentAppVersion = '1.6.1';
+const currentAppBuild = 43;
 const currentReleaseNotes = '''
-1. EPUB 阅读器底部新增全书进度条：可拖动跳转，拖动时显示第 N 章 · X%
-2. EPUB 章内进度改为真实保存：重进回到上次读到的位置，不再只回章首
-3. 设置→关于→“GitHub 项目与版本”可正常打开版本列表页
-4. EPUB 图片与指纹缓存：换章回看、重进不再重复解压与重算整本指纹，首次打开某章仍需解压本章图片
-5. 暂未接上：朗读、章内查找
+1. 应用更名为书屿，使用黑白狐狸图标。
+2. 统一项目展示、图标生成与发布说明。
+3. 加强正式签名检查，补充联网与隐私说明。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

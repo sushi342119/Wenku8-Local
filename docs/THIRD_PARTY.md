@@ -9,7 +9,7 @@
 - 路径：`android/app/src/main/jniLibs/<abi>/libcpp.so`。
 - 用途：现有文库联网接口的 JNI 运行库。
 - 本分支不修改、不解包、不重新实现该二进制。
-- 项目维护者于 2026-10-15 确认其可在**保持原样**的条件下再分发。本仓库据此保留原文件。
+- 继承的说明记载维护者于 2026-10-15 确认可原样再分发；本分支尚未取得并核对对应授权凭据，不能将该记载当作已独立验证的授权结论。正式分发前应由维护者留存权利人授权及适用范围。
 - 该组件的源码不在本工程中；不能将应用源码的 GPL 许可视为对该组件源码、修改权或其他用途的授权。需要超出原样再分发条件时，应联系原版权方。
 - 原项目当前公开构建使用 [api-stub](https://github.com/MewX/light-novel-library_Wenku8_Android/blob/master/studio-android/LightNovelLibrary/settings.gradle)，因此本工程源码归档不应被描述为该二进制的完整对应源码。
 

@@ -94,3 +94,15 @@ dependencies {
     implementation("androidx.media:media:1.7.0")
     testImplementation("junit:junit:4.13.2")
 }
+
+
+// A release task must never silently fall back to a debug certificate.
+gradle.taskGraph.whenReady {
+    if (allTasks.any { it.project == project && it.name.contains("Release") }) {
+        require(releaseKeyFile.isFile) { "Release requires android/key.properties and a persistent signing key" }
+        for (key in listOf("storeFile", "storePassword", "keyAlias", "keyPassword")) {
+            require(!releaseKeys.getProperty(key).isNullOrBlank()) { "Missing release signing property: $key" }
+        }
+        require(rootProject.file(releaseKeys.getProperty("storeFile")).isFile) { "Release keystore does not exist" }
+    }
+}
