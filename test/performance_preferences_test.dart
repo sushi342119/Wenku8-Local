@@ -169,6 +169,7 @@ void main() {
       await tester.ensureVisible(glass);
       await tester.pumpAndSettle();
       await tester.tap(glass);
+      await tester.pumpAndSettle();
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
@@ -178,6 +179,7 @@ void main() {
         find.byKey(const ValueKey('performance-light-preset')),
       );
       await tester.tap(find.byKey(const ValueKey('performance-light-preset')));
+      await tester.pumpAndSettle();
       await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );

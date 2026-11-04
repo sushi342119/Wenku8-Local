@@ -1,4 +1,7 @@
 import tempfile
+import re
+import subprocess
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -70,13 +73,6 @@ const currentAppBuild = int.fromEnvironment(
         self.assertTrue(metadata(root)[2].strip())
 
 
-"""Run the actual CI test pipeline with controlled test exit statuses."""
-from pathlib import Path
-import re
-import subprocess
-import tempfile
-import textwrap
-import unittest
 
 
 class TestPipelineStatus(unittest.TestCase):

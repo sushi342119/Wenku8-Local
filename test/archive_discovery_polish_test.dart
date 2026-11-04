@@ -220,6 +220,7 @@ void main({Capture? capture}) {
       await tester.pump();
       final scene = _scene(tester);
       final oldPool = scene.debugPoolCount;
+      final mounted = scene.debugMountedCount;
       repo.requests[(NovelSort.lastUpdate, 2)]!.complete(
         NovelPage(items: _books(970600, 20), page: 2, totalPages: 5),
       );
@@ -227,7 +228,11 @@ void main({Capture? capture}) {
       expect(_clock(tester), same(clock));
       expect(_scene(tester), same(scene));
       expect(scene.debugEntranceProgress, .3);
-      expect(scene.debugPoolCount, oldPool);
+      // The logical looping pool grows with the appended books; the mounted
+      // render window remains bounded and keeps its entrance clock.
+      expect(scene.debugPoolCount, oldPool + 20);
+      expect(scene.debugMountedCount, mounted);
+      expect(scene.debugMountedCount, lessThanOrEqualTo(41));
       repo.requests[(NovelSort.lastUpdate, 3)]!.complete(
         NovelPage(items: _books(970700, 20), page: 3, totalPages: 5),
       );

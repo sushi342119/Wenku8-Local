@@ -142,10 +142,12 @@ void main() {
       await tester.tap(_control('标签筛选'));
       await tester.pumpAndSettle();
       expect(find.byType(GlassOverlaySurface), findsOneWidget);
-      await tester.tap(find.text('待读'));
+      await tester.tap(find.descendant(
+        of: find.byType(GlassMenuSurface), matching: find.text('待读'),
+      ));
       await tester.pumpAndSettle();
       expect(feed.sort, NovelSort.lastUpdate);
-      expect(find.text('待读'), findsOneWidget);
+      expect(find.text('待读'), findsWidgets);
       expect(repository.calls, [(NovelSort.lastUpdate, 1), (NovelSort.lastUpdate, 2)]);
       expect(tester.takeException(), isNull);
     },
@@ -198,8 +200,8 @@ void main() {
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       final state = await LibraryState.load();
-      await state.toggleShelf(5000, novel: _book(5000));
-      await state.setChapter(5000, 1);
+      await tester.runAsync(() => state.toggleShelf(5000, novel: _book(5000)));
+      await tester.runAsync(() => state.setChapter(5000, 1));
       final repository = _Repository()..failList = true;
       await tester.pumpWidget(NovelApp(state: state, repository: repository));
       await tester.pumpAndSettle();
@@ -245,8 +247,8 @@ void main() {
     tester,
   ) async {
     final state = await _mount(tester, _Repository());
-    await state.toggleShelf(5000, novel: _book(5000));
-    await state.setChapter(5000, 1);
+    await tester.runAsync(() => state.toggleShelf(5000, novel: _book(5000)));
+    await tester.runAsync(() => state.setChapter(5000, 1));
     await tester.tap(find.byKey(const ValueKey('dock-tab-1')));
     await tester.pumpAndSettle();
     await tester.tap(_control('功能作品 5000书架操作'));
@@ -324,13 +326,13 @@ void main() {
     (tester) async {
       SharedPreferences.setMockInitialValues({'reduceMotion': true});
       final state = await LibraryState.load();
-      await state.savePosition(
+      await tester.runAsync(() => state.savePosition(
         novel: _book(5000),
         chapter: 0,
         offset: 700,
         maximum: 10000,
         width: 800,
-      );
+      ));
       await _reader(
         tester,
         state,
@@ -376,13 +378,13 @@ void main() {
       SharedPreferences.setMockInitialValues({'reduceMotion': true});
       final state = await LibraryState.load();
       final old = _book(5000);
-      await state.savePosition(
+      await tester.runAsync(() => state.savePosition(
         novel: old,
         chapter: 1,
         offset: 700,
         maximum: 10000,
         width: 800,
-      );
+      ));
       final novel = old.withChapters([
         const NovelChapter('插入章节', '新增正文', id: 5),
         ...old.chapters,

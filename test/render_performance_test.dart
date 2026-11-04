@@ -380,7 +380,7 @@ void main() {
       await tester.pumpAndSettle();
       final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
       final novel = demoNovels.first;
-      await state.toggleShelf(novel.id, novel: novel);
+      await tester.runAsync(() => state.toggleShelf(novel.id, novel: novel));
       await tester.pump();
       expect(tester.widget<MaterialApp>(find.byType(MaterialApp)), same(app));
       Navigator.of(tester.element(find.byType(HomeShell))).push(
@@ -401,13 +401,13 @@ void main() {
         find.byKey(const ValueKey('paragraph-0')),
       );
       for (var i = 0; i < 12; i++) {
-        await state.savePosition(
+        await tester.runAsync(() => state.savePosition(
           novel: novel,
           chapter: 0,
           offset: i * 25,
           maximum: 3000,
           width: 800,
-        );
+        ));
         await tester.pump();
         expect(tester.widget<MaterialApp>(find.byType(MaterialApp)), same(app));
         expect(
@@ -419,7 +419,7 @@ void main() {
           same(paragraph),
         );
       }
-      await state.setFontSize(23);
+      await tester.runAsync(() => state.setFontSize(23));
       await tester.pumpAndSettle();
       expect(tester.widget<MaterialApp>(find.byType(MaterialApp)), same(app));
       expect(
@@ -429,7 +429,7 @@ void main() {
             .fontSize,
         23,
       );
-      await state.setTheme(ThemeMode.dark);
+      await tester.runAsync(() => state.setTheme(ThemeMode.dark));
       await tester.pumpAndSettle();
       expect(
         tester.widget<MaterialApp>(find.byType(MaterialApp)),
