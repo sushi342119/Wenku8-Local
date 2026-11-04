@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
-import 'package:flutter/gestures.dart' show kTouchSlop;
+import 'package:flutter/gestures.dart' show GestureArenaTeam, kTouchSlop;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart' show HapticFeedback;
@@ -170,6 +170,13 @@ class LiquidGlassSwitch extends StatefulWidget {
   /// less for cheaper captures, `0.0` for the device pixel ratio.
   final double pixelRatio;
 
+  /// Keep direct manipulation, without spring or morph interpolation.
+  final bool reduceMotion;
+
+  /// Let an embedding application own feedback without a second motor call.
+  /// Standalone controls retain their original feedback by default.
+  final bool enableHaptics;
+
   const LiquidGlassSwitch({
     super.key,
     required this.value,
@@ -183,7 +190,14 @@ class LiquidGlassSwitch extends StatefulWidget {
     this.style,
     this.reserveSwellRoom = false,
     this.pixelRatio = 1.0,
+    this.reduceMotion = false,
+    this.horizontalDragOnly = false,
+    this.enableHaptics = true,
   });
+
+  /// Yield vertical gestures to an enclosing scrollable; existing callers
+  /// retain the eager grab-and-carry contract by default.
+  final bool horizontalDragOnly;
 
   /// The tuned default thumb glass: a clear pill — refraction and rim
   /// only, no tint. The glass shows what is behind it rather than
@@ -235,6 +249,7 @@ LiquidGlassStyle _withShadow(LiquidGlassStyle base, LiquidGlassShadow? shadow) {
 
 class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
     with TickerProviderStateMixin {
+  final _gestureTeam = GestureArenaTeam();
   static const double _tapTimeThreshold = 0.15; // seconds
   static const double _edgeToggleThreshold = 5; // px
 
@@ -376,9 +391,22 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
         _ensureTicking();
       }
     }
+    if (widget.reduceMotion && !oldWidget.reduceMotion) _ensureTicking();
   }
 
   void _ensureTicking() {
+    if (widget.reduceMotion) {
+      _ticker?.stop();
+      _thumbCX = _targetThumbCX;
+      _thumbVel = 0;
+      _thumbSpringTarget = null;
+      _morph = _morphTarget = _pointerDown ? 1 : 0;
+      _morphVel = 0;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _syncCapture(_morph != 0);
+      });
+      return;
+    }
     final ticker = _ticker;
     if (ticker != null && !ticker.isActive) {
       _tickerLast = null;
@@ -463,7 +491,7 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
       // The view's per-frame listener may already have run by the time
       // this fires, which would push its first capture a frame past the
       // glass. The one-shot lands it at the end of THIS frame either way.
-      _viewController.captureOnce();
+      if (!_impellerGlass) _viewController.captureOnce();
     } else {
       _viewController.stopRealtimeCapture();
     }
@@ -481,6 +509,7 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
   }
 
   void _handleDown(Offset globalPosition) {
+    if (_pointerDown) return;
     _pointerDown = true;
     _isDragging = false;
     _didToggleDuringDrag = false;
@@ -541,7 +570,7 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
       final newState = hitRight;
       if (newState != _isOn) {
         _didToggleDuringDrag = true;
-        HapticFeedback.lightImpact();
+        if (widget.enableHaptics) HapticFeedback.lightImpact();
         _isOn = newState;
         widget.onChanged(_isOn);
       }
@@ -558,7 +587,7 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
     // mouse speeds.
     if (!_didMoveFar && elapsed < _tapTimeThreshold) {
       // A tap: toggle immediately, glide across, contract 0.2 s later.
-      HapticFeedback.lightImpact();
+      if (widget.enableHaptics) HapticFeedback.lightImpact();
       _isOn = !_isOn;
       widget.onChanged(_isOn);
       _thumbSpringTarget = _targetThumbCX;
@@ -575,7 +604,7 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
       // long-press-and-release flip the switch.
       _isDragging = false;
       if (!_didToggleDuringDrag) {
-        HapticFeedback.lightImpact();
+        if (widget.enableHaptics) HapticFeedback.lightImpact();
         _isOn = !_isOn;
         widget.onChanged(_isOn);
       }
@@ -589,9 +618,10 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
   /// A cancelled interaction: an established drag finishes as a drag
   /// (toggling); a not-yet-drag just settles home.
   void _handleCancel() {
-    if (!_pointerDown) return;
+    if (!mounted || !_pointerDown) return;
     final elapsed = DateTime.now().difference(_downTime).inMicroseconds / 1e6;
-    if (_didMoveFar || elapsed >= _tapTimeThreshold) {
+    if (_didMoveFar ||
+        !widget.horizontalDragOnly && elapsed >= _tapTimeThreshold) {
       _handleUp();
       return;
     }
@@ -666,7 +696,9 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
               left: padX,
               top: trackTop,
               child: TweenAnimationBuilder<double>(
-                duration: const Duration(milliseconds: 250),
+                duration: widget.reduceMotion
+                    ? Duration.zero
+                    : const Duration(milliseconds: 250),
                 curve: Curves.easeInOut,
                 tween: Tween<double>(end: _isOn ? 1.0 : 0.0),
                 builder: (context, t, _) => LiquidGlassSwitchTrack(
@@ -801,13 +833,22 @@ class _LiquidGlassSwitchState extends State<LiquidGlassSwitch>
       height: l.height,
       child: RawGestureDetector(
         behavior: HitTestBehavior.opaque,
-        gestures: liquidGlassEagerPanGestures(
-          debugOwner: this,
-          onDown: _handleDown,
-          onMove: _handleMove,
-          onUp: _handleUp,
-          onCancel: _handleCancel,
-        ),
+        gestures: widget.horizontalDragOnly
+            ? liquidGlassHorizontalPanGestures(
+                debugOwner: this,
+                team: _gestureTeam,
+                onDown: _handleDown,
+                onMove: _handleMove,
+                onUp: _handleUp,
+                onCancel: _handleCancel,
+              )
+            : liquidGlassEagerPanGestures(
+                debugOwner: this,
+                onDown: _handleDown,
+                onMove: _handleMove,
+                onUp: _handleUp,
+                onCancel: _handleCancel,
+              ),
         child: OverflowBox(
           maxWidth: viewWidth,
           maxHeight: viewHeight,

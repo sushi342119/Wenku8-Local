@@ -47,6 +47,7 @@ class LiquidGlassShaders {
   // Programs keyed by backend: true = Impeller (derivative), false = Skia
   // (analytic). Each backend loads a different entry .frag.
   static final Map<bool, ui.FragmentProgram> _mainPrograms = {};
+  static ui.FragmentProgram? _unlitMainProgram;
   static final Map<bool, ui.FragmentProgram> _borderPrograms = {};
   static final Map<bool, Future<void>> _loading = {};
 
@@ -56,6 +57,26 @@ class LiquidGlassShaders {
   };
   static const String _borderAsset =
       'lib/assets/shaders/liquid_glass_border_skia.frag';
+  static const String _unlitMainAsset =
+      'lib/assets/shaders/liquid_glass_unlit.frag';
+  static const bool _specializeUnlit =
+      bool.fromEnvironment('LIQUID_GLASS_SPECIALIZE_UNLIT', defaultValue: true);
+
+  /// Same-process GPU pixel comparisons against the original general shader.
+  @visibleForTesting
+  static bool debugDisableUnlitSpecialization = false;
+  @visibleForTesting
+  static int debugUnlitShaderCreationCount = 0;
+  static bool _reportedUnlit = false;
+
+  static bool _loadsUnlit(bool impeller) =>
+      _specializeUnlit && impeller && !_desktopEntries(impeller);
+
+  @internal
+  static bool canSpecializeUnlit(bool impeller) =>
+      _loadsUnlit(impeller) &&
+      !debugDisableUnlitSpecialization &&
+      _unlitMainProgram != null;
 
   // The merged-surface entry, used by LiquidGlassBlender and nothing else.
   // [ensureLoaded] compiles it with the rest; the lens itself waits only on
@@ -96,6 +117,7 @@ class LiquidGlassShaders {
   /// Skia, [createBorderShader]).
   static bool isLoadedFor(bool impeller) =>
       _mainPrograms.containsKey(impeller) &&
+      (!_loadsUnlit(impeller) || _unlitMainProgram != null) &&
       (impeller || _borderPrograms.containsKey(impeller));
 
   /// Whether the engine's native backend is loaded. Convenience for callers
@@ -138,6 +160,9 @@ class LiquidGlassShaders {
   static Future<void> _load(bool impeller) async {
     try {
       _mainPrograms[impeller] ??= await _loadProgram(_mainAssetFor(impeller));
+      if (_loadsUnlit(impeller)) {
+        _unlitMainProgram ??= await _loadProgram(_unlitMainAsset);
+      }
       if (!impeller) {
         _borderPrograms[impeller] ??= await _loadProgram(_borderAsset);
       }
@@ -199,6 +224,25 @@ class LiquidGlassShaders {
     assert(program != null,
         'LiquidGlassShaders not loaded — await ensureLoaded($backend) first.');
     return program!.fragmentShader();
+  }
+
+  /// Identical uniform layout to [createMainShader]. The lens only selects
+  /// this program when its rounded-rectangle shape has zero light thicknesses
+  /// and zero dispersion; all other styles keep the general program.
+  @internal
+  static ui.FragmentShader createUnlitMainShader() {
+    assert(_unlitMainProgram != null);
+    if (const bool.fromEnvironment('GLASS_RENDER_DIAGNOSTIC') &&
+        !_reportedUnlit) {
+      _reportedUnlit = true;
+      debugPrint('GLASS_RENDER_PATH unlit_rounded_rect_specialization=true '
+          'light_thicknesses=0 dispersion=0');
+    }
+    assert(() {
+      debugUnlitShaderCreationCount++;
+      return true;
+    }());
+    return _unlitMainProgram!.fragmentShader();
   }
 
   /// Creates a fresh border-shader instance for [impeller] (defaults to the

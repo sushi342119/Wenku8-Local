@@ -4,12 +4,15 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'book_text_encoding.dart';
 import 'catalog.dart';
+import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
 import 'recovery_archive.dart';
 
 final backupPreferenceKeys = <String>{
   'theme',
+  'appLanguage',
   'readerFontSize',
   'readerLineHeight',
   'reduceMotion',
@@ -21,6 +24,8 @@ final backupPreferenceKeys = <String>{
   'appFontId',
   'shelfSort',
   'shelfFilter',
+  'localTxtEncoding',
+  HapticPreferences.preferenceKey,
   PerformancePreferences.modeKey,
   ...PerformanceEffect.values.map((effect) => effect.preferenceKey),
 };
@@ -207,6 +212,14 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
     } else if (backupPreferenceKeys.contains(key)) {
       final valid = switch (key) {
         'theme' => ['system', 'light', 'dark'].contains(value),
+        'appLanguage' => [
+          'system',
+          'simplified',
+          'hongKong',
+          'taiwan',
+        ].contains(value),
+        HapticPreferences.preferenceKey => _validHaptics(value),
+        'localTxtEncoding' => localTextEncodingOptions.containsKey(value),
         'shelfSort' => ['recentRead', 'recentAdded', 'title'].contains(value),
         'shelfFilter' => [
           'all',
@@ -359,6 +372,15 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
 
 bool _number(Object? value, double min, double max) =>
     value is num && value.isFinite && value >= min && value <= max;
+
+bool _validHaptics(Object? value) {
+  try {
+    HapticPreferences.decode(value);
+    return true;
+  } on FormatException {
+    return false;
+  }
+}
 
 bool _isAllowedCoverUrl(Uri url) {
   final host = url.host.toLowerCase();

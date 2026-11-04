@@ -67,6 +67,8 @@ export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_adaptive_c
 // dimming variant of iOS 26's scroll edge effect).
 export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_scroll_edge.dart'
     show LiquidGlassScrollEdge, LiquidGlassEdge, LiquidGlassScrollEdgeStyle;
+export 'package:liquid_glass_easy/src/widgets/components/scroll_edge_input_group.dart'
+    show LiquidGlassScrollEdgeGroup;
 // The two clip helpers are shared between the widget-level clip and the
 // render object's own, so they are library-wide but not API.
 export 'package:liquid_glass_easy/src/widgets/utils/liquid_glass_shape.dart'
@@ -133,6 +135,13 @@ export 'package:liquid_glass_easy/src/widgets/utils/liquid_glass_lens_motion.dar
     show LiquidGlassLensMotion, LiquidGlassLensMotionSpec;
 export 'package:liquid_glass_easy/src/widgets/components/switch/liquid_glass_switch.dart'
     show LiquidGlassSwitch, LiquidGlassSwitchLayout;
+// Wenku8's pinned fork also exposes the inline selector, with disabled-item
+// semantics. Keep the app on one component/material API rather than src imports.
+export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_segmented.dart'
+    show
+        LiquidGlassSegmented,
+        LiquidGlassSegmentedPillStyle,
+        LiquidGlassSegmentedLabelStyle;
 // Scaffold: a Scaffold-style layout that owns the LiquidGlassView
 // pipeline and composes the app bar + bottom nav + side action slots.
 export 'package:liquid_glass_easy/src/widgets/components/liquid_glass_scaffold.dart';
@@ -162,8 +171,7 @@ export 'package:liquid_glass_easy/src/widgets/components/morph/liquid_glass_morp
 // The following are intentionally NOT exported:
 //   • liquid_glass_control_tile.dart — showcase-only demo widget,
 //     not a generic developer component.
-//   • liquid_glass_segmented.dart (LiquidGlassSegmented + styles),
-//     liquid_glass_app_icon.dart (LiquidGlassAppIcon) and
+//   • liquid_glass_app_icon.dart (LiquidGlassAppIcon) and
 //     liquid_glass_dock.dart (LiquidGlassDock) — intentionally not
 //     exported; the example still imports them directly from 'src'.
 //   • liquid_glass_segmented_control.dart,

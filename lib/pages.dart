@@ -16,7 +16,9 @@ import 'backup_page.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'glass_dock.dart';
+import 'haptic_settings_page.dart';
 import 'library_state.dart';
+import 'setting_menu.dart';
 import 'listening/controller.dart';
 import 'listening/models.dart' show hasSpeechText;
 import 'listening/widgets.dart';
@@ -2487,6 +2489,11 @@ class SettingsPage extends StatelessWidget {
                     ],
                   ),
                 ),
+                const Divider(height: 22),
+                LanguageSettingMenu(
+                  key: const ValueKey('settings-language'),
+                  state: state,
+                ),
               ],
             ),
           ),
@@ -2671,6 +2678,30 @@ class SettingsPage extends StatelessWidget {
                   ),
                 ),
                 Icon(CupertinoIcons.chevron_right, size: 14),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          ContentPanel(
+            key: const ValueKey('settings-haptics'),
+            onTap: () => pushNovelPage<void>(
+              context,
+              HapticSettingsPage(state: state),
+              reduceMotion: state.reduceMotion,
+            ),
+            child: Row(
+              children: [
+                const Icon(CupertinoIcons.waveform, size: 21),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Text(
+                    '振动反馈',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                Text(state.haptics.enabled ? '已开启' : '已关闭'),
+                const SizedBox(width: 10),
+                const Icon(CupertinoIcons.chevron_right, size: 14),
               ],
             ),
           ),

@@ -34,6 +34,7 @@ class PerformancePreferences {
   bool get blur => allows(PerformanceEffect.blur);
   bool get edgeBlur => allows(PerformanceEffect.edgeBlur);
   bool get motion => allows(PerformanceEffect.motion);
+  bool get animatedIcons => motion;
   bool get shelf3d => allows(PerformanceEffect.shelf3d);
   bool get needsRuntimeEffects => glass || edgeBlur;
 
@@ -69,9 +70,17 @@ class PerformanceScope extends InheritedWidget {
   const PerformanceScope({
     super.key,
     required this.preferences,
+    this.explicitReduceMotion,
     required super.child,
   });
   final PerformancePreferences preferences;
+  final bool? explicitReduceMotion;
+
+  static bool reduceMotionOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<PerformanceScope>()
+          ?.explicitReduceMotion ??
+      MediaQuery.disableAnimationsOf(context);
   static PerformancePreferences of(BuildContext context) =>
       context
           .dependOnInheritedWidgetOfExactType<PerformanceScope>()
@@ -79,5 +88,6 @@ class PerformanceScope extends InheritedWidget {
       const PerformancePreferences();
   @override
   bool updateShouldNotify(PerformanceScope oldWidget) =>
-      preferences != oldWidget.preferences;
+      preferences != oldWidget.preferences ||
+      explicitReduceMotion != oldWidget.explicitReduceMotion;
 }

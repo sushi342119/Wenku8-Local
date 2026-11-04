@@ -486,8 +486,11 @@ vec2 applyLensMagnification(
    TINT
    =========================== */
 vec3 applyLensTint(vec3 base, float mask, vec4 color, float borderAlpha){
+    // Wenku8 2026-10-16: base already contains silhouette coverage. Tint in
+    // that same premultiplied space; using mask again as the mix factor adds
+    // a*mask*(1-mask)*backdrop and produces a white halo on light papers.
     return (color.a > 0.001 && mask > 0.001)
-        ? mix(base, color.rgb, color.a * borderAlpha * mask)
+        ? mix(base, color.rgb * mask, color.a * borderAlpha)
         : base;
 }
 

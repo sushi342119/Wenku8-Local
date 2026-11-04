@@ -3,9 +3,15 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import '../reader_content.dart';
 
-enum ListeningSource { edge, system }
+enum ListeningSource { edge, system, custom }
 
 enum ListeningPhase { stopped, preparing, playing, paused, completed, failed }
+
+const listeningMinimumSpeed = .5;
+const listeningMaximumSpeed = 3.0;
+const listeningMaximumParagraphGapMs = 3000;
+int normalizeListeningParagraphGap(int value) =>
+    (value.clamp(0, listeningMaximumParagraphGapMs) / 100).round() * 100;
 
 class SpeechVoice {
   const SpeechVoice({
@@ -40,9 +46,11 @@ class SpeechVoice {
   factory SpeechVoice.fromJson(Map<String, dynamic> json) => SpeechVoice(
     id: json['id'] as String,
     label: json['label'] as String,
-    source: json['source'] == 'system'
-        ? ListeningSource.system
-        : ListeningSource.edge,
+    source: switch (json['source']) {
+      'system' => ListeningSource.system,
+      'custom' => ListeningSource.custom,
+      _ => ListeningSource.edge,
+    },
     locale: json['locale'] is String ? json['locale'] : 'zh-CN',
     engine: json['engine'] as String?,
     offline: json['offline'] == true,
@@ -89,9 +97,15 @@ String? chineseSpeechLocale(String value) {
 }
 
 class SpeechSegment {
-  const SpeechSegment(this.paragraph, this.start, this.end, this.text);
+  const SpeechSegment(
+    this.paragraph,
+    this.start,
+    this.end,
+    this.text, {
+    this.language = '',
+  });
   final int paragraph, start, end;
-  final String text;
+  final String text, language;
   String key(SpeechVoice voice) {
     final voiceKey = '${voice.source.name}|${voice.engine}|${voice.id}';
     final cache = _speechSegmentKeys[this] ??= <String, String>{};
@@ -226,7 +240,7 @@ class SpeechCancelled implements Exception {
   const SpeechCancelled();
 }
 
-enum SpeechFailureKind { unavailable, content, timeout }
+enum SpeechFailureKind { unavailable, content, timeout, missingLanguage }
 
 class SpeechFailure implements Exception {
   const SpeechFailure(

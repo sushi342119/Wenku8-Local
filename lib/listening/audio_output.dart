@@ -23,18 +23,25 @@ class NativeListeningOutput implements ListeningAudioOutput {
   AudioSession? _session;
   int _playEpoch = 0;
   bool _sessionActive = false;
+  bool _interruptedPlaying = false;
 
   Future<void> initialize() async {
     _session = await AudioSession.instance;
     await _session!.configure(const AudioSessionConfiguration.speech());
     _subscriptions.add(
       _session!.interruptionEventStream.listen((event) {
-        if (event.begin) unawaited(controller.pause());
-        // Resuming after calls/navigation/audio focus loss is an explicit action.
+        if (event.begin) {
+          _interruptedPlaying = controller.snapshot.value.requestingPlayback;
+          if (_interruptedPlaying) unawaited(controller.pause());
+        } else if (_interruptedPlaying) {
+          _interruptedPlaying = false;
+          unawaited(controller.resume());
+        }
       }),
     );
     _subscriptions.add(
       _session!.becomingNoisyEventStream.listen((_) {
+        _interruptedPlaying = false;
         unawaited(controller.pause());
       }),
     );
@@ -70,6 +77,12 @@ class NativeListeningOutput implements ListeningAudioOutput {
   @override
   Future<void> play() async {
     final epoch = ++_playEpoch;
+    // completed is a persistent decoder state, not a fresh event on play().
+    // Forward it explicitly if pause/resume raced its stream notification.
+    if (_player.processingState == ProcessingState.completed) {
+      _completed.add(null);
+      return;
+    }
     final active = _sessionActive || await _session!.setActive(true);
     if (epoch != _playEpoch) return;
     if (!active) {
@@ -98,6 +111,7 @@ class NativeListeningOutput implements ListeningAudioOutput {
   @override
   Future<void> stop() async {
     _playEpoch++;
+    _interruptedPlaying = false;
     await _player.stop();
     _sessionActive = false;
     await _session?.setActive(false);

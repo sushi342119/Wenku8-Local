@@ -11,6 +11,8 @@ import 'package:path_provider/path_provider.dart';
 import 'catalog.dart';
 import 'library_backup.dart';
 import 'book_tags.dart';
+import 'app_language.dart';
+import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
 import 'app_typography.dart';
 import 'local_platform.dart';
@@ -257,6 +259,11 @@ class LibraryState extends ChangeNotifier {
     _fontSize = preference('readerFontSize', 19, 15, 27);
     _lineHeight = preference('readerLineHeight', 1.72, 1.3, 2.2);
     _reduceMotion = _prefs.get('reduceMotion') == true;
+    _haptics = HapticPreferences.fromRecords({
+      HapticPreferences.preferenceKey: _prefs.get(
+        HapticPreferences.preferenceKey,
+      ),
+    });
     _loadFontState();
     _performance = PerformancePreferences.fromRecords({
       for (final key in [
@@ -326,6 +333,7 @@ class LibraryState extends ChangeNotifier {
   double _fontSize = 19;
   double _lineHeight = 1.72;
   bool _reduceMotion = false;
+  HapticPreferences _haptics = const HapticPreferences();
   String _appFontId = appFontSystem.id;
   final List<AppFontEntry> _importedFonts = [];
 
@@ -407,10 +415,29 @@ class LibraryState extends ChangeNotifier {
   String get shelfFilter => _shelfFilter;
   bool get keepScreenOn => _keepScreenOn;
   ThemeMode get theme => _theme;
+  AppLanguage get language => AppLanguage.fromRecord(_prefs.get('appLanguage'));
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
   int get debugMetadataEncodeCount => _metadataEncodes;
   bool get reduceMotion => _reduceMotion;
+  HapticPreferences get haptics => _haptics;
+
+  Future<void> setLanguage(AppLanguage value) async {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then((_) => setLanguage(value));
+    }
+    await _queuePositionWrite(() async {
+      if (value != AppLanguage.simplified) await ChineseText.prepare();
+      final current = language;
+      await writeLibraryPreference(_prefs, 'appLanguage', value.name);
+      if (current != value && !_disposed) {
+        _application.notifyListeners();
+        _readerSettings.notifyListeners();
+        _settings.notifyListeners();
+        notifyListeners();
+      }
+    });
+  }
 
   /// 当前字体 ID（稳定 ID，持久化）。
   String get appFontId => _appFontId;
@@ -2106,6 +2133,21 @@ class LibraryState extends ChangeNotifier {
     }
   }
 
+  Future<void> setHaptics(HapticPreferences value) async {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then((_) => setHaptics(value));
+    }
+    await _queuePositionWrite(() async {
+      if (_haptics == value) return;
+      await _commitLibraryRecords(value.toRecords());
+      _haptics = value;
+      if (!_disposed) {
+        _application.notifyListeners();
+        _settings.notifyListeners();
+      }
+    });
+  }
+
   Future<void> setPerformance(PerformancePreferences value) async {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => setPerformance(value));
@@ -2192,9 +2234,11 @@ class LibraryState extends ChangeNotifier {
       'reading_history_hidden': _hiddenHistory.map((id) => '$id').toList(),
       'recentSearches': _recentSearches,
       'theme': _theme.name,
+      'appLanguage': language.name,
       'readerFontSize': _fontSize,
       'readerLineHeight': _lineHeight,
       'reduceMotion': _reduceMotion,
+      ..._haptics.toRecords(),
       'appFontId': _appFontId,
       ..._performance.toRecords(),
       'glassBlur': _glassBlur,
@@ -2426,6 +2470,9 @@ class LibraryState extends ChangeNotifier {
           }
           if (records['reduceMotion'] case final bool value) {
             _reduceMotion = value;
+          }
+          if (records.containsKey(HapticPreferences.preferenceKey)) {
+            _haptics = HapticPreferences.fromRecords(records);
           }
           if (records['appFontId'] case final String value) {
             if (value == appFontSystem.id ||

@@ -6,6 +6,7 @@ import 'package:liquid_glass_easy/liquid_glass_easy.dart';
 /// The package owns the live backdrop rendering; the app continues to own
 /// gestures, layout and menu motion. No screen capture or adaptive readback.
 class EasyGlassSurface extends StatelessWidget {
+  static bool _reportedRenderer = false;
   const EasyGlassSurface({
     super.key,
     required this.child,
@@ -33,6 +34,14 @@ class EasyGlassSurface extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (const bool.fromEnvironment('GLASS_RENDER_DIAGNOSTIC') &&
+        !_reportedRenderer) {
+      _reportedRenderer = true;
+      debugPrint(
+        'GLASS_RENDER_PATH shader_filter_supported='
+        '${ui.ImageFilter.isShaderFilterSupported}',
+      );
+    }
     final lens = LiquidGlassLens(
       physicalOptics: physicalOptics,
       style: LiquidGlassStyle(
@@ -65,7 +74,9 @@ class EasyGlassSurface extends StatelessWidget {
             ],
           )
         : lens;
-    return independent ? LiquidGlassBatch.exclude(child: surface) : surface;
+    // Activation changes batching, not subtree identity. Replacing this
+    // wrapper would dispose an active TextField at the end of its jelly motion.
+    return LiquidGlassBatch.inherit(enabled: !independent, child: surface);
   }
 }
 

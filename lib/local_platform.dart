@@ -103,6 +103,16 @@ abstract final class LocalPlatform {
   static const _localIoTimeout = Duration(seconds: 30);
   static bool get android =>
       !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+  static bool get ios => !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
+  // Flutter-OH adds this enum value; the stable Android/iOS SDK does not.
+  static bool get harmony => !kIsWeb && defaultTargetPlatform.name == 'ohos';
+  static bool get website => ios || harmony;
+  static bool get readerAppearance => android || ios || harmony;
+  static bool get listening => android || ios || harmony;
+  static bool get nearbyReading => android || ios || harmony;
+  static bool get fileActions => android || ios || harmony;
+  static bool get storageDiagnostics => android || ios || harmony;
+  static bool get volumePaging => android || harmony;
   static Future<bool> exportBackup(String text, String name) async =>
       await channel.invokeMethod<bool>('exportBackup', {
         'text': text,
@@ -116,6 +126,56 @@ abstract final class LocalPlatform {
       channel.invokeMethod<String>('importBackup');
   static Future<Map<Object?, Object?>?> importLegacyData() =>
       channel.invokeMapMethod<Object?, Object?>('importLegacyData');
+  static Future<bool> saveBookImage(
+    Uint8List bytes,
+    String name, {
+    String? authorizationToken,
+  }) => _saveGalleryImage(
+    'saveBookImage',
+    bytes,
+    name,
+    authorizationToken: authorizationToken,
+  );
+  static Future<void> shareImage(Uint8List bytes, String name) =>
+      channel.invokeMethod<void>('shareImage', {'bytes': bytes, 'name': name});
+  static Future<void> saveImageToGallery(
+    Uint8List bytes,
+    String name, {
+    String? authorizationToken,
+  }) async {
+    await _saveGalleryImage(
+      'saveImageToGallery',
+      bytes,
+      name,
+      authorizationToken: authorizationToken,
+    );
+  }
+  static Future<bool> exportImage(
+    Uint8List bytes,
+    String name, {
+    String? authorizationToken,
+  }) => _saveGalleryImage(
+    'exportImage',
+    bytes,
+    name,
+    authorizationToken: authorizationToken,
+  );
+  static Future<bool> _saveGalleryImage(
+    String method,
+    Uint8List bytes,
+    String name, {
+    String? authorizationToken,
+  }) async {
+    final saved = await channel.invokeMethod<bool>(method, {
+      'bytes': bytes,
+      'name': name,
+      'authorizationToken': ?authorizationToken,
+    });
+    if (saved != true) {
+      throw PlatformException(code: 'gallery_save', message: '图片未保存到相册，请重试');
+    }
+    return true;
+  }
 
   // ---- 本地书库：SAF 文件夹 / 文本 / PDF ----
   /// 打开系统文件夹选择器，返回持久授权的 tree URI；用户取消返回 null。

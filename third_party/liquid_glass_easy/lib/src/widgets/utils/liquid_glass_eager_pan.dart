@@ -58,3 +58,70 @@ Map<Type, GestureRecognizerFactory> liquidGlassEagerPanGestures({
     ),
   };
 }
+
+/// Flutter reports an accepted drag's PointerCancel as onEnd, not onCancel.
+/// Preserve that distinction so a short cancelled drag is never a track tap.
+class LiquidGlassHorizontalDragGestureRecognizer
+    extends HorizontalDragGestureRecognizer {
+  LiquidGlassHorizontalDragGestureRecognizer({super.debugOwner});
+  bool cancelled = false;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    cancelled = false;
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void handleEvent(PointerEvent event) {
+    if (event is PointerCancelEvent) cancelled = true;
+    super.handleEvent(event);
+  }
+}
+
+/// Axis-aware form controls share a tap/drag team, like Flutter's Slider.
+/// Horizontal motion owns the control; vertical motion remains with its list.
+/// Keep the team on the control's State so rebuilds retain the active arena.
+Map<Type, GestureRecognizerFactory> liquidGlassHorizontalPanGestures({
+  Object? debugOwner,
+  required GestureArenaTeam team,
+  required ValueChanged<Offset> onDown,
+  required ValueChanged<Offset> onMove,
+  required VoidCallback onUp,
+  required VoidCallback onCancel,
+}) =>
+    <Type, GestureRecognizerFactory>{
+      LiquidGlassHorizontalDragGestureRecognizer:
+          GestureRecognizerFactoryWithHandlers<
+              LiquidGlassHorizontalDragGestureRecognizer>(
+        () => LiquidGlassHorizontalDragGestureRecognizer(debugOwner: debugOwner)
+          ..team = team,
+        (instance) => instance
+          ..dragStartBehavior = DragStartBehavior.down
+          ..onStart = (details) {
+            onDown(details.globalPosition);
+          }
+          ..onUpdate = (details) {
+            onMove(details.globalPosition);
+          }
+          ..onEnd = (_) {
+            if (instance.cancelled) {
+              onCancel();
+            } else {
+              onUp();
+            }
+          }
+          ..onCancel = onCancel,
+      ),
+      TapGestureRecognizer:
+          GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+        () => TapGestureRecognizer(debugOwner: debugOwner)..team = team,
+        (instance) => instance
+          ..onTapDown = (details) {
+            onDown(details.globalPosition);
+          }
+          ..onTapUp = (_) {
+            onUp();
+          },
+      ),
+    };

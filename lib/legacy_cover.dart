@@ -11,8 +11,8 @@ abstract final class LegacyCover {
   static final _cache = LegacyCoverCache(
     request: (aid) => _channel.invokeMethod<Uint8List>('cover', {'aid': aid}),
   );
-  static Uint8List? peek(int aid) => _cache.peek(aid);
-  static Future<Uint8List> bytes(int aid) {
+  static Uint8List? peek(int aid, {String? url}) => _cache.peek(aid);
+  static Future<Uint8List> bytes(int aid, {String? url}) {
     if (isLocalNovelId(aid)) {
       final cached = _cache.peek(aid);
       if (cached != null) return Future.value(cached);

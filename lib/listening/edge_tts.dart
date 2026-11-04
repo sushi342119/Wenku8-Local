@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 import 'edge_protocol.dart';
+import 'languages.dart';
 import 'models.dart';
 
 /// Wire interoperability follows rany2/edge-tts; no account, subscription or private API key.
@@ -162,6 +163,16 @@ class EdgeSpeechClient {
     return (path: path, audio: Uint8List.sublistView(bytes, length + 2));
   }
 
+  static bool validVoice(String id, String locale) =>
+      id.length <= 120 &&
+      locale.length <= 40 &&
+      RegExp(r'^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8}){1,4}$').hasMatch(locale) &&
+      RegExp(
+        r'^[a-zA-Z]{2,3}-(?:[A-Za-z0-9]+-)+[A-Za-z0-9]+Neural$',
+      ).hasMatch(id) &&
+      id.toLowerCase().startsWith('${locale.toLowerCase()}-') &&
+      speechLanguageCode(locale).isNotEmpty;
+
   Future<Uint8List> synthesize(
     String text,
     SpeechVoice voice,
@@ -173,14 +184,10 @@ class EdgeSpeechClient {
     SpeechVoice voice,
     SpeechCancellation cancellation, {
     required bool retryClock,
+    int retryCount = 0,
   }) async {
     text = speechText(text);
-    if (!RegExp(
-          r'^zh-(?:[A-Za-z0-9]+-)+[A-Za-z0-9]+Neural$',
-        ).hasMatch(voice.id) ||
-        voice.id.length > 120 ||
-        voice.locale.length > 40 ||
-        !RegExp(r'^zh-[A-Za-z-]+$').hasMatch(voice.locale)) {
+    if (!validVoice(voice.id, voice.locale)) {
       throw const SpeechFailure('在线朗读音色无效，请重新选择音色');
     }
     if (!hasSpeechText(text) || utf8.encode(escapeXml(text)).length > 3500) {
@@ -272,12 +279,35 @@ class EdgeSpeechClient {
           cancellation.check();
         }
         cancellation.check();
-        return _synthesize(text, voice, cancellation, retryClock: false);
+        return _synthesize(
+          text,
+          voice,
+          cancellation,
+          retryClock: false,
+          retryCount: retryCount,
+        );
       }
       throw const SpeechFailure('在线音源连接失败，请检查网络后重试，或换一个在线音色');
     } catch (error) {
       cancellation.check();
       onTransportError?.call(const SpeechFailure('在线音源连接失败，请检查网络后重试'));
+      if (retryCount < 2 &&
+          (error is SocketException ||
+              error is HandshakeException ||
+              error is HttpException ||
+              error is TimeoutException)) {
+        await cancellation.wait(
+          Future<void>.delayed(Duration(milliseconds: 300 * (1 << retryCount))),
+        );
+        cancellation.check();
+        return _synthesize(
+          text,
+          voice,
+          cancellation,
+          retryClock: retryClock,
+          retryCount: retryCount + 1,
+        );
+      }
       throw const SpeechFailure('在线音源连接失败，请检查网络后重试，或换一个在线音色');
     } finally {
       removeCancellation();

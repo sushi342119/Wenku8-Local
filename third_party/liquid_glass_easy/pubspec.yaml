@@ -31,6 +31,7 @@ dev_dependencies:
 flutter:
   shaders:
     - lib/assets/shaders/liquid_glass.frag
+    - lib/assets/shaders/liquid_glass_unlit.frag
     - lib/assets/shaders/liquid_glass_skia.frag
     - lib/assets/shaders/liquid_glass_border.frag
     - lib/assets/shaders/liquid_glass_border_skia.frag

@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'edge_tts.dart';
+import 'languages.dart';
 import 'models.dart';
 
 abstract interface class SpeechAudioSource {
@@ -19,7 +20,29 @@ abstract interface class SpeechAudioSource {
   Future<void> trim();
 }
 
-class SpeechAudioCache implements SpeechAudioSource {
+/// Optional inventory scoped to the user's selected provider/Android engine.
+/// Older audio sources keep their existing catalogue contract.
+abstract interface class SpeechLanguageVoiceSource {
+  Future<List<SpeechVoice>> languageVoices(SpeechVoice preferred);
+}
+
+/// Native display names are separate from the stable synthesis identifier.
+/// Android engines that expose only an ID retain their existing voice labels.
+String systemSpeechVoiceLabel(Map<dynamic, dynamic> voice) {
+  final name = voice['name'];
+  return name is String && name.trim().isNotEmpty ? name : '${voice['id']}';
+}
+
+/// Playback maintenance is coalesced; an explicit trim still enforces the full
+/// cache policy immediately. Other sources retain their existing trim contract.
+extension SpeechPlaybackMaintenance on SpeechAudioSource {
+  Future<void> trimForPlayback() => switch (this) {
+    SpeechAudioCache cache => cache._trimForPlayback(),
+    _ => trim(),
+  };
+}
+
+class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
   SpeechAudioCache(this.directory, this.edge);
   final Directory directory;
   final EdgeSpeechClient edge;
@@ -28,6 +51,9 @@ class SpeechAudioCache implements SpeechAudioSource {
   _pending = {};
   Future<void> _nativeQueue = Future.value();
   final Set<String> _protected = {};
+  Future<void>? _trimming;
+  DateTime _nextPlaybackTrim = DateTime.fromMillisecondsSinceEpoch(0);
+  int _writtenSinceTrim = 0;
   static const maximumBytes = 96 * 1024 * 1024;
   static Future<SpeechAudioCache> forApp() async => SpeechAudioCache(
     Directory('${(await getTemporaryDirectory()).path}/listening-audio-v1'),
@@ -45,6 +71,39 @@ class SpeechAudioCache implements SpeechAudioSource {
 
   @override
   Future<List<SpeechVoice>> onlineVoices() => edge.voices();
+
+  @override
+  Future<List<SpeechVoice>> languageVoices(SpeechVoice preferred) {
+    if (preferred.source == ListeningSource.edge) return onlineVoices();
+    if (preferred.source == ListeningSource.custom) {
+      return Future.value([preferred]);
+    }
+    return _native(() async {
+      final raw =
+          await system
+              .invokeListMethod<dynamic>('voices', {'engine': preferred.engine})
+              .timeout(const Duration(seconds: 25)) ??
+          [];
+      return List.unmodifiable([
+        for (final voice in raw)
+          if (voice is Map &&
+              voice['id'] is String &&
+              voice['locale'] is String &&
+              speechLanguageCode(voice['locale']).isNotEmpty &&
+              !(voice['features'] is List &&
+                  (voice['features'] as List).contains('notInstalled')))
+            SpeechVoice(
+              id: voice['id'],
+              label: systemSpeechVoiceLabel(voice),
+              locale: chineseSpeechLocale(voice['locale']) ?? voice['locale'],
+              source: ListeningSource.system,
+              engine: preferred.engine,
+              offline: voice['networkRequired'] == false,
+              quality: voice['quality'] is int ? voice['quality'] : 0,
+            ),
+      ]);
+    });
+  }
 
   @override
   Future<List<SpeechVoice>> offlineVoices() => _native(() async {
@@ -203,19 +262,22 @@ class SpeechAudioCache implements SpeechAudioSource {
           });
         }
         cancellation.check();
-        if (!await temporary.exists() || await temporary.length() <= 100) {
+        final size = await temporary.exists() ? await temporary.length() : 0;
+        if (size <= 100) {
           throw const SpeechFailure(
             '这一段没有生成有效语音',
             kind: SpeechFailureKind.content,
           );
         }
         await temporary.rename(file.path);
+        _writtenSinceTrim += size;
         return file;
       } on PlatformException catch (error) {
         cancellation.check();
         throw SpeechFailure(
           error.message ?? '系统离线音色暂未就绪',
           kind: switch (error.code) {
+            'TTS_LANGUAGE_UNAVAILABLE' => SpeechFailureKind.missingLanguage,
             'TTS_CONTENT' => SpeechFailureKind.content,
             'TTS_TIMEOUT' => SpeechFailureKind.timeout,
             _ => SpeechFailureKind.unavailable,
@@ -261,8 +323,31 @@ class SpeechAudioCache implements SpeechAudioSource {
     }
   }
 
+  Future<void> _trimForPlayback() async {
+    if (_trimming case final pending?) return pending;
+    if (_writtenSinceTrim < 2 * 1024 * 1024 &&
+        DateTime.now().isBefore(_nextPlaybackTrim)) {
+      return;
+    }
+    await trim();
+  }
+
   @override
   Future<void> trim() async {
+    if (_trimming case final pending?) return pending;
+    final written = _writtenSinceTrim;
+    final work = _trimDisk();
+    _trimming = work;
+    try {
+      await work;
+      _writtenSinceTrim = (_writtenSinceTrim - written).clamp(0, 1 << 40);
+      _nextPlaybackTrim = DateTime.now().add(const Duration(minutes: 1));
+    } finally {
+      if (identical(_trimming, work)) _trimming = null;
+    }
+  }
+
+  Future<void> _trimDisk() async {
     if (!await directory.exists()) return;
     final entries = <({File file, FileStat stat})>[];
     await for (final item in directory.list()) {

@@ -2,6 +2,79 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/rendering.dart';
 
+/// Geometry is final while one SceneBuilder traverses the retained layer tree.
+/// Share ancestor prefixes within that scene, never across animation frames.
+class LiquidGlassSceneGeometry {
+  LiquidGlassSceneGeometry._();
+  static final _scenes = Expando<LiquidGlassSceneGeometry>();
+  static LiquidGlassSceneGeometry forScene(ui.SceneBuilder builder) =>
+      _scenes[builder] ??= LiquidGlassSceneGeometry._();
+  final _surfaces = <RenderObject, RenderObject?>{};
+  final _transforms = <RenderObject?, Map<RenderObject, Matrix4>>{};
+  final _layerClips = <Layer?, Map<Layer, LiquidGlassLayerClip>>{};
+
+  RenderObject? surfaceFor(RenderObject from) =>
+      from.parent == null ? null : _surfaceFrom(from.parent!);
+  RenderObject? _surfaceFrom(RenderObject node) {
+    if (_surfaces.containsKey(node)) return _surfaces[node];
+    // ignore: invalid_use_of_protected_member
+    final layer = node.layer;
+    return _surfaces[node] = layer is ImageFilterLayer ||
+            layer is OpacityLayer &&
+                (layer.alpha ?? 255) < 255 &&
+                (layer.alpha ?? 0) > 0
+        ? node
+        : node.parent == null
+            ? null
+            : _surfaceFrom(node.parent!);
+  }
+
+  /// Same root-to-leaf applyPaintTransform order as getTransformTo. The null
+  /// target excludes the RenderView's physical-pixel transform, as Flutter does.
+  /// Returned matrices belong to this scene and are read-only to callers.
+  Matrix4 transformFor(RenderObject from, RenderObject? target) {
+    final cache = _transforms.putIfAbsent(target, () => {});
+    final known = cache[from];
+    if (known != null) return known;
+    final parent = from.parent;
+    if (identical(from, target) ||
+        parent == null ||
+        target == null && identical(parent, from.owner?.rootNode)) {
+      return cache[from] = Matrix4.identity();
+    }
+    final result = transformFor(parent, target).clone();
+    parent.applyPaintTransform(from, result);
+    return cache[from] = result;
+  }
+
+  /// Resolves the actual layer clips once per shared ancestor in this scene.
+  /// The cache ends with the SceneBuilder: retained layers may move, change
+  /// clips or enter a filtered subpass in the very next frame.
+  LiquidGlassLayerClip ancestorClipFor(Layer from, {Layer? until}) {
+    final cache = _layerClips.putIfAbsent(until, () => {});
+    final known = cache[from];
+    if (known != null) return known;
+    final parent = from.parent;
+    if (parent == null || identical(parent, until) || parent.parent == null) {
+      // Root coordinates are logical pixels, below its device-pixel transform.
+      return cache[from] = LiquidGlassLayerClip(
+        clip: null,
+        toTop: Matrix4.identity(),
+      );
+    }
+    final above = ancestorClipFor(parent, until: until);
+    final toTop = above.toTop.clone();
+    final own = liquidGlassLayerClipBounds(parent);
+    var clip = above.clip;
+    if (own != null) {
+      final inTop = MatrixUtils.transformRect(toTop, own);
+      clip = clip == null ? inTop : clip.intersect(inTop);
+    }
+    parent.applyTransform(from, toTop);
+    return cache[from] = LiquidGlassLayerClip(clip: clip, toTop: toTop);
+  }
+}
+
 /// A zero-content layer that watches its render object's **global
 /// transform** and fires a callback when it changes between frames.
 ///
@@ -145,7 +218,13 @@ RenderObject? liquidGlassFilterSubpassAncestor(RenderObject from) {
     // only while the filter is actually enabled, which is what decides
     // whether the subpass is there at all.
     // ignore: invalid_use_of_protected_member
-    if (node.layer is ImageFilterLayer) return node;
+    final layer = node.layer;
+    if (layer is ImageFilterLayer ||
+        layer is OpacityLayer &&
+            (layer.alpha ?? 255) < 255 &&
+            (layer.alpha ?? 0) > 0) {
+      return node;
+    }
   }
   return null;
 }
@@ -168,9 +247,7 @@ Rect? liquidGlassLayerClipBounds(Layer layer) {
     return layer.clipBehavior == Clip.none ? null : layer.clipRRect?.outerRect;
   }
   if (layer is ClipPathLayer) {
-    return layer.clipBehavior == Clip.none
-        ? null
-        : layer.clipPath?.getBounds();
+    return layer.clipBehavior == Clip.none ? null : layer.clipPath?.getBounds();
   }
   return null;
 }

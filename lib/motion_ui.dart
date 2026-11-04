@@ -1265,6 +1265,71 @@ class LoadedContentItem extends StatelessWidget {
   }
 }
 
+class AnimatedOptionSection extends StatefulWidget {
+  const AnimatedOptionSection({
+    super.key,
+    required this.expanded,
+    required this.child,
+  });
+  final bool expanded;
+  final Widget child;
+  @override
+  State<AnimatedOptionSection> createState() => _AnimatedOptionSectionState();
+}
+
+class _AnimatedOptionSectionState extends State<AnimatedOptionSection>
+    with SingleTickerProviderStateMixin {
+  late final _clock =
+      AnimationController(
+        vsync: this,
+        duration: NovelMotion.enter,
+        reverseDuration: NovelMotion.exit,
+        value: widget.expanded ? 1 : 0,
+      )..addStatusListener((_) {
+        if (mounted) setState(() {});
+      });
+  late final _size = _clock.drive(CurveTween(curve: NovelMotion.ease));
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _clock.value = widget.expanded ? 1 : 0;
+    }
+  }
+
+  @override
+  void didUpdateWidget(AnimatedOptionSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.expanded == widget.expanded) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _clock.value = widget.expanded ? 1 : 0;
+    } else {
+      widget.expanded ? _clock.forward() : _clock.reverse();
+    }
+  }
+
+  @override
+  void dispose() {
+    _clock.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => !_clock.isAnimating && _clock.value == 0
+      ? const SizedBox.shrink()
+      : IgnorePointer(
+          ignoring: !widget.expanded,
+          child: ExcludeSemantics(
+            excluding: !widget.expanded,
+            child: SizeTransition(
+              sizeFactor: _size,
+              axisAlignment: -1,
+              child: RevealFromTop(animation: _clock, child: widget.child),
+            ),
+          ),
+        );
+}
+
 class RevealFromTop extends StatelessWidget {
   const RevealFromTop({
     super.key,

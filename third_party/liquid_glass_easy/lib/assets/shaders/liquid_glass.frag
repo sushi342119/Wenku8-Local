@@ -134,6 +134,11 @@ out vec4 frag_color;
 vec3 applyDispersion(vec2 uv, float shift, vec2 texSizePx) {
     // Compute offsets based on luma
     vec3 color = texture(u_texture_input, uv).rgb;
+#ifdef LIQUID_GLASS_UNLIT_ROUNDED_RECT
+    // Selected only for exactly zero dispersion. Keep the same first sample,
+    // without compiling the unused chromatic samples into this GPU program.
+    return color;
+#else
     if(shift < DISPERSION_MIN_LOGICAL_PX) return color;
     // Luma calculation (Rec. 709)
     float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
@@ -146,6 +151,7 @@ vec3 applyDispersion(vec2 uv, float shift, vec2 texSizePx) {
     float b = texture(u_texture_input, uv - offset).b;
 
     return vec3(r, g, b);
+#endif
 }
 
 vec3 applySaturation(vec3 color, float saturation) {
@@ -333,6 +339,7 @@ void main() {
     float maxCorner      = min(restHalfPx.x, restHalfPx.y);
     float cornerRadiusPx = min(u_cornerRadius, maxCorner);
 
+#ifndef LIQUID_GLASS_UNLIT_ROUNDED_RECT
     if (u_cornerStyle > 1.5 && cornerRadiusPx > 0.5) {
         // Continuous (capsule-style) corners.
         vec2 reach = continuousRoundedRectReach(cornerRadiusPx, restHalfPx);
@@ -344,13 +351,16 @@ void main() {
         shapeData = evaluateSquircleRRect(
             fragRestPx, lensCenterPx, restHalfPx, zn.x, zn.y);
     } else {
+#endif
         shapeData = evaluateShape(
             fragRestPx,
             lensCenterPx,
             restHalfPx,
             cornerRadiusPx
         );
+#ifndef LIQUID_GLASS_UNLIT_ROUNDED_RECT
     }
+#endif
 
     // Back to screen px — the AA ramp, the band and the rim all measure there.
     shapeData   = shapeToScreen(shapeData, shapeScale);
@@ -387,7 +397,22 @@ void main() {
     // light tint would otherwise lift to a grey darker than the body).
     vec4 rimTint = u_lensColor;
 
-#ifdef LIQUID_GLASS_DESKTOP
+#ifdef LIQUID_GLASS_UNLIT_ROUNDED_RECT
+    // This is the ordinary refraction path with statically absent lights.
+    // Keep shape derivatives, deformation, AA, band, tint and sampling math
+    // shared above; only the known-zero border/dispersion branches disappear.
+    vec2 samplePx = magPx;
+    if (zoneMask >= 0.5) {
+        float zoneT = 1.0 - clamp(distAbsPx / max(zoneLimit, EPS), 0.0, 1.0);
+        samplePx = computeRefractedPosition(
+            magPx, shapeData.normal, refrDistPx,
+            u_refractionWidthPx, u_refractionIndex,
+            REFRACTION_DEPTH_LOGICAL_PX * max(u_shapeAaPx, 1.0), zoneT
+        );
+    }
+    vec3 preTintCol;
+    frag_color = finalSample(samplePx, shapeMask, 0.0, xformed, preTintCol);
+#elif defined(LIQUID_GLASS_DESKTOP)
     // Outside the band: the straight magnified sample, no dispersion. One sample and
     // one border call serve both sides, so each is compiled once.
     vec2 samplePx = magPx;

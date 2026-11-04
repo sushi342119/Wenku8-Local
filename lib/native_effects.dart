@@ -25,10 +25,51 @@ abstract final class NativeEffects {
   static ui.FragmentProgram? _glass;
   static ui.Image? _srgbLut;
   static Future<void>? _loading;
+  static Future<void>? _legacyLoading;
 
-  static Future<void> prepare() {
+  static Future<void> prepare({bool legacy = false}) {
     if (!ui.ImageFilter.isShaderFilterSupported) return Future.value();
-    return _loading ??= _load();
+    if (legacy ||
+        !easyGlass ||
+        !const bool.fromEnvironment(
+          'NATIVE_SCROLL_EDGE_BLUR',
+          defaultValue: true,
+        )) {
+      return _legacyLoading ??= _load();
+    }
+    return _loading ??= _loadCurrentRenderer();
+  }
+
+  static void _recordGaussians(ui.Canvas canvas) {
+    for (final sigma in [3.0, 8.0, 16.0, 32.0]) {
+      canvas.saveLayer(
+        const ui.Rect.fromLTWH(0, 0, 32, 32),
+        ui.Paint()
+          ..imageFilter = ui.ImageFilter.blur(
+            sigmaX: sigma,
+            sigmaY: sigma,
+            tileMode: ui.TileMode.clamp,
+          ),
+      );
+      canvas.drawRect(
+        const ui.Rect.fromLTWH(0, 0, 32, 32),
+        ui.Paint()..color = const ui.Color(0xff808080),
+      );
+      canvas.restore();
+    }
+  }
+
+  static Future<void> _loadCurrentRenderer() async {
+    await LiquidGlassShaders.ensureLoaded();
+    // Warm only the renderer that will actually draw. Compiling the retired
+    // convolution/refraction graph on startup delayed the first frame while
+    // allocating its scratch textures, despite never displaying that graph.
+    final recorder = ui.PictureRecorder();
+    _recordGaussians(ui.Canvas(recorder));
+    final picture = recorder.endRecording();
+    final warmup = await picture.toImage(32, 32);
+    warmup.dispose();
+    picture.dispose();
   }
 
   static Future<void> _load() async {
@@ -58,15 +99,7 @@ abstract final class NativeEffects {
       canvas.restore();
     }
 
-    for (final sigma in [3.0, 8.0, 16.0, 32.0]) {
-      drawFiltered(
-        ui.ImageFilter.blur(
-          sigmaX: sigma,
-          sigmaY: sigma,
-          tileMode: ui.TileMode.clamp,
-        ),
-      );
-    }
+    _recordGaussians(canvas);
     // Warm the actual runtime programs as well. Loading a FragmentProgram
     // does not exercise its first draw/filter pipeline on every GPU backend.
     final scratchShaders = <ui.FragmentShader>[];
@@ -214,10 +247,14 @@ class NativeGlassGroup extends StatefulWidget {
     required this.child,
     this.enabled = true,
     this.inherit = true,
+    this.preserveMemberClip = false,
   });
   final Widget child;
   final bool enabled;
   final bool inherit;
+
+  /// Share only clear members' input, retaining their original clipped edges.
+  final bool preserveMemberClip;
 
   @override
   State<NativeGlassGroup> createState() => _NativeGlassGroupState();
@@ -239,7 +276,11 @@ class _NativeGlassGroupState extends State<NativeGlassGroup> {
       child: widget.child,
     );
     return NativeEffects.easyGlass
-        ? LiquidGlassBatch(enabled: enabled, child: scope)
+        ? LiquidGlassBatch(
+            enabled: enabled,
+            preserveMemberClip: widget.preserveMemberClip,
+            child: scope,
+          )
         : scope;
   }
 
@@ -279,20 +320,29 @@ class NativeScrollEdgeGroup extends StatefulWidget {
 class _NativeScrollEdgeGroupState extends State<NativeScrollEdgeGroup> {
   final _group = _GlassInputGroup();
   @override
-  Widget build(BuildContext context) =>
-      _ScrollEdgeInputScope.maybeOf(context) != null
-      ? widget.child
-      : _ScrollEdgeInputScope(
-          group:
-              widget.enabled &&
-                  const bool.fromEnvironment(
-                    'SCROLL_EDGE_BATCH',
-                    defaultValue: true,
-                  )
-              ? _group
-              : null,
-          child: widget.child,
-        );
+  Widget build(BuildContext context) {
+    final enabled =
+        widget.enabled &&
+        const bool.fromEnvironment('SCROLL_EDGE_BATCH', defaultValue: true);
+    final child = LiquidGlassScrollEdgeGroup(
+      enabled: enabled,
+      child: widget.child,
+    );
+    return _ScrollEdgeInputScope.maybeOf(context) != null
+        ? child
+        : _ScrollEdgeInputScope(
+            group:
+                widget.enabled &&
+                    const bool.fromEnvironment(
+                      'SCROLL_EDGE_BATCH',
+                      defaultValue: true,
+                    )
+                ? _group
+                : null,
+            child: child,
+          );
+  }
+
   @override
   void dispose() {
     _group.dispose();
@@ -431,14 +481,14 @@ class _NativeBackdropState extends State<NativeBackdrop> {
     super.didChangeDependencies();
     final preferences = PerformanceScope.of(context);
     final needsRuntime = widget.effect == NativeEffect.progressive
-        ? preferences.edgeBlur && widget.blur > 0
-        : preferences.glass && widget.thickness > 0;
+        ? preferences.edgeBlur && widget.blur > 0 && !widget._nativeEdge
+        : preferences.glass && widget.thickness > 0 && !NativeEffects.easyGlass;
     if (needsRuntime &&
         !_preparing &&
         ui.ImageFilter.isShaderFilterSupported &&
         NativeEffects._glass == null) {
       _preparing = true;
-      NativeEffects.prepare().then(
+      NativeEffects.prepare(legacy: true).then(
         (_) {
           if (mounted) setState(() {});
         },
@@ -674,17 +724,11 @@ class _MorphGlassClipper extends CustomClipper<ui.RRect> {
 
   @override
   ui.RRect getClip(ui.Size size) {
-    if (size.isEmpty || !size.isFinite) {
-      return ui.RRect.fromRectAndRadius(ui.Rect.zero, ui.Radius.zero);
-    }
     final box = context.findRenderObject()! as RenderBox;
     final rect = MatrixUtils.transformRect(
       box.getTransformTo(null),
       ui.Offset.zero & size,
     );
-    if (rect.isEmpty || !rect.isFinite) {
-      return ui.RRect.fromRectAndRadius(ui.Offset.zero & size, ui.Radius.zero);
-    }
     final radius = math.min(
       config.morph?.resolve(config.morph!.radius, config.radius) ??
           config.radius,

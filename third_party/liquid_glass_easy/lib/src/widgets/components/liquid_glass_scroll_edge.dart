@@ -7,6 +7,7 @@ import '../lens/liquid_glass_lens_scope.dart';
 import '../utils/liquid_glass_adaptivity.dart';
 import '../utils/liquid_glass_adaptivity_driver.dart';
 import 'liquid_glass_adaptive_area.dart';
+import 'scroll_edge_input_group.dart';
 
 /// Which screen edge a [LiquidGlassScrollEdge] hugs. The fade is fully
 /// opaque at that edge and dissolves to transparent toward the content.
@@ -359,13 +360,20 @@ class _LiquidGlassScrollEdgeState extends State<LiquidGlassScrollEdge>
   /// pass carries the batch's key and reads its shared copy. Outside one
   /// it is a plain `BackdropFilter`.
   Widget _blurPass(bool top) {
+    final filter =
+        ui.ImageFilter.blur(sigmaX: _sigma(top), sigmaY: _sigma(top));
+    final mask = widget.style == LiquidGlassScrollEdgeStyle.soft
+        ? _featherMask(top)
+        : const SizedBox.expand();
     return ClipRect(
-      child: LiquidGlassBatchBackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: _sigma(top), sigmaY: _sigma(top)),
-        child: widget.style == LiquidGlassScrollEdgeStyle.soft
-            ? _featherMask(top)
-            : const SizedBox.expand(),
-      ),
+      child: LiquidGlassScrollEdgeGroup.contains(context)
+          ? LiquidGlassEdgeBackdrop(
+              filter: filter,
+              sigma: _sigma(top),
+              bottom: !top,
+              child: mask,
+            )
+          : LiquidGlassBatchBackdropFilter(filter: filter, child: mask),
     );
   }
 
@@ -378,7 +386,8 @@ class _LiquidGlassScrollEdgeState extends State<LiquidGlassScrollEdge>
   static const double _kBottomSigmaNudge = 0.01;
 
   /// The blur sigma of this band's pass.
-  double _sigma(bool top) => top ? widget.blur : widget.blur + _kBottomSigmaNudge;
+  double _sigma(bool top) =>
+      top ? widget.blur : widget.blur + _kBottomSigmaNudge;
 
   /// Cache for [_featherMask]. The mask never varies for a given band —
   /// same edge, same curve, same black — so without this an adaptive

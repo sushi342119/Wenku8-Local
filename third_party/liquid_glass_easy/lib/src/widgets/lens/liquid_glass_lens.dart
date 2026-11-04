@@ -235,6 +235,7 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
   /// reference them during teardown (mirrors the legacy view, which
   /// also relies on GC finalizers for shader instances).
   ui.FragmentShader? _mainShader;
+  ({bool impeller, bool unlit})? _mainShaderKind;
   ui.FragmentShader? _borderShader;
 
   @override
@@ -620,7 +621,23 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
       );
     }
 
-    _mainShader ??= LiquidGlassShaders.createMainShader(impeller);
+    // Specialize only a mathematically absent border/dispersion, never a
+    // low-quality approximation. Flex, tint, blur, AA and refraction remain
+    // live. A style change back to lit/non-circular glass restores the general
+    // program, including on an already-mounted lens.
+    final bool unlit = LiquidGlassShaders.canSpecializeUnlit(impeller) &&
+        shape.cornerStyle == LiquidGlassCornerStyle.roundedRectangle &&
+        shape.specular.thickness == 0 &&
+        shape.glow.thickness == 0 &&
+        (shape.secondSpecular?.thickness ?? 0) == 0 &&
+        refraction.dispersion == 0;
+    final shaderKind = (impeller: impeller, unlit: unlit);
+    if (_mainShader == null || _mainShaderKind != shaderKind) {
+      _mainShader = unlit
+          ? LiquidGlassShaders.createUnlitMainShader()
+          : LiquidGlassShaders.createMainShader(impeller);
+      _mainShaderKind = shaderKind;
+    }
     if (mode == LiquidGlassLensRenderMode.skiaCapture) {
       _borderShader ??= LiquidGlassShaders.createBorderShader(false);
     }
@@ -630,9 +647,12 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
     // Inside a LiquidGlassBatch: this lens joins the batch's shared backdrop
     // read. The Skia capture path already shares one capture per view, so it
     // has nothing to join.
-    final int? backdropId = mode == LiquidGlassLensRenderMode.impellerBackdrop
-        ? LiquidGlassBatch.backdropIdOf(context)
-        : null;
+    final preserveMemberClip = LiquidGlassBatch.preservesMemberClipOf(context);
+    final int? backdropId =
+        mode == LiquidGlassLensRenderMode.impellerBackdrop &&
+                !(preserveMemberClip && appearance.blur > 0)
+            ? LiquidGlassBatch.backdropIdOf(context)
+            : null;
 
     // Clip at the deformed lens bounds, scale the content inside it: the
     // child stretches as pixels but can never spill past the glass edge.
@@ -673,6 +693,7 @@ class _LiquidGlassLensState extends State<LiquidGlassLens>
         screenSize: screenSize,
         devicePixelRatio: dpr,
         backdropId: backdropId,
+        preserveBatchedClip: preserveMemberClip,
         shaderClip: widget.shaderClip,
         physicalOptics: widget.physicalOptics,
         scope: scope,
@@ -727,6 +748,7 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
   final Size screenSize;
   final double devicePixelRatio;
   final int? backdropId;
+  final bool preserveBatchedClip;
   final LiquidGlassShaderClip shaderClip;
   final bool physicalOptics;
   final LiquidGlassLensScope? scope;
@@ -746,6 +768,7 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
     required this.screenSize,
     required this.devicePixelRatio,
     required this.backdropId,
+    required this.preserveBatchedClip,
     required this.shaderClip,
     required this.physicalOptics,
     required this.scope,
@@ -769,6 +792,7 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
       screenSize: screenSize,
       devicePixelRatio: devicePixelRatio,
       backdropId: backdropId,
+      preserveBatchedClip: preserveBatchedClip,
       shaderClip: shaderClip,
       physicalOptics: physicalOptics,
       captureRevision: scope?.captureRevision,
@@ -796,6 +820,7 @@ class _RawLiquidGlassLens extends SingleChildRenderObjectWidget {
       ..screenSize = screenSize
       ..devicePixelRatio = devicePixelRatio
       ..backdropId = backdropId
+      ..preserveBatchedClip = preserveBatchedClip
       ..shaderClip = shaderClip
       ..physicalOptics = physicalOptics
       ..captureRevision = scope?.captureRevision

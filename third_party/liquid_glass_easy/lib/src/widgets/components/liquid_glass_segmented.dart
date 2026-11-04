@@ -168,7 +168,8 @@ class LiquidGlassSegmentedPillStyle {
       glow: r?.glow,
       secondSpecular: r?.secondSpecular,
       appearance: r?.appearance ??
-          const LiquidGlassAppearance(color: Color(0x3CFFFFFF), blur: 0), // white, a60
+          const LiquidGlassAppearance(
+              color: Color(0x3CFFFFFF), blur: 0), // white, a60
       liteGlass: r?.liteGlass ?? false,
     );
   }
@@ -210,6 +211,7 @@ class LiquidGlassSegmented extends StatefulWidget {
     this.height = 44,
     this.padding = 4,
     this.segmentBuilder,
+    this.disabledIndices = const {},
   })  : assert(segments.length > 0, 'Provide at least one segment'),
         assert(selectedIndex >= 0 && selectedIndex < segments.length,
             'selectedIndex out of range');
@@ -221,6 +223,7 @@ class LiquidGlassSegmented extends StatefulWidget {
 
   /// The selected segment index.
   final int selectedIndex;
+  final Set<int> disabledIndices;
 
   /// Selection callback.
   final ValueChanged<int> onChanged;
@@ -278,6 +281,15 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
   late double _to = widget.selectedIndex.toDouble();
 
   void _onTick() => setState(() {});
+
+  Color _labelColor(int index) {
+    final color = widget.labelStyle.colorFor(
+      selected: index == widget.selectedIndex,
+    );
+    return widget.disabledIndices.contains(index)
+        ? color.withValues(alpha: color.a * .4)
+        : color;
+  }
 
   @override
   void didUpdateWidget(LiquidGlassSegmented old) {
@@ -433,37 +445,44 @@ class _LiquidGlassSegmentedState extends State<LiquidGlassSegmented>
                 children: [
                   for (int i = 0; i < n; i++)
                     Expanded(
-                      child: InkWell(
-                        splashColor: Colors.transparent,
-                        highlightColor: Colors.transparent,
-                        hoverColor: Colors.transparent,
-                        focusColor: Colors.transparent,
-                        borderRadius: BorderRadius.circular(cellH / 2),
-                        onTap: () {
-                          if (i != widget.selectedIndex) widget.onChanged(i);
-                        },
-                        child: Center(
-                          child: widget.segmentBuilder != null
-                              ? FittedBox(
-                                  fit: BoxFit.scaleDown,
-                                  child: widget.segmentBuilder!(
-                                    context,
-                                    i,
-                                    i == widget.selectedIndex,
-                                    widget.labelStyle.colorFor(
-                                        selected: i == widget.selectedIndex),
+                      child: Semantics(
+                        selected: widget.selectedIndex == i,
+                        enabled: !widget.disabledIndices.contains(i),
+                        child: InkWell(
+                          splashColor: Colors.transparent,
+                          highlightColor: Colors.transparent,
+                          hoverColor: Colors.transparent,
+                          focusColor: _labelColor(i).withValues(alpha: .08),
+                          borderRadius: BorderRadius.circular(cellH / 2),
+                          onTap: widget.disabledIndices.contains(i)
+                              ? null
+                              : () {
+                                  if (i != widget.selectedIndex) {
+                                    widget.onChanged(i);
+                                  }
+                                },
+                          child: Center(
+                            child: widget.segmentBuilder != null
+                                ? FittedBox(
+                                    fit: BoxFit.scaleDown,
+                                    child: widget.segmentBuilder!(
+                                      context,
+                                      i,
+                                      i == widget.selectedIndex,
+                                      _labelColor(i),
+                                    ),
+                                  )
+                                : Text(
+                                    widget.segments[i],
+                                    textAlign: TextAlign.center,
+                                    style: TextStyle(
+                                      color: _labelColor(i),
+                                      fontSize: widget.labelStyle.fontSize,
+                                      fontWeight: widget.labelStyle.weightFor(
+                                          selected: i == widget.selectedIndex),
+                                    ),
                                   ),
-                                )
-                              : Text(
-                                  widget.segments[i],
-                                  style: TextStyle(
-                                    color: widget.labelStyle.colorFor(
-                                        selected: i == widget.selectedIndex),
-                                    fontSize: widget.labelStyle.fontSize,
-                                    fontWeight: widget.labelStyle.weightFor(
-                                        selected: i == widget.selectedIndex),
-                                  ),
-                                ),
+                          ),
                         ),
                       ),
                     ),

@@ -1,25 +1,146 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
+import 'app_language.dart';
+import 'reader_rich_content.dart';
+import 'reader_coordinate_map.dart';
+import 'reader_languages.dart';
 
-List<String> _splitParagraphs(String source) => source.split('\n\n');
-
-final _readerIllustrations = Expando<List<String>>();
+ReaderRichBody _splitParagraphs(String source) => ReaderRichBody.decode(source);
 
 class ReaderContent {
-  const ReaderContent(this.paragraphs);
+  const ReaderContent(
+    this.paragraphs, {
+    this.readingOrder,
+    this.inlineOwners = const {},
+    this.placementIds = const {},
+    this.formats = const {},
+    this.notes = const {},
+    this.revision = '',
+    this.coordinateMap,
+    this.languageFilter = '',
+  });
   final List<String> paragraphs;
-  List<String> get illustrations =>
-      _readerIllustrations[this] ??= List.unmodifiable([
-        for (final paragraph in paragraphs) ?readerIllustrationUrl(paragraph),
-      ]);
+  final List<int>? readingOrder;
+  final Map<int, int> inlineOwners;
+  final Map<int, String> placementIds;
+  final Map<int, ReaderRichParagraph> formats;
+  final Map<String, String> notes;
+  final String revision;
+  final ReaderCoordinateMap? coordinateMap;
+  final String languageFilter;
+  Set<String> get languages => {
+    for (final f in formats.values)
+      if (f.language.isNotEmpty) f.language,
+  };
+  Iterable<int> get order =>
+      readingOrder ?? Iterable.generate(paragraphs.length);
+  static final _imageLists = Expando<List<String>>('chapter-illustrations');
+  static final _publisherSpacing = Expando<bool>('publisher-spacing');
+  String layoutKey(String base) {
+    final layout =
+        (_publisherSpacing[this] ??= formats.values.any(
+          (format) => !format.spacing.empty,
+        ))
+        ? 'publisher-spacing-v1|$base'
+        : base;
+    return languageFilter.isEmpty
+        ? layout
+        : '$layout|languages=$languageFilter';
+  }
+
+  ReaderContent withHiddenLanguages(
+    Set<String> hidden, {
+    String? onlyLanguage,
+  }) {
+    final excluded = onlyLanguage == null
+        ? languages.intersection(hidden)
+        : languages.difference({onlyLanguage});
+    if (excluded.isEmpty) return this;
+    final names = excluded.toList()..sort();
+    return ReaderContent(
+      paragraphs,
+      readingOrder: List.unmodifiable(
+        order.where((index) => !excluded.contains(formats[index]?.language)),
+      ),
+      inlineOwners: inlineOwners,
+      placementIds: placementIds,
+      formats: formats,
+      notes: notes,
+      revision: revision,
+      coordinateMap: coordinateMap,
+      languageFilter: names.join(','),
+    );
+  }
+
+  List<String> get illustrations => _imageLists[this] ??= List.unmodifiable([
+    for (final index in order) ?readerIllustrationUrl(paragraphs[index]),
+  ]);
+
+  ReaderContent localized(Locale locale) {
+    if (chineseLocale(locale).countryCode == 'CN') return this;
+    return ReaderContent(
+      List.unmodifiable([
+        for (final (index, text) in paragraphs.indexed)
+          readerIllustrationUrl(text) != null ||
+                  text.trim() == '[插图]' ||
+                  formats[index]?.language.isNotEmpty == true &&
+                      formats[index]!.language != 'zh'
+              ? text
+              : ChineseText.convert(text, locale, reader: true),
+      ]),
+      readingOrder: readingOrder,
+      inlineOwners: inlineOwners,
+      placementIds: placementIds,
+      formats: formats,
+      notes: notes,
+      revision: revision,
+      coordinateMap: coordinateMap,
+      languageFilter: languageFilter,
+    );
+  }
 
   static Future<ReaderContent> parse(String source) async {
     if (source.trim().isEmpty) throw const FormatException('章节正文为空');
-    final paragraphs = source.length > 64 * 1024
+    final rich = source.length > 64 * 1024
         ? await compute(_splitParagraphs, source)
         : _splitParagraphs(source);
-    return ReaderContent(List.unmodifiable(paragraphs));
+    return ReaderContent(
+      List.unmodifiable(rich.paragraphs),
+      formats: rich.formats,
+      notes: rich.notes,
+      revision: rich.revision,
+      coordinateMap: rich.coordinateMap,
+    );
+  }
+
+  Future<ReaderContent> localizedAsync(Locale locale) async {
+    if (chineseLocale(locale).countryCode == 'CN') return this;
+    // A Chinese UI preference must not rewrite Japanese kanji in bilingual books.
+    final eligible = [
+      for (var i = 0; i < paragraphs.length; i++)
+        if (formats[i]?.language.isNotEmpty != true ||
+            readerLanguageCode(formats[i]!.language) == 'zh')
+          i,
+    ];
+    final translated = await ChineseText.readerParagraphs([
+      for (final i in eligible) paragraphs[i],
+    ], locale);
+    final localized = List<String>.of(paragraphs);
+    for (var i = 0; i < eligible.length; i++) {
+      localized[eligible[i]] = translated[i];
+    }
+    return ReaderContent(
+      List.unmodifiable(localized),
+      readingOrder: readingOrder,
+      inlineOwners: inlineOwners,
+      placementIds: placementIds,
+      formats: formats,
+      notes: notes,
+      revision: revision,
+      coordinateMap: coordinateMap,
+      languageFilter: languageFilter,
+    );
   }
 }
 
@@ -74,6 +195,9 @@ typedef _MeasuredParagraph = ({int index, double top, double height});
 class ReaderParagraphRegistry {
   final Map<int, _ReaderParagraphRender> _rows = {};
 
+  @visibleForTesting
+  int debugParagraphMounts = 0;
+
   List<_MeasuredParagraph> _measure() {
     final result = <_MeasuredParagraph>[];
     for (final entry in _rows.entries) {
@@ -104,6 +228,38 @@ class ReaderParagraphRegistry {
     return clampToLast && rows.isNotEmpty
         ? (index: rows.last.index, fraction: 1)
         : null;
+  }
+
+  int? captureTextOffset(int index, double readingOffset) {
+    final row = _rows[index];
+    if (row == null || !row.attached || !row.hasSize) return null;
+    RenderParagraph? paragraph;
+    void visit(RenderObject node) {
+      if (node is RenderParagraph) {
+        paragraph ??= node;
+        return;
+      }
+      node.visitChildren(visit);
+    }
+
+    visit(row);
+    final text = paragraph;
+    final viewport = RenderAbstractViewport.maybeOf(row);
+    if (text == null || !text.attached || !text.hasSize || viewport == null) {
+      return null;
+    }
+    final top = viewport.getOffsetToReveal(row, 0).offset;
+    final textOrigin = text.localToGlobal(Offset.zero, ancestor: row);
+    final position = text.getPositionForOffset(
+      Offset(
+        0,
+        (readingOffset - top - textOrigin.dy).clamp(0.0, text.size.height),
+      ),
+    );
+    return (position.offset - row.textOffset).clamp(
+      0,
+      text.text.toPlainText().length - row.textOffset,
+    );
   }
 
   /// A visible anchor can be restored exactly. Otherwise use the nearest lazy
@@ -214,6 +370,8 @@ class ReaderParagraphRegistry {
     final viewport = RenderAbstractViewport.maybeOf(row);
     if (paragraph == null || viewport == null) return null;
     final length = paragraph.text.toPlainText().length;
+    start += row.textOffset;
+    end += row.textOffset;
     if (start < 0 || start >= length || end <= start) return null;
     final boxes = paragraph.getBoxesForSelection(
       TextSelection(baseOffset: start, extentOffset: end.clamp(start, length)),
@@ -241,34 +399,42 @@ class ReaderParagraph extends SingleChildRenderObjectWidget {
     super.key,
     required this.registry,
     required this.index,
+    this.textOffset = 0,
     required super.child,
   });
   final ReaderParagraphRegistry registry;
   final int index;
+  final int textOffset;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
-      _ReaderParagraphRender(registry, index);
+      _ReaderParagraphRender(registry, index, textOffset);
 
   @override
   void updateRenderObject(
     BuildContext context,
     covariant RenderProxyBox renderObject,
   ) {
-    (renderObject as _ReaderParagraphRender).update(registry, index);
+    (renderObject as _ReaderParagraphRender).update(
+      registry,
+      index,
+      textOffset,
+    );
   }
 }
 
 class _ReaderParagraphRender extends RenderProxyBox {
-  _ReaderParagraphRender(this.registry, this.index);
+  _ReaderParagraphRender(this.registry, this.index, this.textOffset);
   ReaderParagraphRegistry registry;
   int index;
+  int textOffset;
 
   void _remove() {
     if (identical(registry._rows[index], this)) registry._rows.remove(index);
   }
 
-  void update(ReaderParagraphRegistry value, int number) {
+  void update(ReaderParagraphRegistry value, int number, int prefix) {
+    textOffset = prefix;
     if (registry == value && index == number) return;
     _remove();
     registry = value;
@@ -280,6 +446,10 @@ class _ReaderParagraphRender extends RenderProxyBox {
   void attach(PipelineOwner owner) {
     super.attach(owner);
     registry._rows[index] = this;
+    assert(() {
+      registry.debugParagraphMounts++;
+      return true;
+    }());
   }
 
   @override

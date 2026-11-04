@@ -696,25 +696,34 @@ class ListeningController {
     SpeechVoice voice,
     SpeechCancellation token,
   ) async {
-    final attempt = SpeechCancellation();
-    final detach = token.onCancel(attempt.cancel);
-    try {
-      attempt.check();
-      return await attempt
-          .wait(audio.prepare(segment, voice, attempt))
-          .timeout(
-            preparationTimeout,
-            onTimeout: () {
-              attempt.cancel();
-              throw const SpeechFailure(
-                '这一段语音准备超时',
-                kind: SpeechFailureKind.timeout,
-              );
-            },
-          );
-    } finally {
-      detach();
+    Future<File> prepareOnce() async {
+      final attempt = SpeechCancellation();
+      final detach = token.onCancel(attempt.cancel);
+      try {
+        attempt.check();
+        return await attempt
+            .wait(audio.prepare(segment, voice, attempt))
+            .timeout(
+              preparationTimeout,
+              onTimeout: () {
+                attempt.cancel();
+                throw const SpeechFailure(
+                  '这一段语音准备超时',
+                  kind: SpeechFailureKind.timeout,
+                );
+              },
+            );
+      } finally {
+        detach();
+      }
     }
+
+    var file = await prepareOnce();
+    if (await file.exists() && await file.length() <= 100) {
+      await audio.invalidate(file);
+      file = await prepareOnce();
+    }
+    return file;
   }
 
   void _play(ListeningAudioOutput output, int generation) {
@@ -743,7 +752,7 @@ class ListeningController {
       if (_nextFile != null) audio.unprotect(_nextFile!);
       _nextFile = file;
       audio.protect(file);
-      await audio.trim();
+      await audio.trimForPlayback();
     } catch (_) {
       /* Playback reports a failure only if this segment is actually requested. */
     }
@@ -791,12 +800,16 @@ class ListeningController {
   void _finish() {
     _desiredPlaying = false;
     _loading = false;
+    if (_currentFile != null) audio.unprotect(_currentFile!);
+    if (_nextFile != null) audio.unprotect(_nextFile!);
+    _currentFile = _nextFile = null;
     _emit(phase: ListeningPhase.completed);
     _clearSleep();
     unawaited(saveCursor());
     unawaited(
       _command(() async {
         await _output?.stop();
+        await audio.trimForPlayback();
       }).catchError((Object _) {}),
     );
   }

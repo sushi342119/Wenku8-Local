@@ -63,6 +63,7 @@ class LiquidGlassMotionPill extends StatefulWidget {
   /// tracking its own motion. Flip on grab, off when the pill should
   /// contract back to rest.
   final bool active;
+  final bool reduceMotion;
 
   /// Size of the contracted rest pill.
   final Size restSize;
@@ -147,6 +148,7 @@ class LiquidGlassMotionPill extends StatefulWidget {
     this.shadow,
     this.honorBackdropAlpha = true,
     this.onGlassVisibilityChanged,
+    this.reduceMotion = false,
   });
 
   @override
@@ -179,7 +181,9 @@ class _LiquidGlassMotionPillState extends State<LiquidGlassMotionPill>
   @override
   void initState() {
     super.initState();
-    if (widget.active) {
+    if (widget.reduceMotion) {
+      _morph = widget.active ? 1 : 0;
+    } else if (widget.active) {
       _motion.start();
       _ensureTicking();
     }
@@ -195,6 +199,19 @@ class _LiquidGlassMotionPillState extends State<LiquidGlassMotionPill>
   void didUpdateWidget(LiquidGlassMotionPill oldWidget) {
     super.didUpdateWidget(oldWidget);
     _motion.spec = widget.motion;
+    if (widget.reduceMotion) {
+      _ticker?.stop();
+      _motion.stop();
+      _morph = widget.active ? 1 : 0;
+      _morphVel = 0;
+      if (_glassVisible != widget.active) {
+        _glassVisible = widget.active;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) widget.onGlassVisibilityChanged?.call(_glassVisible);
+        });
+      }
+      return;
+    }
     if (widget.active != oldWidget.active) {
       if (widget.active) {
         _motion.start();
@@ -419,8 +436,7 @@ class _LiquidGlassMotionPillState extends State<LiquidGlassMotionPill>
     return LiquidGlassStyle(
       shape: shape,
       // A thin bright rim unless the caller's style names its own lights.
-      specular: base.specular ??
-          const LiquidGlassLight.specular(),
+      specular: base.specular ?? const LiquidGlassLight.specular(),
       glow: base.glow,
       saturation: base.saturation,
       blur: base.blur,
