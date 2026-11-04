@@ -242,7 +242,7 @@ class EdgeSpeechClient {
             throw const SpeechFailure('单段语音超过缓存上限');
           }
         } else if (event is String &&
-            RegExp(r'(?:^|\r\n)Path:turn.end(?:\r\n|$)').hasMatch(event)) {
+            RegExp(r'(?:^|\r\n)Path:turn\.end(?:\r\n|$)').hasMatch(event)) {
           ended = true;
           break;
         }

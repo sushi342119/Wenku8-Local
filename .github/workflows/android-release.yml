@@ -41,12 +41,17 @@ jobs:
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Validate release metadata
         run: |
-          TAG="v$(sed -n 's/^version: *//p' pubspec.yaml)"
+          RAW_VERSION="$(sed -n 's/^version: *//p' pubspec.yaml)"
+          APP_VERSION="${RAW_VERSION%%+*}"
+          APP_BUILD="${RAW_VERSION#*+}"
+          TAG="v${RAW_VERSION}"
           if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
             echo "::error::Tag does not match pubspec"; exit 1
           fi
           python3 tools/prepare_release.py --tag "$TAG" --notes build/release-notes.md
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$APP_BUILD" >> "$GITHUB_ENV"
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:
@@ -58,7 +63,11 @@ jobs:
           python3 tools/configure_signing.py
       - name: Build signed APK
         if: github.event_name != 'pull_request'
-        run: flutter build apk --release --target-platform android-arm64 --dart-define=UPDATE_REPOSITORY=${{ github.repository }}
+        run: |
+          flutter build apk --release --target-platform android-arm64 \
+            --dart-define=UPDATE_REPOSITORY=${{ github.repository }} \
+            --dart-define=APP_VERSION=${{ env.APP_VERSION }} \
+            --dart-define=APP_BUILD=${{ env.APP_BUILD }}
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
@@ -71,11 +80,13 @@ jobs:
           zip -qr "${GITHUB_WORKSPACE}/build/shuyu-source.zip" shuyu-source
       - name: Name compatible update asset
         run: cp build/app/outputs/flutter-apk/app-release.apk "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk"
-      - name: Publish approved 1.6.2 release
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "$GITHUB_REF" == "refs/heads/main" && "$RELEASE_TAG" == "v1.6.2+44" ]]; then
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip --clobber
+          elif [[ "$GITHUB_REF_TYPE" == "tag" || ( "$GITHUB_REF" == "refs/heads/main" && "$RELEASE_TAG" == "v1.6.2+44" ) ]]; then
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --latest --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
           else
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip

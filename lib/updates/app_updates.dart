@@ -12,8 +12,14 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.6.2';
-const currentAppBuild = 44;
+const currentAppVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '1.6.2',
+);
+const currentAppBuild = int.fromEnvironment(
+  'APP_BUILD',
+  defaultValue: 44,
+);
 const currentReleaseNotes = '''
 1. 修复首页左上角仍显示 W8 的问题，统一使用书屿狐狸图标。
 ''';
