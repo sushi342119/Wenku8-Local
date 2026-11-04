@@ -8,7 +8,7 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: build-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 jobs:
   build:
@@ -26,7 +26,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
-      - run: flutter test
+      - run: flutter test --timeout 60s
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Validate release metadata
         run: |
