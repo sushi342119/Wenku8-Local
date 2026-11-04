@@ -3,6 +3,8 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: [main]
+    paths: ['.github/workflows/android-release.yml']
 permissions:
   contents: write
 concurrency:
@@ -27,7 +29,13 @@ jobs:
       - run: flutter test
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Validate release metadata
-        run: python3 tools/prepare_release.py --tag "${GITHUB_REF_NAME}" --notes build/release-notes.md
+        run: |
+          TAG="v$(sed -n 's/^version: *//p' pubspec.yaml)"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "$TAG" ]]; then
+            echo "::error::Tag does not match pubspec"; exit 1
+          fi
+          python3 tools/prepare_release.py --tag "$TAG" --notes build/release-notes.md
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Configure persistent release signing
         if: github.event_name != 'pull_request'
         env:
@@ -50,11 +58,17 @@ jobs:
           python3 tools/export_public_source.py ../shuyu-source
           cd ..
           zip -qr "${GITHUB_WORKSPACE}/build/shuyu-source.zip" shuyu-source
-      - name: Create draft release
+      - name: Name compatible update asset
+        run: cp build/app/outputs/flutter-apk/app-release.apk "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk"
+      - name: Publish approved 1.6.1 release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --verify-tag --draft --title "书屿 $GITHUB_REF_NAME" --notes-file build/release-notes.md build/app/outputs/flutter-apk/app-release.apk build/shuyu-source.zip
+          if [[ "$GITHUB_REF" == "refs/heads/main" && "$RELEASE_TAG" == "v1.6.1+43" ]]; then
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --latest --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
+          else
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
+          fi
       - name: Remove signing material
         if: always()
         run: rm -f android/key.properties android/release.keystore
