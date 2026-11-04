@@ -44,6 +44,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Stop on the first failure so later widget-test hangs cannot hide it.
           mkdir -p build
           timeout --signal=TERM --kill-after=15s 720s flutter test --fail-fast --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
       - name: Preserve test diagnostics

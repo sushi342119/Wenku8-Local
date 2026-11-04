@@ -481,6 +481,12 @@ void main() {
       expect(tester.takeException(), isNull);
       await finishDetailIntro(tester);
       expect(find.byKey(const ValueKey('detail-read-button')), findsOneWidget);
+      // Detail loading saves metadata in the background. Drain that queue in
+      // real async time before disposing its route and checking timer cleanup.
+      await tester.runAsync(() => state.rememberNovel(demoNovels.first));
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(const SizedBox.shrink());
+      state.dispose();
     },
   );
 
