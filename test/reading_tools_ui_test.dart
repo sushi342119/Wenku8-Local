@@ -14,6 +14,7 @@ import 'package:wenku8_flutter/offline_repository.dart';
 import 'package:wenku8_flutter/pages.dart';
 import 'package:wenku8_flutter/reader_catalogue.dart';
 import 'package:wenku8_flutter/reading_history.dart';
+import 'support/pump_storage.dart';
 
 Novel _directory(int id, {int count = 6, bool longTitles = false}) => Novel(
   id: id,
@@ -514,6 +515,8 @@ void main({
       await tester.pumpAndSettle();
       expect(find.text('阅读作品 99'), findsOneWidget);
       expect(state.cachedNovel(99)!.title, '阅读作品 99');
+      await pumpStorage(tester, () => state.rememberNovel(remote.books[99]!));
+      await tester.pumpAndSettle();
       expect(state.shelf, isEmpty);
       expect(tester.takeException(), isNull);
     },

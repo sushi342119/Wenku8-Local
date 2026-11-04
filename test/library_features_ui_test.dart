@@ -256,9 +256,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('移出书架'));
     await tester.pumpAndSettle();
+    await pumpUntil(tester, () => !state.contains(5000));
     expect(state.contains(5000), isFalse);
     await tester.tap(find.text('撤销'));
     await tester.pumpAndSettle();
+    await pumpUntil(tester, () => state.contains(5000));
     expect(state.contains(5000), isTrue);
     expect(find.text('2/2'), findsOneWidget);
     expect(tester.takeException(), isNull);
@@ -366,9 +368,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('移出书架'));
     await tester.pumpAndSettle();
+    await pumpUntil(tester, () => state.shelf.isEmpty);
     expect(state.shelf, isEmpty);
     await tester.tap(find.text('撤销'));
     await tester.pumpAndSettle();
+    await pumpUntil(tester, () => state.contains(5000));
     expect(state.shelf, {5000});
     expect(state.chapterFor(5000), 1);
   });

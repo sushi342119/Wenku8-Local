@@ -214,8 +214,10 @@ void main() {
   });
 
   const corpus = [
-    '/home/hatch/workspace/novel_split/extracted/小说/古风/《六朝清羽记》 《六朝云龙吟》 《六朝燕歌行》 节.txt',
-    '/home/hatch/workspace/novel_split/extracted/小说/未看/呢喃诗章 north 3.5版 xlsz001代整理(无限期停更).txt',
+    String.fromEnvironment('LARGE_TEXT_CORPUS_1',
+      defaultValue: 'test/fixtures/large-corpus-1.txt'),
+    String.fromEnvironment('LARGE_TEXT_CORPUS_2',
+      defaultValue: 'test/fixtures/large-corpus-2.txt'),
   ];
   for (final path in corpus) {
     test(

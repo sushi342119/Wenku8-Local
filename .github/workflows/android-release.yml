@@ -39,6 +39,7 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
+      # Keep diagnostics even when tests fail or exceed their process deadline.
       - name: Run tests with process deadline
         timeout-minutes: 15
         shell: bash
