@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:id="@+id/reading_widget_root" android:background="@drawable/reading_widget_surface_score" android:clipToOutline="true" xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="16dp" android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:text="阅读纪念" android:textSize="11sp" android:textColor="#786275" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heading" android:layout_weight="1" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="青春频率" android:textSize="10sp" android:textColor="#C84D76" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" />
+        </LinearLayout>
+        <ImageView android:layout_width="match_parent" android:layout_height="1dp" android:background="#F0BACD" android:importantForAccessibility="no" android:layout_marginTop="5dp" />
+        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:layout_marginTop="3dp">
+            <ImageView android:layout_width="104dp" android:layout_height="match_parent" android:src="@drawable/reading_widget_art_score_117" android:scaleType="fitCenter" android:importantForAccessibility="no" android:layout_gravity="end" />
+            <TextView android:layout_width="160dp" android:layout_height="wrap_content" android:text="每一页，&#10;都算数。" android:textSize="20sp" android:textColor="#352F44" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="2" android:ellipsize="end" android:id="@+id/widget_value" android:layout_gravity="center_vertical" android:lineSpacingExtra="2dp" android:background="#FFF4F3" />
+        </FrameLayout>
+        <LinearLayout android:layout_width="match_parent" android:layout_height="48dp" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginTop="3dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:text="把时间留给书页" android:textSize="15sp" android:textColor="#352F44" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="2" android:ellipsize="end" android:id="@+id/widget_detail" android:lineSpacingExtra="2dp" android:layout_weight="1" />
+            <FrameLayout android:layout_width="36dp" android:layout_height="48dp" android:id="@+id/widget_cover_container" android:visibility="gone" android:layout_marginStart="12dp">
+                <ImageView android:id="@+id/widget_cover" android:layout_width="match_parent" android:layout_height="match_parent" android:scaleType="centerCrop" android:contentDescription="最近读到书尾的书籍封面" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="" android:textSize="11sp" android:textColor="#18232C" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_bookmark" android:visibility="gone" />
+            </FrameLayout>
+        </LinearLayout>
+        <TextView android:layout_width="match_parent" android:layout_height="30dp" android:text="截至 —" android:textSize="10sp" android:textColor="#786275" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="2" android:ellipsize="end" android:id="@+id/widget_caption" android:layout_marginTop="2dp" />
+        <TextView android:layout_width="match_parent" android:layout_height="28dp" android:text="连续 — 天 · 今天 — 分钟 · 近7日 — 分钟" android:textSize="10sp" android:textColor="#786275" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="2" android:ellipsize="end" android:id="@+id/widget_totals" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="15dp" android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:text="近26周" android:textSize="10sp" android:textColor="#786275" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heatmap_heading" android:layout_weight="1" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="截至 —" android:textSize="10sp" android:textColor="#786275" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_as_of" android:visibility="visible" />
+        </LinearLayout>
+        <ImageView android:id="@+id/widget_heatmap" android:layout_width="match_parent" android:layout_height="49dp" android:scaleType="fitCenter" android:contentDescription="近26周阅读热力图" />
+    </LinearLayout>
+</FrameLayout>

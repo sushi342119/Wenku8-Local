@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/reading_widget_root" android:layout_width="match_parent" android:layout_height="match_parent">
+    <ImageView android:id="@+id/widget_rendered_face" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:scaleType="fitXY" android:importantForAccessibility="yes" />
+    <TextView android:id="@+id/widget_rendered_date" android:layout_width="wrap_content" android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end" android:layout_margin="10dp" android:padding="3dp"
+        android:textSize="10sp" android:textColor="#FFFFFF" android:background="#CC17191B" android:visibility="gone" />
+    <LinearLayout android:id="@+id/widget_quote_panel" android:orientation="vertical"
+        android:layout_width="match_parent" android:layout_height="match_parent" android:visibility="gone">
+        <TextView android:id="@+id/widget_quote_text" android:layout_width="match_parent" android:layout_height="0dp"
+            android:layout_weight="1" android:ellipsize="end" android:maxLines="3" android:fontFamily="serif" android:includeFontPadding="false" />
+        <TextView android:id="@+id/widget_quote_source" android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:ellipsize="end" android:maxLines="1" android:textSize="10sp" />
+    </LinearLayout>
+    <TextView android:id="@+id/widget_quote_count" android:layout_width="wrap_content" android:layout_height="44dp"
+        android:layout_gravity="bottom|start" android:layout_marginStart="16dp" android:gravity="center_vertical" android:textSize="11sp" android:visibility="gone" />
+    <TextView android:id="@+id/widget_quote_next" android:layout_width="80dp" android:layout_height="44dp"
+        android:layout_gravity="bottom|end" android:gravity="center" android:text="↻ 换一条" android:textSize="11sp" android:textColor="#FFFFFF"
+        android:background="@drawable/reading_widget_quote_action"
+        android:contentDescription="换一条摘录" android:visibility="gone" />
+    <TextView android:id="@+id/widget_recent_action" android:layout_width="match_parent" android:layout_height="54dp"
+        android:layout_gravity="bottom" android:contentDescription="继续上次阅读" android:visibility="gone" />
+</FrameLayout>

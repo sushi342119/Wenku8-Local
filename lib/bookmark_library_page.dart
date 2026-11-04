@@ -1,5 +1,6 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
@@ -9,6 +10,7 @@ import 'feature_pages.dart';
 import 'library_state.dart';
 import 'library_reflow.dart';
 import 'local_library.dart';
+import 'local_platform.dart';
 import 'offline_repository.dart';
 import 'pages.dart' show ReaderPage;
 import 'quote_card.dart';
@@ -248,11 +250,119 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
         ),
   );
 
+  String _buildMarkdownExport() {
+    final local = widget.state.localLibrary;
+    final entries = libraryBookmarks(widget.state, books: local);
+    if (entries.isEmpty) return '';
+    final groups = <int, List<({int novelId, ReaderBookmark bookmark})>>{};
+    for (final entry in entries) {
+      groups.putIfAbsent(entry.novelId, () => []).add(entry);
+    }
+    final buffer = StringBuffer()
+      ..writeln('# 书屿读书笔记与书签摘录')
+      ..writeln()
+      ..writeln(
+        '> 导出时间：${DateTime.now().toIso8601String().replaceFirst("T", " ").split(".").first} · 共 ${entries.length} 条记录 / ${groups.length} 本书',
+      )
+      ..writeln();
+    for (final group in groups.entries) {
+      final book = _known(group.key);
+      final title = book?.title ?? '书籍 ${group.key}';
+      final author = book?.author ?? '';
+      buffer.writeln(
+        '## 《$title》${author.isEmpty ? "" : " · $author"}',
+      );
+      buffer.writeln();
+      for (final item in group.value) {
+        final mark = item.bookmark;
+        final chapter = mark.chapterTitle.isEmpty
+            ? '第 ${mark.position.chapter + 1} 章'
+            : mark.chapterTitle;
+        final meta = <String>[
+          mark.kindLabel,
+          if (mark.category.isNotEmpty) '分类：${mark.category}',
+        ].join(' · ');
+        buffer.writeln('### $chapter（$meta）');
+        buffer.writeln();
+        if (mark.quote.isNotEmpty) {
+          for (final line in mark.quote.split('\n')) {
+            buffer.writeln('> $line');
+          }
+          buffer.writeln();
+        }
+        if (mark.note.isNotEmpty) {
+          buffer.writeln('- **批注**：${mark.note}');
+          buffer.writeln();
+        }
+      }
+    }
+    return buffer.toString().trimRight();
+  }
+
+  Future<void> _exportMarkdown(BuildContext anchorContext) async {
+    final markdown = _buildMarkdownExport();
+    if (markdown.isEmpty) {
+      showNovelFeedback(context, '暂无可导出的书签或摘录');
+      return;
+    }
+    final action = await showGlassMenu<String>(
+      context: anchorContext,
+      reduceMotion: _reduced,
+      builder: (menuContext) => Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          GlassMenuItem(
+            order: 0,
+            label: '导出为 Markdown 文件 (.md)',
+            onPressed: () => Navigator.of(menuContext).pop('file'),
+          ),
+          GlassMenuItem(
+            order: 1,
+            label: '复制 Markdown 到剪贴板',
+            onPressed: () => Navigator.of(menuContext).pop('copy'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'copy') {
+      await Clipboard.setData(ClipboardData(text: markdown));
+      if (mounted) showNovelFeedback(context, '已复制 Markdown 读书笔记到剪贴板');
+      return;
+    }
+    final date = DateTime.now().toIso8601String().split('T').first;
+    try {
+      final saved = await LocalPlatform.exportBackup(
+        markdown,
+        '书屿读书笔记_$date.md',
+      );
+      if (mounted && saved) {
+        showNovelFeedback(context, '已导出 Markdown 读书笔记');
+      }
+    } catch (_) {
+      await Clipboard.setData(ClipboardData(text: markdown));
+      if (mounted) {
+        showNovelFeedback(context, '当前环境不支持直接保存文件，已复制到剪贴板');
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => ArchiveFeaturePage(
     title: '书签',
     code: 'PERSONAL / EXCERPTS',
     actions: [
+      GlassMenuAnchor(
+        child: Builder(
+          builder: (anchorContext) => GlassIconButton(
+            key: const ValueKey('bookmark-export-markdown'),
+            icon: CupertinoIcons.doc_text,
+            label: '导出 Markdown 笔记',
+            onPressed: () => _exportMarkdown(anchorContext),
+          ),
+        ),
+      ),
+      const SizedBox(width: 8),
       GlassIconButton(
         key: const ValueKey('bookmark-search-toggle'),
         icon: _searchOpen ? CupertinoIcons.xmark : CupertinoIcons.search,

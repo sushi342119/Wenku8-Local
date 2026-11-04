@@ -2,13 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app_ui.dart';
+import 'app_palette.dart';
 import 'app_licenses.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
+import 'haptic_preferences.dart';
 import 'legacy_wenku_repository.dart';
 import 'library_state.dart';
 import 'listening/audio_output.dart';
@@ -22,6 +25,8 @@ import 'offline_cache.dart';
 import 'offline_repository.dart';
 import 'pages.dart';
 import 'performance_preferences.dart';
+import 'reading_widget_cards.dart';
+import 'reading_widget_controller.dart';
 import 'touch_sampling.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
@@ -61,11 +66,25 @@ Future<void> main() async {
       ),
     );
     final state = await _requiredStartup('本地阅读状态', LibraryState.load);
+    if (state.appPalette.source == AppPaletteSource.system ||
+        !state.appPalette.themedIcon) {
+      try {
+        await state.refreshSystemPalette();
+      } catch (_) {}
+    }
+    if (chineseLocale(
+          state.language.locale ?? binding.platformDispatcher.locale,
+        ).countryCode !=
+        'CN') {
+      try {
+        await ChineseText.prepare();
+      } catch (_) {}
+    }
     try {
       await TagStore.load();
     } catch (_) {}
     try {
-      await state.ensureFontLoaded();
+      await state.loadFonts();
     } catch (_) {}
     if (state.performance.needsRuntimeEffects) {
       try {
@@ -189,24 +208,94 @@ class NovelApp extends StatefulWidget {
   State<NovelApp> createState() => _NovelAppState();
 }
 
-class _NovelAppState extends State<NovelApp> {
+class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
   LibraryState get state => widget.state;
   NovelRepository get repository => widget.repository;
   ListeningController? get listening => widget.listening;
   AppUpdates? get updates => widget.updates;
   late String _lastFontId = state.appFontId;
-  static final _themes =
-      <(TargetPlatform, Brightness, String), ThemeData>{};
+  late final ReadingWidgetController _readingWidgets =
+      ReadingWidgetController.forState(state);
+  late final ReadingWidgetCards _widgetCards =
+      ReadingWidgetCards.forState(state);
+  Locale _systemLocale = chineseLocale(
+    WidgetsBinding.instance.platformDispatcher.locale,
+  );
+  int _localeRequest = 0;
+  Object? _themeKey;
+  final _themes = <Brightness, ThemeData>{};
 
-  ThemeData _theme(Brightness brightness) => _themes.putIfAbsent((
-    defaultTargetPlatform,
-    brightness,
-    state.appFontId,
-  ), () => novelTheme(
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(
+      _readingWidgets.attach().then((_) {
+        if (mounted) return _widgetCards.attach();
+      }).catchError((Object _) {}),
+    );
+  }
+
+  @override
+  Future<void> didChangeLocales(List<Locale>? locales) async {
+    final ticket = ++_localeRequest;
+    final next = chineseLocale(locales?.firstOrNull);
+    if (state.language == AppLanguage.system && next.countryCode != 'CN') {
+      await ChineseText.prepare();
+    }
+    if (mounted && ticket == _localeRequest) {
+      setState(() => _systemLocale = next);
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState lifecycle) {
+    if (lifecycle == AppLifecycleState.resumed ||
+        lifecycle == AppLifecycleState.paused ||
+        lifecycle == AppLifecycleState.inactive ||
+        lifecycle == AppLifecycleState.hidden) {
+      unawaited(
+        Future<void>.delayed(Duration.zero, _readingWidgets.publish)
+            .catchError((Object _) {}),
+      );
+    }
+    if (lifecycle == AppLifecycleState.resumed &&
+        state.appPalette.source == AppPaletteSource.system) {
+      unawaited(state.refreshSystemPalette());
+    }
+  }
+
+  @override
+  void dispose() {
+    _widgetCards.dispose();
+    _readingWidgets.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  ThemeData _theme(Brightness brightness) {
+    final key = (
+      defaultTargetPlatform,
+      state.appFontId,
+      state.appPalette.source,
+      state.appPalette.seed,
+      state.systemTonalColors?.signature,
+    );
+    if (_themeKey != key) {
+      _themeKey = key;
+      _themes.clear();
+    }
+    return _themes.putIfAbsent(
+      brightness,
+      () => novelTheme(
         brightness,
         fontFamily: state.currentFont.family,
         fontFamilyFallback: state.fontFamilyFallback,
-      ));
+        palette: state.appPalette,
+        systemColors: state.systemTonalColors,
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -217,6 +306,15 @@ class _NovelAppState extends State<NovelApp> {
         _lastFontId = state.appFontId;
         return MaterialApp(
           title: '书屿',
+          locale: state.language.locale ?? _systemLocale,
+          supportedLocales: const [
+            Locale('zh', 'CN'),
+            Locale('zh', 'HK'),
+            Locale('zh', 'TW'),
+          ],
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
+          localeResolutionCallback: (locale, _) =>
+              chineseLocale(state.language.locale ?? locale),
           debugShowCheckedModeBanner: false,
           scrollBehavior: const NovelScrollBehavior(),
           theme: _theme(Brightness.light),
@@ -233,6 +331,8 @@ class _NovelAppState extends State<NovelApp> {
             final media = MediaQuery.of(context);
             final content = PerformanceScope(
               preferences: state.performance,
+              explicitReduceMotion:
+                  media.disableAnimations || state.reduceMotion,
               child: MediaQuery(
                 data: media.copyWith(
                   disableAnimations:
@@ -255,9 +355,12 @@ class _NovelAppState extends State<NovelApp> {
                 ),
               ),
             );
-            return updates == null
-                ? content
-                : AppUpdateMonitor(updates: updates!, child: content);
+            return HapticScope(
+              preferences: state.haptics,
+              child: updates == null
+                  ? content
+                  : AppUpdateMonitor(updates: updates!, child: content),
+            );
           },
           home: _HomeViewport(state: state, repository: repository),
         );

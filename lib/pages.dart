@@ -35,8 +35,10 @@ import 'reader_follow_scroll.dart';
 import 'reader_illustrations.dart';
 import 'reader_find.dart';
 import 'reader_dictionary.dart';
+import 'reader_purification.dart';
 import 'reader_landing_highlight.dart';
 import 'reader_tools.dart';
+import 'reading_activity.dart';
 import 'reading_history.dart';
 import 'reading_statistics_page.dart';
 import 'bookmark_library_page.dart';
@@ -2526,6 +2528,30 @@ class SettingsPage extends StatelessWidget {
                 ),
                 const Divider(height: 22),
                 JellyTapSurface(
+                  key: const ValueKey('settings-purification-rules'),
+                  onTap: () => showReaderPurificationSheet(
+                    context: context,
+                    reduceMotion: state.reduceMotion,
+                  ),
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 10),
+                    child: Row(
+                      children: [
+                        Icon(CupertinoIcons.wand_stars, size: 21),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '正文替换与净化规则',
+                            style: TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                        Icon(CupertinoIcons.chevron_forward, size: 14),
+                      ],
+                    ),
+                  ),
+                ),
+                const Divider(height: 22),
+                JellyTapSurface(
                   key: const ValueKey('settings-font-settings-page'),
                   onTap: () => pushNovelPage<void>(
                     context,
@@ -4529,10 +4555,53 @@ class _ReaderPageState extends State<ReaderPage>
   int _paragraphCount = 0;
   bool _saveQueued = false;
   Timer? _idleSave;
-  bool _catalogueOpen = false;
-  bool _toolsOpen = false;
-  bool _findOpen = false;
-  bool _listeningOpen = false;
+  final _activityOverlays = <String>{};
+  bool get _catalogueOpen => _activityOverlays.contains('catalogue');
+  set _catalogueOpen(bool value) => _activityOverlay('catalogue', value);
+  bool get _toolsOpen => _activityOverlays.contains('tools');
+  set _toolsOpen(bool value) => _activityOverlay('tools', value);
+  bool get _findOpen => _activityOverlays.contains('find');
+  set _findOpen(bool value) => _activityOverlay('find', value);
+  bool get _listeningOpen => _activityOverlays.contains('listening');
+  set _listeningOpen(bool value) => _activityOverlay('listening', value);
+  late ReadingActivitySession _readingActivity;
+  bool _activityAttached = false;
+  bool _activityForeground = true;
+  bool _activityStartQueued = false;
+
+  void _activityOverlay(String overlay, bool open) {
+    if (_activityOverlays.contains(overlay) == open) return;
+    if (open) {
+      _activityOverlays.add(overlay);
+    } else {
+      _activityOverlays.remove(overlay);
+    }
+    _syncReadingActivity();
+  }
+
+  bool get _activityEligible =>
+      _activityAttached &&
+      _activityForeground &&
+      _ready &&
+      !_restoring &&
+      _activityOverlays.isEmpty &&
+      (_currentContent?.paragraphs.isNotEmpty ?? false);
+
+  void _syncReadingActivity() {
+    if (!_activityAttached) return;
+    if (!_activityEligible) {
+      _readingActivity.setActive(false);
+    } else if (!_readingActivity.active && !_activityStartQueued) {
+      _activityStartQueued = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _activityStartQueued = false;
+        if (mounted && _activityAttached) {
+          _readingActivity.setActive(_activityEligible);
+        }
+      });
+    }
+  }
+
   ListeningController? _listening;
   (int, int, int, int)? _listeningTarget;
   String? _listeningError;
@@ -4555,6 +4624,15 @@ class _ReaderPageState extends State<ReaderPage>
   @override
   void initState() {
     super.initState();
+    unawaited(ReaderPurificationStore.shared.ensureLoaded());
+    _readingActivity = ReadingActivitySession(
+      store: widget.state.readingActivity,
+      bookId: _novel.id,
+    );
+    _activityAttached = true;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _activityForeground =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
     if (_local case final local?) {
       widget.state.bindLocalChapters(local);
       local.addListener(_localChanged);
@@ -4587,7 +4665,22 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   @override
+  void didUpdateWidget(covariant ReaderPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.state != widget.state) {
+      _readingActivity.dispose();
+      _readingActivity = ReadingActivitySession(
+        store: widget.state.readingActivity,
+        bookId: _novel.id,
+      );
+      _syncReadingActivity();
+    }
+  }
+
+  @override
   void deactivate() {
+    _readingActivity.setActive(false);
+    _activityAttached = false;
     // The Scrollable child detaches its controller before this State's dispose.
     // Capture while it is still attached, also when idle-save is pending.
     _idleSave?.cancel();
@@ -4598,7 +4691,15 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   @override
+  void activate() {
+    super.activate();
+    _activityAttached = true;
+    _syncReadingActivity();
+  }
+
+  @override
   void dispose() {
+    _readingActivity.dispose();
     _local?.removeListener(_localChanged);
     _idleSave?.cancel();
     _savePosition(notify: false, finalSave: true);
@@ -5266,7 +5367,7 @@ class _ReaderPageState extends State<ReaderPage>
       );
     }
     return ReaderHighlightText(
-      text: paragraphs[index],
+      text: ReaderPurificationStore.shared.purifyParagraph(paragraphs[index]),
       index: index,
       match: _findMatch,
       style: style,
@@ -5292,6 +5393,8 @@ class _ReaderPageState extends State<ReaderPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _activityForeground = state == AppLifecycleState.resumed;
+    _syncReadingActivity();
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       _idleSave?.cancel();
@@ -5671,6 +5774,7 @@ class _ReaderPageState extends State<ReaderPage>
         if (ticket == _restoreTicket) {
           _restoring = false;
           if (!completed) _restoreQueued = false;
+          _syncReadingActivity();
         }
       }
     });
@@ -5908,7 +6012,10 @@ class _ReaderPageState extends State<ReaderPage>
     NovelChapter chapter,
     bool dark,
   ) => AnimatedBuilder(
-    animation: widget.state.readerSettingsChanges,
+    animation: Listenable.merge([
+      widget.state.readerSettingsChanges,
+      ReaderPurificationStore.shared,
+    ]),
     builder: (context, child) =>
         FutureBuilder<({ReaderContent? content, Object? error})>(
           future: _content,
@@ -5928,7 +6035,11 @@ class _ReaderPageState extends State<ReaderPage>
                 snapshot.connectionState == ConnectionState.done &&
                 (snapshot.hasError || snapshot.data?.error != null);
             _ready = ready;
-            if (ready) _restoreAfterLayout();
+            if (ready) {
+              _restoreAfterLayout();
+            } else {
+              _syncReadingActivity();
+            }
             final paragraphs = ready ? content.paragraphs : const <String>[];
             _paragraphCount = paragraphs.length;
             final paragraphStyle = TextStyle(

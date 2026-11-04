@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:id="@+id/reading_widget_root" android:background="@drawable/reading_widget_surface_signal" android:clipToOutline="true" xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+        <FrameLayout android:layout_width="match_parent" android:layout_height="50dp">
+            <ImageView android:layout_width="50dp" android:layout_height="44dp" android:src="@drawable/reading_widget_art_signal_117" android:scaleType="centerCrop" android:importantForAccessibility="no" android:layout_gravity="end" />
+            <LinearLayout android:layout_width="94dp" android:layout_height="wrap_content" android:orientation="vertical">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="连续阅读" android:textSize="11sp" android:textColor="#1C292A" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heading" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="34dp" android:orientation="horizontal" android:gravity="bottom|start">
+                    <TextView android:layout_width="wrap_content" android:layout_height="match_parent" android:text="—" android:textSize="28sp" android:textColor="#1C292A" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_value" android:gravity="bottom" style="@style/ReadingWidgetDisplayBold" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="天" android:textSize="13sp" android:textColor="#1C292A" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_unit" android:layout_marginStart="6dp" android:layout_marginBottom="8dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </FrameLayout>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="有效阅读 — 分钟" android:textSize="11sp" android:textColor="#1C292A" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_detail" android:layout_marginTop="1dp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="截至 —" android:textSize="11sp" android:textColor="#5F6F69" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_caption" android:visibility="gone" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="" android:textSize="11sp" android:textColor="#18232C" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_totals" android:visibility="gone" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="15dp" android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:text="近7周" android:textSize="10sp" android:textColor="#5F6F69" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heatmap_heading" android:layout_weight="1" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="截至 —" android:textSize="10sp" android:textColor="#5F6F69" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_as_of" android:visibility="gone" />
+        </LinearLayout>
+        <ImageView android:id="@+id/widget_heatmap" android:layout_width="match_parent" android:layout_height="0dp" android:scaleType="fitCenter" android:contentDescription="近7周阅读热力图" android:layout_weight="1" />
+    </LinearLayout>
+</FrameLayout>

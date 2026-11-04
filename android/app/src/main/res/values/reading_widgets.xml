@@ -1,0 +1,8 @@
+<resources>
+<string name="reading_widget_small_name">阅读留白 · 此刻</string>
+<string name="reading_widget_medium_name">阅读留白 · 七日</string>
+<string name="reading_widget_large_name">阅读留白 · 余韵</string>
+<string name="reading_widget_small_description">连续阅读天数与有效阅读时间</string>
+<string name="reading_widget_medium_description">连续阅读天数与近7日有效阅读时间</string>
+<string name="reading_widget_large_description">最近读到书尾的记录，保留故事的余韵</string>
+</resources>

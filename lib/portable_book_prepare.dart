@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:archive/archive.dart';
 import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html_parser;
@@ -46,7 +47,7 @@ class PortableBookPreparer {
   ) async {
     final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
     final bytes = await File(path).readAsBytes();
-    return _prepareBytes(name, ext, bytes);
+    return Isolate.run(() => _prepareBytes(name, ext, bytes));
   }
 
   static List<PreparedCloudBook> _prepareBytes(

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout android:layout_width="match_parent" android:layout_height="match_parent" android:id="@+id/reading_widget_root" android:background="@drawable/reading_widget_surface_ink" android:clipToOutline="true" xmlns:android="http://schemas.android.com/apk/res/android">
+    <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="65dp" android:orientation="horizontal">
+            <LinearLayout android:layout_width="100dp" android:layout_height="match_parent" android:orientation="vertical">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="连续阅读" android:textSize="11sp" android:textColor="#233E3B" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heading" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="34dp" android:orientation="horizontal" android:gravity="bottom|start">
+                    <TextView android:layout_width="wrap_content" android:layout_height="match_parent" android:text="—" android:textSize="28sp" android:textColor="#233E3B" android:includeFontPadding="false" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_value" android:gravity="bottom" style="@style/ReadingWidgetDisplayBold" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="天" android:textSize="13sp" android:textColor="#233E3B" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_unit" android:layout_marginStart="6dp" android:layout_marginBottom="8dp" />
+                </LinearLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="连续 — 天" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_detail" />
+            </LinearLayout>
+            <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:paddingStart="8dp" android:paddingEnd="8dp">
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="近7日节律" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="30dp" android:orientation="horizontal" android:gravity="bottom">
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_0" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_0" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_1" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_1" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_2" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_2" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_3" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_3" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_4" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_4" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_5" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_5" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                    <LinearLayout android:layout_width="0dp" android:layout_height="match_parent" android:orientation="vertical" android:layout_weight="1" android:gravity="bottom|center_horizontal">
+                        <FrameLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+                            <ProgressBar android:id="@+id/widget_bar_6" android:layout_width="19dp" android:layout_height="5dp" android:rotation="-90" android:layout_gravity="center" android:progressDrawable="@drawable/reading_widget_progress_ink" android:max="100" android:progress="0" android:indeterminate="false" style="?android:attr/progressBarStyleHorizontal" />
+                        </FrameLayout>
+                        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="—" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_day_6" android:gravity="center" android:layout_marginTop="2dp" />
+                    </LinearLayout>
+                </LinearLayout>
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="截至 —" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_caption" android:gravity="end" android:layout_marginTop="1dp" />
+            </LinearLayout>
+        </LinearLayout>
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="" android:textSize="11sp" android:textColor="#18232C" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_totals" android:visibility="gone" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="15dp" android:orientation="horizontal" android:gravity="center_vertical">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:text="近13周" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_heatmap_heading" android:layout_weight="1" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="截至 —" android:textSize="10sp" android:textColor="#607167" android:includeFontPadding="false" android:fontFamily="sans-serif" android:maxLines="1" android:ellipsize="end" android:id="@+id/widget_as_of" android:visibility="gone" />
+        </LinearLayout>
+        <ImageView android:id="@+id/widget_heatmap" android:layout_width="match_parent" android:layout_height="0dp" android:scaleType="fitCenter" android:contentDescription="近13周阅读热力图" android:layout_weight="1" />
+    </LinearLayout>
+</FrameLayout>

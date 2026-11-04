@@ -17,6 +17,7 @@ import 'catalog.dart';
 import 'cover_arrival.dart';
 import 'glass_optics.dart';
 import 'glass_palette.dart';
+import 'app_palette.dart';
 import 'glass_controls.dart';
 import 'app_language.dart';
 export 'app_language.dart';
@@ -100,6 +101,10 @@ class GlassAppearance extends InheritedWidget {
 
   static Color tintOf(BuildContext context, {required double opacity}) =>
       Theme.of(context).extension<GlassPalette>()?.tint ??
+      Theme.of(context).extension<AppTonalColors>()?.tint(
+        Theme.of(context).brightness,
+        opacity,
+      ) ??
       ArchiveDesign.glassTint(Theme.of(context).brightness, opacity: opacity);
 
   @override
@@ -130,38 +135,79 @@ ThemeData novelTheme(
   Brightness brightness, {
   String? fontFamily,
   List<String>? fontFamilyFallback,
+  AppPalettePreferences palette = const AppPalettePreferences(),
+  SystemTonalColors? systemColors,
 }) {
   final dark = brightness == Brightness.dark;
-  final scheme = ColorScheme.fromSeed(
+  final original =
+      palette.source == AppPaletteSource.original ||
+      palette.source == AppPaletteSource.system && systemColors == null;
+  late final baseScheme = ColorScheme.fromSeed(
     seedColor: accent,
     brightness: brightness,
     dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
     primary: dark ? Colors.white : ink,
     onPrimary: dark ? ink : Colors.white,
     surface: dark ? ArchiveDesign.darkSurface : ArchiveDesign.surface,
-    onSurface: dark ? const Color(0xFFF0F2EC) : ink,
-    onSurfaceVariant: dark ? const Color(0xFFADB4AC) : const Color(0xFF646B62),
+    onSurface: dark ? ArchiveDesign.darkInk : ink,
+    onSurfaceVariant: dark ? ArchiveDesign.darkMuted : const Color(0xFF646B62),
   );
+  late final classicScheme = dark
+      ? baseScheme.copyWith(
+          surfaceDim: ArchiveDesign.darkBackground,
+          surfaceBright: ArchiveDesign.darkRaisedHigh,
+          surfaceContainerLowest: ArchiveDesign.darkBackground,
+          surfaceContainerLow: ArchiveDesign.darkSurface,
+          surfaceContainer: ArchiveDesign.darkRaised,
+          surfaceContainerHigh: const Color(0xFF333333),
+          surfaceContainerHighest: ArchiveDesign.darkRaisedHigh,
+          outline: const Color(0xFF7A7A7A),
+          outlineVariant: ArchiveDesign.darkOutline,
+          surfaceTint: Colors.transparent,
+        )
+      : baseScheme;
+  final scheme = original
+      ? classicScheme
+      : palette.source == AppPaletteSource.system
+      ? systemColors!.scheme(brightness)
+      : ColorScheme.fromSeed(
+          seedColor: palette.color,
+          brightness: brightness,
+          dynamicSchemeVariant: DynamicSchemeVariant.tonalSpot,
+        ).copyWith(surfaceTint: Colors.transparent);
   return ThemeData(
     useMaterial3: true,
     brightness: brightness,
     colorScheme: scheme,
-    scaffoldBackgroundColor: dark ? ArchiveDesign.darkBackground : canvas,
+    scaffoldBackgroundColor: original
+        ? (dark ? ArchiveDesign.darkBackground : canvas)
+        : scheme.surface,
+    extensions: [AppTonalColors.forScheme(scheme, original: original)],
+    cupertinoOverrideTheme: CupertinoThemeData(
+      brightness: brightness,
+      primaryColor: scheme.primary,
+      primaryContrastingColor: scheme.onPrimary,
+      scaffoldBackgroundColor: scheme.surface,
+    ),
     splashFactory: InkRipple.splashFactory,
     textTheme: ThemeData(brightness: brightness).textTheme.apply(
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
-      bodyColor: dark ? Colors.white : ink,
-      displayColor: dark ? Colors.white : ink,
+      bodyColor: original ? (dark ? Colors.white : ink) : scheme.onSurface,
+      displayColor: original ? (dark ? Colors.white : ink) : scheme.onSurface,
     ),
-    dividerColor: dark ? const Color(0xFF353C35) : hairline,
+    dividerColor: original
+        ? (dark ? const Color(0xFF353C35) : hairline)
+        : scheme.outlineVariant,
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: scheme.surface,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
         borderSide: BorderSide(
-          color: dark ? const Color(0xFF353C35) : hairline,
+          color: original
+              ? (dark ? const Color(0xFF353C35) : hairline)
+              : scheme.outlineVariant,
         ),
       ),
     ),
@@ -183,6 +229,9 @@ abstract final class AppControls {
   static Color _accent(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     if (MediaQuery.highContrastOf(context)) return const Color(0xFF747474);
+    if (Theme.of(context).extension<AppTonalColors>() case final colors?) {
+      return colors.active;
+    }
     return Color.lerp(
       scheme.onSurface,
       scheme.surface,
@@ -191,6 +240,9 @@ abstract final class AppControls {
   }
 
   static Color _track(BuildContext context) {
+    if (Theme.of(context).extension<AppTonalColors>() case final colors?) {
+      return colors.track;
+    }
     final scheme = Theme.of(context).colorScheme;
     return Color.lerp(
       scheme.surface,

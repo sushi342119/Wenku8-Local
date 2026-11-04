@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources xmlns:android="http://schemas.android.com/apk/res/android">
+    <style name="ReadingWidgetDisplayBold">
+        <item name="android:fontFamily">@font/reading_widget_display_bold</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+    <style name="ReadingWidgetDisplayMedium">
+        <item name="android:fontFamily">@font/reading_widget_display_medium</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+    <style name="ReadingWidgetSerifBold">
+        <item name="android:fontFamily">@font/reading_widget_serif_bold</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+</resources>

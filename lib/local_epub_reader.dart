@@ -14,6 +14,8 @@ import 'library_state.dart';
 import 'local_epub.dart';
 import 'local_epub_reader_tools.dart';
 import 'reader_dictionary.dart';
+import 'reader_purification.dart';
+import 'reading_activity.dart';
 import 'local_library.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
@@ -38,15 +40,29 @@ class LocalEpubReaderPage extends StatefulWidget {
 }
 
 class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   late final Novel _novel;
   late final AnimationController _chrome;
+  late ReadingActivitySession _readingActivity;
+  bool _activityAttached = false;
+  bool _activityForeground = true;
+  bool _chapterReady = false;
   late int _chapter;
   int _chapterVisit = 0;
   bool _chromeTarget = true;
   bool _sheetOpen = false;
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})>? _future;
   int? _futureChapter;
+
+  void _syncReadingActivity() {
+    final active =
+        _activityAttached &&
+        _activityForeground &&
+        _chapterReady &&
+        !_sheetOpen &&
+        _total > 0;
+    _readingActivity.setActive(active);
+  }
 
   // keepScrollOffset: false —— 每章换新 ListView，不能让 PageStorage 把上一章偏移带过来。
   final ScrollController _scroll = ScrollController(keepScrollOffset: false);
@@ -125,6 +141,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   @override
   void initState() {
     super.initState();
+    unawaited(ReaderPurificationStore.shared.ensureLoaded());
     final book = widget.local.bookFor(widget.novel.id);
     _novel = book == null
         ? widget.novel
@@ -138,6 +155,15 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                 volume: book.chapters[index].volume,
               ),
           ]);
+    _readingActivity = ReadingActivitySession(
+      store: widget.state.readingActivity,
+      bookId: _novel.id,
+    );
+    _activityAttached = true;
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    _activityForeground =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
+    WidgetsBinding.instance.addObserver(this);
     _chrome = AnimationController(
       vsync: this,
       duration: NovelMotion.contact,
@@ -352,6 +378,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   Future<void> _catalogue() async {
     if (_sheetOpen || _total == 0) return;
     _sheetOpen = true;
+    _syncReadingActivity();
     try {
       final index = await showJellySheet<int>(
         context: context,
@@ -365,6 +392,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       if (mounted && index != null) _goTo(index, restart: true);
     } finally {
       _sheetOpen = false;
+      _syncReadingActivity();
     }
   }
 
@@ -390,6 +418,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   Future<void> _settings({bool bookmarks = false}) async {
     if (_sheetOpen || _total == 0) return;
     _sheetOpen = true;
+    _syncReadingActivity();
     try {
       final action = await showJellySheet<ReaderToolAction>(
         context: context,
@@ -414,6 +443,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
         if (chapter != null) _goTo(chapter, restart: true);
       } else if (action is ReaderOpenDictionary) {
         _sheetOpen = false;
+        _syncReadingActivity();
         await showReaderDictionarySheet(
           context: context,
           word: _novel.title,
@@ -422,11 +452,34 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       }
     } finally {
       _sheetOpen = false;
+      _syncReadingActivity();
     }
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _activityForeground = state == AppLifecycleState.resumed;
+    _syncReadingActivity();
+  }
+
+  @override
+  void deactivate() {
+    _readingActivity.setActive(false);
+    _activityAttached = false;
+    super.deactivate();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _activityAttached = true;
+    _syncReadingActivity();
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _readingActivity.dispose();
     // 页面不持有 EpubPackage；epubChapter() 完成时会在 finally 中关闭包。
     // 清引用不会取消尚未完成的加载；ImageCache 可能继续持有图片字节，
     // 因此 dispose 不保证立即释放全部图片内存。
@@ -486,7 +539,10 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                   child: _total == 0
                       ? _message('暂无章节')
                       : AnimatedBuilder(
-                          animation: widget.state.readerSettingsChanges,
+                          animation: Listenable.merge([
+                            widget.state.readerSettingsChanges,
+                            ReaderPurificationStore.shared,
+                          ]),
                           builder: (context, _) => _content(context),
                         ),
                 ),
@@ -652,9 +708,13 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       future: _load(),
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
+          _chapterReady = false;
+          _syncReadingActivity();
           return const Center(child: CircularProgressIndicator());
         }
         if (snapshot.hasError || !snapshot.hasData) {
+          _chapterReady = false;
+          _syncReadingActivity();
           return Center(
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -667,6 +727,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           );
         }
         final data = snapshot.data!;
+        _chapterReady = data.blocks.isNotEmpty;
+        _syncReadingActivity();
         // 懒加载：只构建可见块，不是一次性把整章所有块（含图片 widget）
         // 全部建出来；每次只加载一章图片。切换章节时 connectionState != done，
         // 上方分支返回加载指示，不会把旧章正文当成新章显示；旧 snapshot
@@ -741,7 +803,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Text(
-        block.text ?? '',
+        ReaderPurificationStore.shared.purifyParagraph(block.text ?? ''),
         style: TextStyle(
           fontSize: widget.state.fontSize,
           height: widget.state.lineHeight,

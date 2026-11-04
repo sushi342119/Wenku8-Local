@@ -1,0 +1,5 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+ android:minWidth="250dp" android:minHeight="280dp" android:minResizeWidth="250dp" android:minResizeHeight="280dp"
+ android:targetCellWidth="4" android:targetCellHeight="4" android:initialLayout="@layout/reading_widget_large"
+ android:previewLayout="@layout/reading_widget_large" android:updatePeriodMillis="1800000"
+ android:resizeMode="none" android:configure="org.mewx.wenku8_flutter.ReadingWidgetConfigureActivity" android:widgetFeatures="reconfigurable" android:widgetCategory="home_screen" android:description="@string/reading_widget_large_description"/>

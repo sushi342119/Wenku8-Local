@@ -1,10 +1,12 @@
 package org.mewx.wenku8_flutter
 
+import android.Manifest
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.PersistableBundle
 import android.graphics.Bitmap
@@ -15,6 +17,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.view.WindowManager
+import androidx.core.content.FileProvider
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import local.saf.localDeleteOutcome
@@ -41,12 +44,15 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     private val requests = LocalToolRequests { callback -> activity.runOnUiThread { callback() } }
     private data class Pending(val result: MethodChannel.Result, val export: String?, val legacy: Boolean = false)
     private var pending: Pending? = null
+    private var pendingShare: MethodChannel.Result? = null
+    private var galleryAwaitingPermission: BookImageStore.Image? = null
     private var pendingFolder: MethodChannel.Result? = null
     private var pendingFont: MethodChannel.Result? = null
     private val closed get() = requests.closed
     companion object {
         private const val REQUEST = 8019
         private const val REQUEST_FOLDER = 8021
+        private const val GALLERY_PERMISSION_REQUEST = 8022
         private const val REQUEST_FONT = 8023
         private const val MAX_FONT_BYTES = 100 * 1024 * 1024
         private const val MAX_BYTES = 4 * 1024 * 1024
@@ -57,11 +63,15 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val PDF_CACHE_MAX_BYTES = 256L * 1024 * 1024
         private const val PDF_CACHE_MAX_AGE_MS = 7L * 24 * 60 * 60 * 1000
         private val libraryRecordKey =
-            Regex("^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks)_[1-9][0-9]{0,9}$")
+            Regex("^(chapter|shelf_added|novel_meta|reading_position|reader_bookmarks|book_reader_style|reader_illustrations|chapter_progress_anchor|local_progress_migration)_[1-9][0-9]{0,9}$")
         private val allowedLibraryPreferenceKeys = setOf(
             "theme", "readerFontSize", "readerLineHeight", "reduceMotion",
             "glassBlur", "glassOpacity", "readerKeepScreenOn", "checkAppUpdates",
-            "appTypeface", "appFontId", "shelfSort", "shelfFilter", "lowPerformanceMode",
+            "appTypeface", "appFontId", "appCustomFont", "importedFonts", "readerTypeface",
+            "appLanguage", "haptic_preferences_v1", "haptics_v1", "app_palette_v1",
+            "readerPreferences", "reading_activity_v1", "reading_moments_v1",
+            "reading_widget_cards_v1", "reader_purification_rules_v1",
+            "shelfSort", "shelfFilter", "lowPerformanceMode",
             "performanceGlass", "performanceBlur", "performanceEdgeBlur",
             "performanceMotion", "performanceShelf3d", "shelf", "reading_history_hidden",
             "recentSearches", "local_shelf_removed", "tag_defs", "tag_map",
@@ -113,8 +123,79 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     result.success(null)
                 } catch (_: Exception) { result.error("share", "Share sheet did not open", null) }
             }
+            "shareImage" -> {
+                val bytes = call.argument<ByteArray>("bytes")
+                if (pendingShare != null || pending != null || closed) {
+                    result.error("busy", "A document or share operation is already active", null)
+                    return
+                }
+                if (!QuoteCardImage.valid(bytes)) {
+                    result.error("input", "Invalid excerpt image", null)
+                    return
+                }
+                pendingShare = result
+                io.execute {
+                    try {
+                        val directory = File(activity.cacheDir, "quote_cards").apply { mkdirs() }
+                        directory.listFiles()?.filter { it.isFile && it.extension == "png" && it.lastModified() < System.currentTimeMillis() - 24 * 60 * 60 * 1000 }
+                            ?.forEach { it.delete() }
+                        val file = File.createTempFile("excerpt-", ".png", directory)
+                        file.writeBytes(bytes!!)
+                        val uri = FileProvider.getUriForFile(activity, "${activity.packageName}.updates", file)
+                        activity.runOnUiThread {
+                            if (closed || pendingShare !== result) return@runOnUiThread
+                            pendingShare = null
+                            try {
+                                val intent = Intent(Intent.ACTION_SEND).apply {
+                                    type = "image/png"
+                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                    clipData = ClipData.newUri(activity.contentResolver, "阅读摘录", uri)
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                activity.startActivity(Intent.createChooser(intent, "分享摘录"))
+                                result.success(null)
+                            } catch (_: Exception) { result.error("share", "Share sheet did not open", null) }
+                        }
+                    } catch (_: Exception) {
+                        activity.runOnUiThread {
+                            if (!closed && pendingShare === result) {
+                                pendingShare = null
+                                result.error("share", "Image could not be prepared", null)
+                            }
+                        }
+                    }
+                }
+            }
+            "saveImageToGallery", "exportImage", "saveBookImage" -> {
+                if (pending != null || pendingShare != null || closed) {
+                    result.error("busy", "请先完成当前图片、文件或分享操作", null)
+                    return
+                }
+                val image = try {
+                    if (call.method == "saveBookImage") {
+                        BookImageStore.image(call.argument<ByteArray>("bytes"), call.argument<String>("name"))
+                    } else {
+                        BookImageStore.renderedImage(call.argument<ByteArray>("bytes"), call.argument<String>("name"))
+                    }
+                } catch (_: Exception) {
+                    result.error("gallery_input", "图片格式或大小无效", null)
+                    return
+                }
+                pendingShare = result
+                if (Build.VERSION.SDK_INT <= 28 &&
+                    activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                    galleryAwaitingPermission = image
+                    try {
+                        activity.requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), GALLERY_PERMISSION_REQUEST)
+                    } catch (_: Exception) {
+                        galleryAwaitingPermission = null
+                        pendingShare = null
+                        result.error("gallery_permission", "无法获得相册写入权限，请在系统设置中允许后重试", null)
+                    }
+                } else saveGallery(image, result)
+            }
             "exportBackup", "importBackup", "importLegacyData" -> {
-                if (pending != null || closed) {
+                if (pending != null || pendingShare != null || closed) {
                     result.error("busy", "A document operation is already active", null)
                     return
                 }
@@ -143,6 +224,37 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 }
             }
             else -> result.notImplemented()
+        }
+    }
+
+    fun onRequestPermissionsResult(request: Int): Boolean {
+        if (request != GALLERY_PERMISSION_REQUEST) return false
+        val image = galleryAwaitingPermission ?: return true
+        galleryAwaitingPermission = null
+        val result = pendingShare ?: return true
+        if (closed) return true
+        if (activity.checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            saveGallery(image, result)
+        } else {
+            pendingShare = null
+            result.error("gallery_permission", "未允许保存到相册，请在系统设置中允许存储权限后重试", null)
+        }
+        return true
+    }
+
+    private fun saveGallery(image: BookImageStore.Image, result: MethodChannel.Result) {
+        io.execute {
+            var error: Exception? = null
+            try { BookImageStore.save(activity, image) } catch (failure: Exception) { error = failure }
+            activity.runOnUiThread {
+                if (closed || pendingShare !== result) return@runOnUiThread
+                pendingShare = null
+                when (error) {
+                    null -> result.success(true)
+                    is SecurityException -> result.error("gallery_permission", "未允许保存到相册，请在系统设置中允许后重试", null)
+                    else -> result.error("gallery_save", "图片未保存到相册，请检查可用空间后重试", null)
+                }
+            }
         }
     }
 
