@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 
 import 'app_interactions.dart';
 import 'app_ui.dart';
+import 'book_sync.dart';
+import 'cloud_book_sync_panel.dart';
+import 'cloud_sources.dart';
 import 'library_backup.dart';
 import 'library_state.dart';
 import 'local_platform.dart';
@@ -21,6 +24,25 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
   LibraryBackup? _preview;
   bool _preferences = false;
   bool _clipboardPreview = false;
+  late final CloudSourceSettings _cloudSources = CloudSourceSettings()..load();
+  late final BookSync _bookSync = BookSync(
+    state: widget.state,
+    preferences: widget.state.preferences,
+    cloudSources: _cloudSources,
+  )..load();
+
+  @override
+  void dispose() {
+    _bookSync.dispose();
+    _cloudSources.dispose();
+    super.dispose();
+  }
+
+  Future<void> _openCloudSync() => showJellySheet<void>(
+    context: context,
+    reduceMotion: widget.state.reduceMotion,
+    builder: (_) => CloudBookSyncPanel(sync: _bookSync),
+  );
 
   Future<void> _run(String label, Future<void> Function() action) async {
     if (_busy != null) return;
@@ -195,6 +217,12 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                             ? () => _import(clipboard: true)
                             : null,
                         child: const Text('从剪贴板读取备份'),
+                      ),
+                      const Divider(height: 24),
+                      GlassTextButton(
+                        key: const ValueKey('backup-cloud-sync'),
+                        onPressed: _busy == null ? _openCloudSync : null,
+                        child: const Text('云端书库同步（S3 / 系统文档）'),
                       ),
                     ],
                   ),

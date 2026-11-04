@@ -732,6 +732,8 @@ class LibraryState extends ChangeNotifier {
   }
 
   LocalLibraryStore? _localChapters;
+  LocalLibraryStore? get localLibrary => _localChapters;
+  SharedPreferences get preferences => _prefs;
   final Map<int, Future<void>> _chapterMigrations = {};
   void bindLocalChapters(LocalLibraryStore local) {
     _localChapters = local;

@@ -20,6 +20,7 @@ import 'filename_tags.dart';
 import 'local_record_removal.dart';
 import 'local_source_identity.dart';
 import 'local_text_worker_client.dart';
+import 'portable_book_prepare.dart';
 import 'recovery_archive.dart';
 import 'wenku_errors.dart';
 
@@ -687,6 +688,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Directory get _booksDir => Directory('${_supportDir.path}/local_books');
+  Directory get directory => _booksDir;
 
   String? get folderUri => _prefs.getString('local_library_folder');
 
@@ -3345,10 +3347,148 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   static String authorFromNameForTest(String name) => _authorFromName(name);
 
   Future<bool> _sourceHasFingerprint(LocalBook book, String expected) async {
-    final actual = book.sourceId == 'appFolder:novels'
+    final direct =
+        book.sourceId == 'appFolder:novels' ||
+        book.sourceId == 'cloud:imported';
+    final actual = direct
         ? await _textWorker.fingerprint(book.sourceKey)
         : await LocalPlatform.fingerprintLocalText(book.fileUri);
     return actual == expected;
+  }
+
+  Future<Novel> importCloudFile(
+    String name,
+    String path, {
+    String? decodedText,
+  }) => _synchronized(() async {
+    final dir = Directory('${_booksDir.path}/cloud_originals');
+    if (!await dir.exists()) await dir.create(recursive: true);
+    var effectiveName = name.trim().isEmpty ? '未命名书籍.txt' : name.trim();
+    var bytes = await File(path).readAsBytes();
+    final kind = localBookKindForFileName(effectiveName);
+    if (kind == null) {
+      final prepared = await PortableBookPreparer.prepareFile(
+        effectiveName,
+        path,
+      );
+      if (prepared.isEmpty) {
+        throw const FormatException('未识别到可导入的书籍内容');
+      }
+      final doc = prepared.first;
+      if (doc.epubBytes != null) {
+        effectiveName =
+            '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.epub';
+        bytes = doc.epubBytes!;
+      } else {
+        effectiveName =
+            '${effectiveName.replaceFirst(RegExp(r'\.[^.]+$'), '')}.txt';
+        bytes = Uint8List.fromList(utf8.encode(doc.text ?? ''));
+      }
+    } else if (kind == LocalBookKind.txt &&
+        decodedText != null &&
+        decodedText.isNotEmpty) {
+      bytes = Uint8List.fromList(utf8.encode(decodedText));
+    }
+    final safeName = effectiveName.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_');
+    final digest = sha256.convert(bytes).toString().substring(0, 16);
+    final stored = File('${dir.path}/${digest}_$safeName');
+    await stored.writeAsBytes(bytes, flush: true);
+    const sourceId = 'cloud:imported';
+    final sourceKey = stored.path;
+    final existing = _books
+        .where((b) => b.sourceId == sourceId && b.sourceKey == sourceKey)
+        .firstOrNull;
+    final stat = await stored.stat();
+    final book = await _importDirectFile(
+      path: stored.path,
+      name: effectiveName,
+      size: stat.size,
+      modified: stat.modified.millisecondsSinceEpoch,
+      sourceId: sourceId,
+      sourceKey: sourceKey,
+      existing: existing,
+    );
+    if (book == null) throw const FormatException('书籍内容为空');
+    if (existing != null) {
+      final idx = _indexForBook(existing.id);
+      if (idx >= 0) _replaceBook(idx, book);
+    } else {
+      _addBook(book);
+    }
+    await _saveIndex();
+    return toNovel(book);
+  });
+
+  Future<({int imported, int failed})> importCloudBatch(
+    String name,
+    String path,
+  ) async {
+    if (!name.toLowerCase().endsWith('.zip')) {
+      await importCloudFile(name, path);
+      return (imported: 1, failed: 0);
+    }
+    final prepared = await PortableBookPreparer.prepareFile(name, path);
+    if (prepared.isEmpty) return (imported: 0, failed: 1);
+    final tempDir = await Directory.systemTemp.createTemp('wenku8_cloud_zip_');
+    var imported = 0;
+    var failed = 0;
+    try {
+      for (final (i, doc) in prepared.indexed) {
+        final ext = doc.epubBytes != null ? '.epub' : '.txt';
+        final entryName = doc.name.toLowerCase().endsWith(ext)
+            ? doc.name
+            : '${doc.name.replaceFirst(RegExp(r'\.[^.]+$'), '')}$ext';
+        final tempFile = File('${tempDir.path}/item_$i$ext');
+        final bytes =
+            doc.epubBytes ?? Uint8List.fromList(utf8.encode(doc.text ?? ''));
+        await tempFile.writeAsBytes(bytes, flush: true);
+        try {
+          await importCloudFile(entryName, tempFile.path);
+          imported++;
+        } catch (_) {
+          failed++;
+        }
+      }
+    } finally {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    }
+    return (imported: imported, failed: failed);
+  }
+
+  Future<({String name, Uint8List bytes, String? text})?> exportSyncOriginal(
+    int id,
+  ) async {
+    final book = bookFor(id);
+    if (book == null) return null;
+    if (book.fileUri.startsWith('file://')) {
+      final file = File(Uri.parse(book.fileUri).toFilePath());
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        String? text;
+        if (book.kind == LocalBookKind.txt) {
+          final textFile = File(textPathFor(book));
+          if (await textFile.exists()) {
+            text = await textFile.readAsString();
+          }
+        }
+        return (name: book.fileName, bytes: bytes, text: text);
+      }
+    }
+    if (book.kind == LocalBookKind.txt) {
+      final textFile = File(textPathFor(book));
+      if (await textFile.exists()) {
+        final text = await textFile.readAsString();
+        final bytes = Uint8List.fromList(utf8.encode(text));
+        return (
+          name: book.fileName.isNotEmpty
+              ? book.fileName
+              : '${book.displayTitle}.txt',
+          bytes: bytes,
+          text: text,
+        );
+      }
+    }
+    return null;
   }
 
   Future<_TextMetadata> _importText(
@@ -3420,10 +3560,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   ) async {
     final file = File(textPathFor(book));
     if (await file.exists()) return (path: file.path, recovered: false);
+    final direct =
+        book.sourceId == 'appFolder:novels' ||
+        book.sourceId == 'cloud:imported';
     final result = await _importText(
-      book.sourceId == 'appFolder:novels' ? book.sourceKey : book.fileUri,
+      direct ? book.sourceKey : book.fileUri,
       book.id,
-      direct: book.sourceId == 'appFolder:novels',
+      direct: direct,
     );
     if (book.textFingerprint.isNotEmpty &&
         result.fingerprint != book.textFingerprint) {

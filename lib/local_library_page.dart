@@ -7,6 +7,8 @@ import 'app_interactions.dart';
 import 'app_ui.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
+import 'cloud_library_page.dart';
+import 'cloud_sources.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_library.dart';
@@ -34,12 +36,19 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   bool _scanning = false;
   bool _picking = false;
   String? _folderUri;
+  late final CloudSourceSettings _cloudSources = CloudSourceSettings()..load();
 
   @override
   void initState() {
     super.initState();
     widget.state.bindLocalChapters(widget.local);
     _folderUri = widget.local.folderUri;
+  }
+
+  @override
+  void dispose() {
+    _cloudSources.dispose();
+    super.dispose();
   }
 
   Future<void> _pickFolder() async {
@@ -256,6 +265,26 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: _scanning || _picking ? () {} : _scan,
+          ),
+          const SizedBox(height: 14),
+          FeatureEntry(
+            key: const ValueKey('local-library-cloud-import'),
+            title: '网盘导入',
+            subtitle: '从 OpenList / WebDAV、S3 或夸克网盘浏览并导入书籍',
+            icon: CupertinoIcons.cloud_download,
+            onTap: () async {
+              await pushNovelPage<void>(
+                context,
+                CloudLibraryPage(
+                  settings: _cloudSources,
+                  onImport: widget.local.importCloudFile,
+                  onImportBatch: widget.local.importCloudBatch,
+                  reduceMotion: widget.state.reduceMotion,
+                ),
+                reduceMotion: widget.state.reduceMotion,
+              );
+              if (mounted) setState(() {});
+            },
           ),
         ],
       ),
