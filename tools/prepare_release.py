@@ -18,13 +18,13 @@ def metadata(root: Path, tag: str | None = None) -> tuple[str, int, str]:
     # and need not be bumped with every release. Still reject a misspelled key
     # or a declaration that cannot receive the injected value.
     injected_version = re.search(
-        r"const currentAppVersion\s*=\s*String\.fromEnvironment\(\s*"
-        r"'APP_VERSION'\s*,\s*defaultValue:\s*'\d+\.\d+\.\d+'\s*,?\s*\)\s*;", dart)
+        r"const (?:String\s+)?currentAppVersion\s*=\s*String\.fromEnvironment\(\s*"
+        r"'APP_VERSION'\s*,\s*defaultValue:\s*'\d+\.\d+\.\d+'\s*,?\s*\)\s*;", dart, re.S)
     injected_build = re.search(
-        r"const currentAppBuild\s*=\s*int\.fromEnvironment\(\s*"
-        r"'APP_BUILD'\s*,\s*defaultValue:\s*[1-9]\d*\s*,?\s*\)\s*;", dart)
-    app_version = re.search(r"const currentAppVersion\s*=\s*'([^']+)'\s*;", dart)
-    app_build = re.search(r"const currentAppBuild\s*=\s*(\d+)\s*;", dart)
+        r"const (?:int\s+)?currentAppBuild\s*=\s*int\.fromEnvironment\(\s*"
+        r"'APP_BUILD'\s*,\s*defaultValue:\s*[1-9]\d*\s*,?\s*\)\s*;", dart, re.S)
+    app_version = re.search(r"const (?:String\s+)?currentAppVersion\s*=\s*'([^']+)'\s*;", dart)
+    app_build = re.search(r"const (?:int\s+)?currentAppBuild\s*=\s*(\d+)\s*;", dart)
     version_ok = injected_version is not None or (app_version is not None and app_version[1] == name)
     build_ok = injected_build is not None or (app_build is not None and int(app_build[1]) == build)
     if not version_ok or not build_ok:

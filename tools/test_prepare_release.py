@@ -72,6 +72,19 @@ const currentAppBuild = int.fromEnvironment(
         root = Path(__file__).resolve().parents[1]
         self.assertTrue(metadata(root)[2].strip())
 
+    def test_from_environment_default_values_are_supported(self):
+        (self.root / "lib/updates/app_updates.dart").write_text(
+            "const currentAppVersion = String.fromEnvironment(\n"
+            "  'APP_VERSION',\n"
+            "  defaultValue: '0.2.0',\n"
+            ");\n"
+            "const currentAppBuild = int.fromEnvironment(\n"
+            "  'APP_BUILD',\n"
+            "  defaultValue: 2,\n"
+            ");\n"
+        )
+        self.assertEqual(metadata(self.root, "v0.2.0+2"), ("0.2.0", 2, "- 新功能\n"))
+
 
 
 
