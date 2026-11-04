@@ -21,7 +21,7 @@ void main() {
       await tester.tap(find.text('重试'));
       await tester.pumpAndSettle();
       expect(find.text('书籍加载失败'), findsNothing);
-      expect(find.text('轻小说文库'), findsOneWidget);
+      expect(find.text('书屿'), findsOneWidget);
       expect(repository.attempts, 2);
       expect(tester.takeException(), isNull);
     },

@@ -18,7 +18,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('轻小说文库'), findsOneWidget);
+    expect(find.text('书屿'), findsOneWidget);
     await tester.tap(find.text('书架'));
     await tester.pumpAndSettle();
     expect(find.text('书架还空着'), findsOneWidget);
@@ -40,7 +40,7 @@ void main() {
 
     await tester.dragFrom(middle, first - middle);
     await tester.pumpAndSettle();
-    expect(find.text('轻小说文库'), findsOneWidget);
+    expect(find.text('书屿'), findsOneWidget);
   });
 
   testWidgets('Dock 胶囊来回形变保持紧凑，不被两端裁切', (tester) async {

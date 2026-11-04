@@ -36,7 +36,7 @@ void main() {
     final state = await _mount(tester);
     await state.setTheme(ThemeMode.dark);
     await tester.pumpAndSettle();
-    final title = tester.renderObject<RenderParagraph>(find.text('轻小说文库'));
+    final title = tester.renderObject<RenderParagraph>(find.text('书屿'));
     expect(title.text.style!.shadows, isEmpty);
     final bookTitle = tester.renderObject<RenderParagraph>(
       find.text(demoNovels.first.title).last,

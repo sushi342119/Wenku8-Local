@@ -53,7 +53,7 @@ Wenku8 Flutter 是轻小说文库客户端的 Flutter 重构版本，面向 Andr
 
 从 [GitHub Releases](https://github.com/sushi342119/Wenku8-Local/releases) 下载 APK。当前版本提供 **arm64-v8a** 架构的 APK。
 
-安装后，可在 **设置 → 关于轻小说文库** 查看版本信息、更新说明并检查更新。
+安装后，可在 **设置 → 关于书屿** 查看版本信息、更新说明并检查更新。
 
 ## 构建
 

@@ -97,7 +97,7 @@ class AppUpdatePage extends StatelessWidget {
               ),
               const Expanded(
                 child: ArchiveRouteTitle(
-                  title: '关于轻小说文库',
+                  title: '关于书屿',
                   code: 'SYSTEM / ABOUT',
                 ),
               ),
@@ -112,7 +112,7 @@ class AppUpdatePage extends StatelessWidget {
               padding.bottom + 32,
             ),
             children: [
-              const ArchiveSection(title: '轻小说文库', code: 'WENKU8 / FLUTTER'),
+              const ArchiveSection(title: '书屿', code: 'WENKU8 / FLUTTER'),
               const SizedBox(height: 12),
               Text(
                 '当前版本 $version · 构建 $build',
@@ -314,7 +314,7 @@ class AppUpdatePage extends StatelessWidget {
                       key: const ValueKey('app-open-source-licenses'),
                       onPressed: () => showLicensePage(
                         context: context,
-                        applicationName: '轻小说文库',
+                        applicationName: '书屿',
                         applicationVersion: currentAppVersion,
                         applicationLegalese:
                             'Copyright © MewX and contributors\nFlutter modifications © 2026 Wenku8 Flutter contributors',

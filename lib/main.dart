@@ -148,7 +148,7 @@ class _StartupFailureApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '轻小说文库',
+      title: '书屿',
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         appBar: AppBar(title: const Text('应用启动失败')),
@@ -216,7 +216,7 @@ class _NovelAppState extends State<NovelApp> {
         final typefaceChanged = _lastFontId != state.appFontId;
         _lastFontId = state.appFontId;
         return MaterialApp(
-          title: '轻小说文库',
+          title: '书屿',
           debugShowCheckedModeBanner: false,
           scrollBehavior: const NovelScrollBehavior(),
           theme: _theme(Brightness.light),

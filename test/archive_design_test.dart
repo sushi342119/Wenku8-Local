@@ -55,7 +55,7 @@ void main() {
                     children: [
                       const Expanded(
                         child: ArchiveMasthead(
-                          title: '轻小说文库',
+                          title: '书屿',
                           code: 'WENKU8 / READING ARCHIVE',
                           brand: true,
                         ),

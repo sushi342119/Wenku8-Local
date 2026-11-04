@@ -125,7 +125,7 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(scroll.position.pixels, closeTo(offset, .01));
-    expect(find.text('轻小说文库'), findsOneWidget);
+    expect(find.text('书屿'), findsOneWidget);
     expect(find.text('书架还空着'), findsNothing);
     expect(tester.takeException(), isNull);
   });
@@ -230,7 +230,7 @@ void main() {
       await tester.pump(const Duration(milliseconds: 65));
       final rightTouch = tester.widget<LiquidGlass>(lens).touchPosition;
       expect(rightTouch, greaterThan(.8));
-      expect(find.text('轻小说文库'), findsOneWidget);
+      expect(find.text('书屿'), findsOneWidget);
       expect(find.text('阅读偏好'), findsNothing);
       await gesture.moveTo(
         middle,
@@ -266,7 +266,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.getRect(lens).left, closeTo(rest.left, .01));
     expect(tester.getRect(lens).size, rest.size);
-    expect(find.text('轻小说文库'), findsOneWidget);
+    expect(find.text('书屿'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -352,7 +352,7 @@ void main() {
     }
     expect(tester.getRect(surface).center.dx, lessThan(rest.center.dx));
     expect(tester.widget<LiquidGlass>(surface).touchPosition, lessThan(.23));
-    expect(find.text('轻小说文库'), findsOneWidget);
+    expect(find.text('书屿'), findsOneWidget);
     await gesture.up(timeStamp: const Duration(milliseconds: 200));
     await tester.pumpAndSettle();
     expect(tester.getRect(surface), rest);
@@ -375,7 +375,7 @@ void main() {
       await tester.dragFrom(const Offset(3, 350), const Offset(650, 0));
       await tester.pumpAndSettle();
       expect(find.byType(DetailLoaderPage), findsNothing);
-      expect(find.text('轻小说文库'), findsOneWidget);
+      expect(find.text('书屿'), findsOneWidget);
     },
   );
 

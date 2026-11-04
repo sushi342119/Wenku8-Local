@@ -569,7 +569,7 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: const ArchiveMasthead(
-                    title: '轻小说文库',
+                    title: '书屿',
                     code: 'WENKU8 / READING ARCHIVE',
                     brand: true,
                   ),
@@ -701,7 +701,7 @@ class DiscoverPage extends StatefulWidget {
     children: [
       const Expanded(
         child: ArchiveMasthead(
-          title: '轻小说文库',
+          title: '书屿',
           code: 'WENKU8 / READING ARCHIVE',
           brand: true,
         ),
@@ -2679,7 +2679,7 @@ class SettingsPage extends StatelessWidget {
           const SizedBox(height: 14),
           FeatureEntry(
             key: const ValueKey('settings-app-update'),
-            title: '关于轻小说文库',
+            title: '关于书屿',
             icon: CupertinoIcons.arrow_down_circle,
             subtitle:
                 '版本 ${AppUpdatesScope.maybeOf(context)?.installed?.version ?? currentAppVersion}'
