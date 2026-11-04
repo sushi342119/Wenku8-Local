@@ -34,6 +34,7 @@ const localTextMaxDecodedBytes = 3 * localTextMaxSourceBytes;
 const localTextMaxReadCodeUnits = 4 * 1024 * 1024;
 
 bool isLocalNovelId(int id) => id >= localNovelIdBase && id <= 0x7fffffff;
+bool isLocalBook(int id) => isLocalNovelId(id);
 
 class LocalOperationTimeoutException implements Exception {
   const LocalOperationTimeoutException(this.operation);
@@ -702,6 +703,14 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final index = _indexForBook(id);
     return index < 0 ? null : _books[index];
   }
+
+  Novel? novelFor(int id) {
+    final found = bookFor(id);
+    return found == null ? null : toNovel(found);
+  }
+
+  List<Novel> get novels =>
+      List.unmodifiable([for (final item in _books) toNovel(item)]);
 
   LocalBookKind? kindFor(int id) => bookFor(id)?.kind;
 

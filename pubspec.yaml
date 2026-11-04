@@ -78,12 +78,42 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/app-icon.png
+    - assets/report/
+    - assets/reading_previews/archive-117.webp
+    - assets/reading_previews/shelf-117.webp
+    - assets/reading_previews/editorial-117.webp
+    - assets/reading_previews/constellation-117.webp
+    - assets/reading_previews/signal-117.webp
+    - assets/reading_previews/score-117.webp
+    - assets/reading_previews/ink-117.webp
+    - assets/reading_previews/festival-117.webp
+    - assets/fonts/OFL-BarlowCondensed.txt
+    - assets/fonts/OFL-NotoSerifSC.txt
     - assets/fonts/OFL-SourceHanSerif.txt
+    - assets/fonts/OFL-SourceHanSans.txt
+    - assets/fonts/OFL-LXGWWenKaiScreen.txt
+    - assets/fonts/OFL-ZhuqueFangsong.txt
+    - assets/fonts/OFL-Iansui.txt
+    - assets/fonts/OFL-LXGWZhenKai.txt
+    - assets/fonts/OFL-LXGWMarkerGothic.txt
+    - assets/fonts/OFL-Xiaolai.txt
+    - assets/fonts/OFL-Yozai.txt
+    - assets/fonts/OFL-LXGWWenKaiTC.txt
+    - assets/fonts/OFL-OpenHuninn.txt
     - assets/licenses/GPL-3.0.txt
     - assets/licenses/edge-tts.txt
-    - assets/licenses/opencc.txt
-    - assets/licenses/dart-jieba.txt
     - assets/licenses/libmobi.txt
+    - assets/licenses/jsoup.txt
+    - assets/licenses/commonmark.txt
+    - assets/licenses/pdfbox.txt
+    - assets/licenses/pdfbox-notice.txt
+    - assets/licenses/poi.txt
+    - assets/licenses/bouncycastle.txt
+    - assets/licenses/desugar-jdk.txt
+    - assets/licenses/opencc.txt
+    - assets/licenses/juniversalchardet.txt
+    - assets/licenses/cronet.txt
+    - assets/licenses/dart-jieba.txt
     - assets/opencc/
     - assets/tokenizer/jieba-1.0.1.dgz
   fonts:
@@ -92,6 +122,16 @@ flutter:
         - asset: assets/fonts/SourceHanSerifCN-Regular.otf
           weight: 400
         - asset: assets/fonts/SourceHanSerifCN-Bold.otf
+          weight: 700
+    - family: ReadingDisplay
+      fonts:
+        - asset: assets/fonts/ReadingDisplay-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/ReadingDisplay-Bold.ttf
+          weight: 700
+    - family: ReadingSerifDisplay
+      fonts:
+        - asset: assets/fonts/ReadingSerifDisplay-Bold.ttf
           weight: 700
   shaders:
     - shaders/continuous_blur.frag

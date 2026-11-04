@@ -38,6 +38,8 @@ import 'reader_dictionary.dart';
 import 'reader_landing_highlight.dart';
 import 'reader_tools.dart';
 import 'reading_history.dart';
+import 'reading_statistics_page.dart';
+import 'bookmark_library_page.dart';
 import 'recent_searches.dart';
 import 'ui_notifiers.dart';
 import 'feature_pages.dart';
@@ -2527,18 +2529,78 @@ class SettingsPage extends StatelessWidget {
             sectionHeader(context, '阅读记录', ''),
             const SizedBox(height: 14),
             ContentPanel(
-              onTap: () => openReadingHistory(context, state, source),
-              child: const Row(
+              child: Column(
                 children: [
-                  Icon(CupertinoIcons.clock, size: 21),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      '阅读历史',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                  JellyTapSurface(
+                    key: const ValueKey('settings-reading-history'),
+                    onTap: () => openReadingHistory(context, state, source),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(CupertinoIcons.clock, size: 21),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '阅读历史',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Icon(CupertinoIcons.chevron_right, size: 14),
+                        ],
+                      ),
                     ),
                   ),
-                  Icon(CupertinoIcons.chevron_right, size: 14),
+                  const Divider(height: 22),
+                  JellyTapSurface(
+                    key: const ValueKey('settings-reading-statistics'),
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      ReadingStatisticsPage(state: state, repository: source),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(CupertinoIcons.chart_bar, size: 21),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '阅读统计与报告',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Icon(CupertinoIcons.chevron_right, size: 14),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 22),
+                  JellyTapSurface(
+                    key: const ValueKey('settings-bookmarks'),
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      BookmarkLibraryPage(state: state, repository: source),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          Icon(CupertinoIcons.bookmark, size: 21),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              '书签与划线',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                          Icon(CupertinoIcons.chevron_right, size: 14),
+                        ],
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -4268,11 +4330,13 @@ class ReaderPage extends StatefulWidget {
     required this.state,
     required this.repository,
     required this.initialChapter,
+    this.initialBookmark,
   });
   final Novel novel;
   final LibraryState state;
   final NovelRepository repository;
   final int initialChapter;
+  final ReaderBookmark? initialBookmark;
 
   @override
   State<ReaderPage> createState() => _ReaderPageState();

@@ -6,8 +6,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 
 import 'archive_motion.dart';
+import 'loading_handoff.dart';
+import 'loading_ui.dart';
 
 export 'archive_motion.dart';
+export 'loading_handoff.dart';
 
 /// One motion vocabulary for controls, menus, sheets and in-place expansion.
 /// The paper flight/reveal are choreographed sequences, not repeating effects.
@@ -105,28 +108,60 @@ class PaperCoverRectTween extends RectTween {
     super.end,
     required this.returning,
     this.heroCurve = false,
+    this.endPaintOffset = Offset.zero,
   });
   final bool returning;
   final bool heroCurve;
+  final Offset endPaintOffset;
+
+  /// Hero tracks its destination's local origin on every tick, but initially
+  /// measures a transformed bounding rectangle. Those differ on a slanted
+  /// cover. Keep the tracked endpoint at the origin, and apply its exact
+  /// bounds correction only when painting the flight.
+  factory PaperCoverRectTween.toHero({
+    required BuildContext context,
+    required Rect? begin,
+    required Rect? end,
+    required bool returning,
+  }) {
+    final box = context.findRenderObject();
+    final route = ModalRoute.of(context)?.subtreeContext?.findRenderObject();
+    var offset = Offset.zero;
+    if (box is RenderBox && box.hasSize && route != null && end != null) {
+      final matrix = box.getTransformTo(route);
+      final bounds = MatrixUtils.transformRect(matrix, Offset.zero & box.size);
+      final origin = MatrixUtils.transformPoint(matrix, Offset.zero);
+      offset = bounds.topLeft - origin;
+      end = origin & bounds.size;
+    }
+    return PaperCoverRectTween(
+      begin: begin,
+      end: end,
+      returning: returning,
+      heroCurve: true,
+      endPaintOffset: offset,
+    );
+  }
 
   @override
   Rect lerp(double t) {
+    final target = end!.shift(endPaintOffset);
     if (t <= 0) return begin!;
-    if (t >= 1) return end!;
+    if (t >= 1) return target;
     if (heroCurve) t = PaperFlightPose.heroTimeline(t);
     final travel = returning
         ? 1 - PaperFlightPose.travel(1 - t)
         : PaperFlightPose.travel(t);
     if (travel <= 0) return begin!;
-    if (travel >= 1) return end!;
-    final center = Offset.lerp(begin!.center, end!.center, travel)!;
-    final distance = (end!.center - begin!.center).distance;
+    if (travel >= 1) return target;
+    final center = Offset.lerp(begin!.center, target.center, travel)!;
+    final distance = (target.center - begin!.center).distance;
     final lift =
         math.min(32.0, 12 + distance * .075) * math.sin(travel * math.pi);
     return Rect.fromCenter(
       center: center + Offset(0, -lift),
-      width: begin!.width + (end!.width - begin!.width) * travel,
-      height: begin!.height + (end!.height - begin!.height) * travel,
+      width: begin!.width + (target.width - begin!.width) * travel,
+      height: begin!.height + (target.height - begin!.height) * travel,
     );
   }
 }
@@ -180,7 +215,23 @@ class PaperCoverPlane {
     RenderObject? ancestor = face.parent;
     while (ancestor != null) {
       if (ancestor is PaperCoverOcclusionSource) {
-        return (ancestor as PaperCoverOcclusionSource).coverOcclusion(face);
+        final path = (ancestor as PaperCoverOcclusionSource).coverOcclusion(
+          face,
+        );
+        final route = ModalRoute.of(
+          context,
+        )?.subtreeContext?.findRenderObject();
+        final overlay = Navigator.maybeOf(
+          context,
+        )?.overlay?.context.findRenderObject();
+        if (path == null || route == null || overlay == null) return path;
+        // The covered shelf is still under Cupertino's outgoing parallax at
+        // pop start. Retain its final scene mask, not that temporary offset.
+        final inverse = Matrix4.tryInvert(route.getTransformTo(null));
+        if (inverse == null) return path;
+        return path.transform(
+          (overlay.getTransformTo(null)..multiply(inverse)).storage,
+        );
       }
       ancestor = ancestor.parent;
     }
@@ -196,18 +247,13 @@ class PaperCoverPlane {
         Offset.lerp(a.vertical, b.vertical, t)!,
       );
 
-  Matrix4 matrix(Size size) {
-    if (size.isEmpty || !size.width.isFinite || !size.height.isFinite) {
-      return Matrix4.identity();
-    }
-    return Matrix4.identity()
+  Matrix4 matrix(Size size) => Matrix4.identity()
     ..setEntry(0, 0, horizontal.dx)
     ..setEntry(1, 0, horizontal.dy * size.height / size.width)
     ..setEntry(0, 1, vertical.dx * size.width / size.height)
     ..setEntry(1, 1, vertical.dy)
     ..setEntry(0, 3, origin.dx * size.width)
     ..setEntry(1, 3, origin.dy * size.height);
-  }
 }
 
 /// Source scenes provide physical foreground silhouettes, not page snapshots.
@@ -293,10 +339,7 @@ class _PaperCoverFlightState extends State<PaperCoverFlight> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || _info != null) return;
       final boundary = _face.currentContext?.findRenderObject();
-      if (boundary is! RenderRepaintBoundary || !boundary.hasSize || boundary.size.isEmpty) {
-        _snapshotRequested = false;
-        return;
-      }
+      if (boundary is! RenderRepaintBoundary || boundary.size.isEmpty) return;
       // A small GPU-only cover texture, once per flight. No page readback,
       // screenshot, asynchronous decode or repeated subtree paint per frame.
       final scale =
@@ -308,8 +351,8 @@ class _PaperCoverFlightState extends State<PaperCoverFlight> {
       try {
         final image = boundary.toImageSync(pixelRatio: scale.clamp(1.0, 8.0));
         setState(() => _fallback = image);
-      } catch (_) {
-        _snapshotRequested = false;
+      } on FlutterError {
+        // Keep the original face on renderers without synchronous textures.
       }
     });
   }
@@ -550,16 +593,12 @@ class PaperCoverRender extends RenderProxyBox {
   @override
   void paint(PaintingContext context, Offset offset) {
     if (size.isEmpty || child == null) return;
-    if (config.faceSize.isEmpty || !config.faceSize.width.isFinite ||
-        !config.faceSize.height.isFinite) {
-      super.paint(context, offset);
-      return;
-    }
     final pose = PaperFlightPose(progress);
     final image = config.image;
     final occlusion = _occlusion();
-    final inverse = Matrix4.tryInvert(getTransformTo(null));
-    final mask = inverse == null ? null : occlusion?.path.transform(inverse.storage);
+    final mask = occlusion?.path.transform(
+      Matrix4.inverted(getTransformTo(null)).storage,
+    );
     if (image == null) {
       // Only the first frame (or an unsupported renderer) uses the original
       // face. It is never replayed in bands, even for a composited fallback.
@@ -683,31 +722,20 @@ class GlassMenuStretchRender extends RenderProxyBox {
 
   Rect get anchor => _anchor;
 
-  Matrix4 get _coordinateTransform {
-    if (!attached || (_coordinateSpace != null && !_coordinateSpace!.attached)) {
-      return Matrix4.identity();
-    }
-    try {
-      return getTransformTo(_coordinateSpace);
-    } catch (_) {
-      return Matrix4.identity();
-    }
-  }
-
   Rect get targetRect => MatrixUtils.transformRect(
-    _coordinateTransform,
+    getTransformTo(_coordinateSpace),
     Offset.zero & size,
   );
 
   Rect get localCurrentRect {
-    final inverse = Matrix4.tryInvert(_coordinateTransform);
+    final inverse = Matrix4.tryInvert(getTransformTo(_coordinateSpace));
     return inverse == null
         ? Offset.zero & size
         : MatrixUtils.transformRect(inverse, currentRect);
   }
 
   Offset sourceOffset(Size sourceSize) {
-    final inverse = Matrix4.tryInvert(_coordinateTransform);
+    final inverse = Matrix4.tryInvert(getTransformTo(_coordinateSpace));
     final center = inverse == null
         ? _anchor.center
         : MatrixUtils.transformPoint(inverse, _anchor.center);
@@ -750,7 +778,6 @@ class GlassMenuStretchRender extends RenderProxyBox {
   }
 
   Matrix4 get _paintTransform {
-    if (!hasSize || size.isEmpty) return Matrix4.identity();
     // Convert back before painting: deltas in view/Overlay coordinates are
     // not local deltas when a Navigator is translated or scaled.
     final current = localCurrentRect;
@@ -1129,7 +1156,8 @@ class GlassOverlayTransition extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (reduceMotion || MediaQuery.disableAnimationsOf(context)) return child;
-    if (kind == GlassOverlayKind.menu && anchor != null) {
+    if (kind == GlassOverlayKind.menu) {
+      assert(anchor != null);
       return GlassMenuStretch(
         key: const ValueKey('glass-menu-transition'),
         animation: animation,
@@ -1140,12 +1168,21 @@ class GlassOverlayTransition extends StatelessWidget {
         child: RepaintBoundary(child: child),
       );
     }
+    if (anchor != null) {
+      return SizeTransition(
+        sizeFactor: animation.drive(CurveTween(curve: NovelMotion.ease)),
+        axisAlignment: 1,
+        child: RepaintBoundary(child: child),
+      );
+    }
     return ArchivePlaneTransition(
       key: ValueKey('glass-${kind.name}-transition'),
       animation: animation,
       kind: ArchivePlaneKind.sheet,
       bottomClearance: MediaQuery.viewPaddingOf(context).bottom + 24,
-      child: child,
+      // Move the retained sheet display list. Its backdrop layer still samples
+      // the current scene; only unchanged foreground paint is retained.
+      child: RepaintBoundary(child: child),
     );
   }
 }
@@ -1242,10 +1279,12 @@ class LoadedContentItem extends StatelessWidget {
     required this.index,
     required this.child,
     this.animation,
+    this.placeholder = const LoadingSkeleton(layout: SkeletonLayout.actions),
   });
   final int index;
   final Widget child;
   final Animation<double>? animation;
+  final Widget? placeholder;
 
   @override
   Widget build(BuildContext context) {
@@ -1254,17 +1293,22 @@ class LoadedContentItem extends StatelessWidget {
         : null;
     final order = index - (scope?.firstIndex ?? 0);
     final clock = animation ?? scope?.animation;
-    if (clock == null || order < 0) return child;
-    final start = order.clamp(0, 8) * .055;
+    // Appending a page makes the previous batch static. Keep its element
+    // ancestry intact so in-flight image decodes/arrivals are not remounted.
+    final active = clock != null && order >= 0;
+    final start = active ? order.clamp(0, 8) * .055 : 0.0;
     return RevealFromTop(
-      animation: clock,
+      animation: active ? clock : const AlwaysStoppedAnimation<double>(1),
       start: start,
       end: start + .52,
+      placeholder: placeholder,
       child: child,
     );
   }
 }
 
+/// Small dependent controls expand in place, borrowing the page's finite
+/// cut-in vocabulary. Live glass is clipped, never faded in an opacity layer.
 class AnimatedOptionSection extends StatefulWidget {
   const AnimatedOptionSection({
     super.key,
@@ -1338,17 +1382,19 @@ class RevealFromTop extends StatelessWidget {
     this.start = 0,
     this.end = 1,
     this.axis = ArchiveRevealAxis.vertical,
+    this.placeholder,
   });
   final Animation<double> animation;
   final Widget child;
   final double start;
   final double end;
   final ArchiveRevealAxis axis;
+  final Widget? placeholder;
 
   @override
   Widget build(BuildContext context) {
     if (MediaQuery.disableAnimationsOf(context)) return child;
-    return ArchiveReveal(
+    final revealed = ArchiveReveal(
       animation: animation,
       start: start,
       end: end,
@@ -1358,5 +1404,20 @@ class RevealFromTop extends StatelessWidget {
           : const Offset(-8, -6),
       child: child,
     );
+    return placeholder == null
+        ? revealed
+        : LoadingHandoff(
+            animation: animation,
+            start: start,
+            end: end,
+            axis: axis == ArchiveRevealAxis.vertical
+                ? Axis.vertical
+                : Axis.horizontal,
+            travel: axis == ArchiveRevealAxis.horizontal
+                ? const Offset(-10, 0)
+                : const Offset(-8, -6),
+            placeholder: placeholder!,
+            child: revealed,
+          );
   }
 }

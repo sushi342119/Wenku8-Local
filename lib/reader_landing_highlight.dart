@@ -2,6 +2,44 @@ import 'package:flutter/material.dart';
 
 import 'archive_design.dart';
 
+/// Shared archive frame used for both bookmark landing and saved outlines.
+/// These are paint outsets, so marking never changes reading line breaks.
+Rect readerRegistrationBounds(Rect textBounds) => Rect.fromLTRB(
+  textBounds.left - 8,
+  textBounds.top - 3,
+  textBounds.right + 8,
+  textBounds.bottom + 3,
+);
+
+/// Draws the same restrained corner rule without adding another UI surface.
+void paintReaderRegistrationFrame(
+  Canvas canvas,
+  Rect rect, {
+  required Color ink,
+  Color? fill,
+}) {
+  if (fill != null) {
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        rect,
+        const Radius.circular(ArchiveDesign.panelRadius),
+      ),
+      Paint()..color = fill,
+    );
+  }
+  final rule = Paint()
+    ..color = ink
+    ..strokeWidth = 1.3
+    ..style = PaintingStyle.stroke;
+  canvas.drawLine(rect.topLeft, rect.bottomLeft, rule);
+  canvas.drawLine(rect.topLeft, rect.topLeft + const Offset(7, 0), rule);
+  canvas.drawLine(
+    rect.bottomRight - const Offset(7, 0),
+    rect.bottomRight,
+    rule,
+  );
+}
+
 /// A temporary archive registration plane, never a text glow or blur layer.
 class ReaderLandingHighlight extends StatefulWidget {
   const ReaderLandingHighlight({
@@ -79,42 +117,22 @@ class _LandingPlane extends CustomPainter {
         ? 1.0
         : 1 - Curves.easeInOut.transform(((t - .7) / .3).clamp(0.0, 1.0));
     if (strength <= 0) return;
-    final rect = Rect.fromLTWH(-8, -3, size.width + 16, size.height + 6);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        rect,
-        const Radius.circular(ArchiveDesign.panelRadius),
+    final rect = readerRegistrationBounds(Offset.zero & size);
+    paintReaderRegistrationFrame(
+      canvas,
+      rect,
+      fill:
+          (dark
+                  ? ArchiveDesign.milk
+                  : Color.lerp(
+                      ArchiveDesign.milk,
+                      ArchiveDesign.darkSurface,
+                      .065,
+                    )!)
+              .withValues(alpha: strength * (dark ? .13 : .92)),
+      ink: (dark ? ArchiveDesign.milk : ArchiveDesign.darkSurface).withValues(
+        alpha: strength * (dark ? .65 : .42),
       ),
-      Paint()
-        ..color =
-            (dark
-                    ? ArchiveDesign.milk
-                    : Color.lerp(
-                        ArchiveDesign.milk,
-                        ArchiveDesign.darkSurface,
-                        .065,
-                      )!)
-                .withValues(alpha: strength * (dark ? .13 : .92)),
-    );
-    final rule = Paint()
-      ..color = (dark ? ArchiveDesign.milk : ArchiveDesign.darkSurface)
-          .withValues(alpha: strength * (dark ? .65 : .42))
-      ..strokeWidth = 1.3
-      ..style = PaintingStyle.stroke;
-    canvas.drawLine(
-      Offset(rect.left, rect.top),
-      Offset(rect.left, rect.bottom),
-      rule,
-    );
-    canvas.drawLine(
-      Offset(rect.left, rect.top),
-      Offset(rect.left + 7, rect.top),
-      rule,
-    );
-    canvas.drawLine(
-      Offset(rect.right - 7, rect.bottom),
-      Offset(rect.right, rect.bottom),
-      rule,
     );
   }
 

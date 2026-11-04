@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -19,6 +20,11 @@ import 'local_platform.dart';
 import 'local_library.dart';
 import 'file_text_anchor.dart';
 import 'recovery_archive.dart';
+import 'reader_underline.dart';
+import 'reader_annotation_range.dart';
+import 'reading_activity.dart';
+import 'reading_moments.dart';
+import 'user_fonts.dart';
 
 const _libraryWriteTimeout = Duration(seconds: 8);
 const _maxImportedFontBytes = 100 * 1024 * 1024;
@@ -53,9 +59,11 @@ class ReadingPosition {
     this.paragraphFraction = 0,
     this.textScale = 1,
     this.typeface = 'system',
-    this.revision = '',
+    String? revision,
+    String? contentRevision,
+    this.layout = '',
     this.textOffset,
-  });
+  }) : revision = revision ?? contentRevision ?? '';
   final int chapter;
   final int chapterId;
   final double offset;
@@ -69,7 +77,10 @@ class ReadingPosition {
   final double textScale;
   final String typeface;
   final String revision;
+  final String layout;
   final int? textOffset;
+
+  String get contentRevision => revision;
 
   Map<String, Object> toJson() => {
     'chapter': chapter,
@@ -85,6 +96,8 @@ class ReadingPosition {
     'textScale': textScale,
     'typeface': typeface,
     'revision': revision,
+    if (revision.isNotEmpty) 'contentRevision': revision,
+    if (layout.isNotEmpty) 'layout': layout,
     'textOffset': ?textOffset,
   };
 
@@ -94,8 +107,15 @@ class ReadingPosition {
       return number is num && number.isFinite ? number.toDouble() : fallback;
     }
 
+    final rawRevision = value['revision'];
+    final rawContentRevision = value['contentRevision'];
     return ReadingPosition(
-      revision: value['revision'] is String ? value['revision'] : '',
+      revision: rawRevision is String && rawRevision.isNotEmpty
+          ? rawRevision
+          : rawContentRevision is String
+          ? rawContentRevision
+          : '',
+      layout: value['layout'] is String ? value['layout'] as String : '',
       textOffset: value['textOffset'] is int ? value['textOffset'] : null,
       chapter: value['chapter'] is int
           ? (value['chapter'] as int).clamp(0, 100000)
@@ -125,21 +145,133 @@ class ReaderBookmark {
     required this.id,
     required this.chapterTitle,
     required this.position,
-  });
+    this.quote = '',
+    this.category = '',
+    this.categoryAt = 0,
+    this.underlineRanges = const [],
+    ReaderAnnotationData? annotation,
+    this.rangeUpdatedAt = 0,
+    this.createdAt,
+    this.createdOffsetMinutes,
+  }) : _annotation = annotation;
   final String id;
   final String chapterTitle;
   final ReadingPosition position;
+  final String quote;
+  final String category;
+  final int categoryAt;
+  final DateTime? createdAt;
+  final int? createdOffsetMinutes;
+  final List<ReaderUnderlineRange> underlineRanges;
+  final ReaderAnnotationData? _annotation;
+  final int rangeUpdatedAt;
+
+  ReaderAnnotationData get annotation =>
+      _annotation ??
+      (isUnderline
+          ? const ReaderAnnotationData()
+          : const ReaderAnnotationData(style: ReaderMarkStyle.none));
+
+  String get note => annotation.note;
+  String get kindLabel =>
+      isUnderline && annotation.style != ReaderMarkStyle.none
+      ? annotation.style.label
+      : '书签';
+  bool get isUnderline => underlineRanges.isNotEmpty;
+
+  ReaderBookmark withCategory(String value, int at) => ReaderBookmark(
+    id: id,
+    chapterTitle: chapterTitle,
+    position: position,
+    quote: quote,
+    category: value,
+    categoryAt: at,
+    underlineRanges: underlineRanges,
+    annotation: annotation,
+    rangeUpdatedAt: rangeUpdatedAt,
+    createdAt: createdAt,
+    createdOffsetMinutes: createdOffsetMinutes,
+  );
+
+  ReaderBookmark withAnnotation(ReaderAnnotationData value) => ReaderBookmark(
+    id: id,
+    chapterTitle: chapterTitle,
+    position: position,
+    quote: quote,
+    category: category,
+    categoryAt: categoryAt,
+    underlineRanges: underlineRanges,
+    annotation: value,
+    rangeUpdatedAt: rangeUpdatedAt,
+    createdAt: createdAt,
+    createdOffsetMinutes: createdOffsetMinutes,
+  );
+
+  ReaderBookmark withRange({
+    required String chapterTitle,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    required String quote,
+    required int updatedAt,
+  }) => ReaderBookmark(
+    id: id,
+    chapterTitle: chapterTitle,
+    position: position,
+    quote: quote,
+    category: category,
+    categoryAt: categoryAt,
+    underlineRanges: ranges,
+    annotation: annotation,
+    rangeUpdatedAt: updatedAt,
+    createdAt: createdAt,
+    createdOffsetMinutes: createdOffsetMinutes,
+  );
+
+  ReaderBookmark withCreation(DateTime at, int? offsetMinutes) =>
+      ReaderBookmark(
+        id: id,
+        chapterTitle: chapterTitle,
+        position: position,
+        quote: quote,
+        category: category,
+        categoryAt: categoryAt,
+        underlineRanges: underlineRanges,
+        annotation: annotation,
+        rangeUpdatedAt: rangeUpdatedAt,
+        createdAt: at.toUtc(),
+        createdOffsetMinutes: offsetMinutes,
+      );
 
   Map<String, Object> toJson() => {
     'id': id,
     'chapterTitle': chapterTitle,
     'position': position.toJson(),
+    if (quote.isNotEmpty) 'quote': quote,
+    if (category.isNotEmpty || categoryAt > 0) 'category': category,
+    if (categoryAt > 0) 'categoryAt': categoryAt,
+    if (!annotation.isEmpty ||
+        isUnderline && annotation.style == ReaderMarkStyle.none)
+      'annotation': annotation.toJson(),
+    if (rangeUpdatedAt > 0) 'rangeUpdatedAt': rangeUpdatedAt,
+    if (createdAt != null) 'createdAt': createdAt!.toUtc().toIso8601String(),
+    if (createdAt != null && createdOffsetMinutes != null)
+      'createdOffsetMinutes': createdOffsetMinutes!,
+    if (isUnderline)
+      'underlineRanges': underlineRanges
+          .map((range) => range.toJson())
+          .toList(),
   };
 
   factory ReaderBookmark.fromJson(Map<String, dynamic> json) {
     final id = json['id'];
     final title = json['chapterTitle'];
     final position = json['position'];
+    final quote = json['quote'] ?? '';
+    final category = json['category'] ?? '';
+    final createdAt = json['createdAt'] is String
+        ? DateTime.tryParse(json['createdAt'] as String)
+        : null;
+    final createdOffset = json['createdOffsetMinutes'];
     if (id is! String ||
         id.isEmpty ||
         id.length > 128 ||
@@ -147,19 +279,69 @@ class ReaderBookmark {
         title is! String ||
         title.length > 2048 ||
         RegExp(r'[\x00-\x1f]').hasMatch(title) ||
-        position is! Map) {
+        position is! Map ||
+        quote is! String ||
+        quote.length > 12000 ||
+        category is! String ||
+        category.length > 30 ||
+        (json['createdAt'] != null &&
+            (createdAt == null || !createdAt.isUtc)) ||
+        (createdOffset != null &&
+            (createdOffset is! int ||
+                createdOffset < -840 ||
+                createdOffset > 840 ||
+                createdAt == null)) ||
+        (json['rangeUpdatedAt'] != null &&
+            (json['rangeUpdatedAt'] is! int || json['rangeUpdatedAt'] < 0)) ||
+        (json['categoryAt'] != null &&
+            (json['categoryAt'] is! int || json['categoryAt'] < 0))) {
       throw const FormatException('Damaged bookmark');
     }
     return ReaderBookmark(
       id: id,
       chapterTitle: title,
       position: ReadingPosition.fromJson(Map<String, dynamic>.from(position)),
+      quote: quote,
+      category: category,
+      categoryAt: json['categoryAt'] ?? 0,
+      createdAt: createdAt,
+      createdOffsetMinutes: createdOffset,
+      annotation: json['annotation'] == null
+          ? null
+          : ReaderAnnotationData.fromJson(json['annotation']),
+      rangeUpdatedAt: json['rangeUpdatedAt'] ?? 0,
+      underlineRanges: decodeReaderUnderlineRanges(
+        json['underlineRanges'],
+        position: position,
+      ),
     );
   }
 }
 
 class LibraryState extends ChangeNotifier {
-  LibraryState(this._prefs, {this.writeWaitTimeout = _libraryWriteTimeout}) {
+  LibraryState(
+    this._prefs, {
+    this.writeWaitTimeout = _libraryWriteTimeout,
+    UserFontStore? fonts,
+  }) : fonts = fonts ?? UserFontStore() {
+    final activity = _prefs.get(ReadingActivityStore.preferenceKey);
+    try {
+      readingActivity = ReadingActivityStore(
+        record: activity is String ? activity : null,
+        persist: _persistReadingActivity,
+      );
+    } on FormatException {
+      readingActivity = ReadingActivityStore(persist: _persistReadingActivity);
+    }
+    final moments = _prefs.get(ReadingMomentsStore.preferenceKey);
+    try {
+      readingMoments = ReadingMomentsStore(
+        record: moments is String ? moments : null,
+        persist: _persistReadingMoments,
+      );
+    } on FormatException {
+      readingMoments = ReadingMomentsStore(persist: _persistReadingMoments);
+    }
     try {
       final raw = _prefs.get('shelf');
       if (raw != null) {
@@ -239,6 +421,7 @@ class LibraryState extends ChangeNotifier {
             (a, b) => b.position.updatedAt.compareTo(a.position.updatedAt),
           );
           _bookmarks[id] = bookmarks;
+          _updateUnderlineIndex(id, notify: false);
         } catch (_) {
           // Resume records are independent of the bookmark list.
         }
@@ -302,6 +485,9 @@ class LibraryState extends ChangeNotifier {
 
   final Duration writeWaitTimeout;
   final SharedPreferences _prefs;
+  final UserFontStore fonts;
+  late final ReadingActivityStore readingActivity;
+  late final ReadingMomentsStore readingMoments;
   final _appearance = _StateNotifier();
   final _application = _StateNotifier();
   final _glassChanges = _StateNotifier();
@@ -309,6 +495,7 @@ class LibraryState extends ChangeNotifier {
   final _settings = _StateNotifier();
   final _history = _StateNotifier();
   final _bookmarkChanges = _StateNotifier();
+  final _underlineChanges = _StateNotifier();
   final _searchChanges = _StateNotifier();
   final _shelfViewChanges = _StateNotifier();
   final _readerBehaviorChanges = _StateNotifier();
@@ -321,6 +508,12 @@ class LibraryState extends ChangeNotifier {
   final Map<int, ReadingPosition> _positions = {};
   final Map<int, int> _added = {};
   final Map<int, List<ReaderBookmark>> _bookmarks = {};
+  final Map<int, List<ReaderUnderlineRange>> _underlineRanges = {};
+  final Map<int, Map<int, List<ReaderUnderlineRange>>> _underlinesByChapter =
+      {};
+  final Map<int, List<ReaderAnnotationRange>> _annotationRanges = {};
+  final Map<int, Map<int, List<ReaderAnnotationRange>>> _annotationsByChapter =
+      {};
   final Map<int, int> _shelfRevisions = {};
   List<String> _recentSearches = const [];
   String _shelfSort = 'recentRead';
@@ -407,6 +600,7 @@ class LibraryState extends ChangeNotifier {
   Listenable get settingsChanges => _settings;
   Listenable get historyChanges => _history;
   Listenable get bookmarkChanges => _bookmarkChanges;
+  Listenable get underlineChanges => _underlineChanges;
   Listenable get searchChanges => _searchChanges;
   Listenable get shelfViewChanges => _shelfViewChanges;
   Listenable get readerBehaviorChanges => _readerBehaviorChanges;
@@ -441,6 +635,8 @@ class LibraryState extends ChangeNotifier {
 
   /// 当前字体 ID（稳定 ID，持久化）。
   String get appFontId => _appFontId;
+
+  String? get appFontFamily => currentFont.family;
 
   /// 全部可用字体：系统、内置、已导入。
   List<AppFontEntry> get allFonts => [
@@ -506,6 +702,100 @@ class LibraryState extends ChangeNotifier {
 
   List<ReaderBookmark> bookmarksFor(int id) =>
       List.unmodifiable(_bookmarks[id] ?? const <ReaderBookmark>[]);
+
+  List<ReaderUnderlineRange> underlinesFor(int id, {int? chapterId}) =>
+      chapterId == null
+      ? _underlineRanges[id] ?? const []
+      : _underlinesByChapter[id]?[chapterId] ?? const [];
+
+  List<ReaderAnnotationRange> annotationsFor(int id, {int? chapterId}) =>
+      chapterId == null
+      ? _annotationRanges[id] ?? const []
+      : _annotationsByChapter[id]?[chapterId] ?? const [];
+
+  bool _updateUnderlineIndex(int id, {bool notify = true}) {
+    final styledMarks =
+        List<ReaderBookmark>.of(_bookmarks[id] ?? const <ReaderBookmark>[])
+          ..sort((a, b) {
+            final edited = b.annotation.updatedAt.compareTo(
+              a.annotation.updatedAt,
+            );
+            return edited != 0 ? edited : b.id.compareTo(a.id);
+          });
+    final annotations = <ReaderAnnotationRange>[
+      for (final mark in styledMarks)
+        for (final range in mark.underlineRanges)
+          ReaderAnnotationRange(
+            range,
+            mark.annotation.style,
+            mark.annotation.color,
+          ),
+    ];
+    final ranges =
+        <ReaderUnderlineRange>[
+          for (final mark in _bookmarks[id] ?? const <ReaderBookmark>[])
+            ...mark.underlineRanges,
+        ]..sort((a, b) {
+          for (final pair in [
+            (a.chapterId, b.chapterId),
+            (a.startParagraph, b.startParagraph),
+            (a.startOffset, b.startOffset),
+            (a.endParagraph, b.endParagraph),
+            (a.endOffset, b.endOffset),
+          ]) {
+            final order = pair.$1.compareTo(pair.$2);
+            if (order != 0) return order;
+          }
+          return a.contentRevision.compareTo(b.contentRevision);
+        });
+    if (listEquals(_underlineRanges[id] ?? const [], ranges) &&
+        listEquals(_annotationRanges[id] ?? const [], annotations)) {
+      return false;
+    }
+    final previous = _underlinesByChapter[id];
+    final chapters = <int, List<ReaderUnderlineRange>>{};
+    for (final range in ranges) {
+      (chapters[range.chapterId] ??= []).add(range);
+    }
+    _underlineRanges[id] = List.unmodifiable(ranges);
+    _underlinesByChapter[id] = {
+      for (final entry in chapters.entries)
+        entry.key: listEquals(previous?[entry.key], entry.value)
+            ? previous![entry.key]!
+            : List.unmodifiable(entry.value),
+    };
+    _annotationRanges[id] = List.unmodifiable(annotations);
+    final styledChapters = <int, List<ReaderAnnotationRange>>{};
+    for (final item in annotations) {
+      (styledChapters[item.range.chapterId] ??= []).add(item);
+    }
+    final oldStyled = _annotationsByChapter[id];
+    _annotationsByChapter[id] = {
+      for (final entry in styledChapters.entries)
+        entry.key: listEquals(oldStyled?[entry.key], entry.value)
+            ? oldStyled![entry.key]!
+            : List.unmodifiable(entry.value),
+    };
+    if (notify && !_disposed) _underlineChanges.notifyListeners();
+    return true;
+  }
+
+  List<({int novelId, ReaderBookmark bookmark})> get bookmarkEntries {
+    final entries =
+        [
+          for (final entry in _bookmarks.entries)
+            for (final mark in entry.value)
+              (novelId: entry.key, bookmark: mark),
+        ]..sort(
+          (a, b) => b.bookmark.position.updatedAt.compareTo(
+            a.bookmark.position.updatedAt,
+          ),
+        );
+    return List.unmodifiable(entries);
+  }
+
+  Set<int> get recordedReadingIds =>
+      Set.unmodifiable({..._chapters.keys, ..._positions.keys});
 
   int? chapterForPosition(Novel novel, ReadingPosition position) {
     if (position.revision.isNotEmpty &&
@@ -1451,17 +1741,355 @@ class LibraryState extends ChangeNotifier {
     return _withWriteTimeout(queued, '书籍详情保存');
   }
 
+  Future<void> _persistReadingActivity() async {
+    if (_restoreBarrier case final barrier?) await barrier.future;
+    await _queuePositionWrite(
+      () => writeLibraryPreference(
+        _prefs,
+        ReadingActivityStore.preferenceKey,
+        readingActivity.encode(),
+      ),
+    );
+  }
+
+  Future<void> _persistReadingMoments() async {
+    if (_restoreBarrier case final barrier?) await barrier.future;
+    await _queuePositionWrite(
+      () => writeLibraryPreference(
+        _prefs,
+        ReadingMomentsStore.preferenceKey,
+        readingMoments.encode(),
+      ),
+    );
+  }
+
+  Future<ReaderBookmark> addUnderline({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    String quote = '',
+  }) async => (await _changeUnderline(
+    novel: novel,
+    position: position,
+    ranges: ranges,
+    quote: quote,
+    toggle: false,
+  ))!;
+
+  Future<bool> toggleUnderline({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    String quote = '',
+  }) async =>
+      await _changeUnderline(
+        novel: novel,
+        position: position,
+        ranges: ranges,
+        quote: quote,
+        toggle: true,
+      ) !=
+      null;
+
+  Future<ReaderBookmark> saveAnnotation({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    String quote = '',
+    ReaderMarkStyle style = ReaderMarkStyle.underline,
+    ReaderMarkColor color = ReaderMarkColor.ink,
+    String note = '',
+  }) async => (await _changeUnderline(
+    novel: novel,
+    position: position,
+    ranges: ranges,
+    quote: quote,
+    toggle: false,
+    annotation: ReaderAnnotationData.fromJson({
+      'style': style.name,
+      'color': color.name,
+      'note': note,
+      'updatedAt': 0,
+    }),
+  ))!;
+
+  Future<ReaderBookmark> updateBookmarkAnnotation(
+    int novelId,
+    String id, {
+    required ReaderMarkStyle style,
+    required ReaderMarkColor color,
+    required String note,
+  }) async {
+    final data = ReaderAnnotationData.fromJson({
+      'style': style.name,
+      'color': color.name,
+      'note': note,
+      'updatedAt': 0,
+    });
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => updateBookmarkAnnotation(
+          novelId,
+          id,
+          style: style,
+          color: color,
+          note: note,
+        ),
+      );
+    }
+    late ReaderBookmark result;
+    await _queuePositionWrite(() async {
+      final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
+      final previous = marks.where((mark) => mark.id == id).firstOrNull;
+      if (previous == null) throw const FormatException('这条书签已被移除');
+      result = previous.withAnnotation(_datedAnnotation(data, previous));
+      final next = [for (final mark in marks) mark.id == id ? result : mark];
+      await _writeBookmarks(novelId, next);
+      _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
+    });
+    return result;
+  }
+
+  Future<ReaderBookmark> updateBookmarkRange(
+    int novelId,
+    String id, {
+    required Novel novel,
+    required ReaderAnnotationRangeChange change,
+    required int expectedRangeUpdatedAt,
+    required List<ReaderUnderlineRange> expectedRanges,
+    ReaderAnnotationData? annotation,
+  }) async {
+    if (novelId != novel.id ||
+        change.novelId != novelId ||
+        change.ranges.any(
+          (range) => !novel.chapters.any((c) => c.id == range.chapterId),
+        )) {
+      throw const FormatException('原文范围不属于这本书');
+    }
+    final ranges = canonicalReaderUnderlineRanges(
+      change.ranges,
+      chapterOrder: novel.chapters.map((c) => c.id),
+    );
+    if (change.quote.length > 12000) {
+      throw const FormatException('摘录过长，请选择不超过 12000 字的内容');
+    }
+    final edited = annotation == null
+        ? null
+        : ReaderAnnotationData.fromJson(annotation.toJson());
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => updateBookmarkRange(
+          novelId,
+          id,
+          novel: novel,
+          change: change,
+          expectedRangeUpdatedAt: expectedRangeUpdatedAt,
+          expectedRanges: expectedRanges,
+          annotation: edited,
+        ),
+      );
+    }
+    late ReaderBookmark result;
+    await _queuePositionWrite(() async {
+      final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
+      final previous = marks.where((mark) => mark.id == id).firstOrNull;
+      if (previous == null) throw const FormatException('这条书签已被移除');
+      if (previous.rangeUpdatedAt != expectedRangeUpdatedAt ||
+          !listEquals(previous.underlineRanges, expectedRanges)) {
+        throw const FormatException('原文范围刚刚发生变化，请重新打开这条书签再调整');
+      }
+      final first = ranges.first;
+      final chapter = novel.chapters.indexWhere((c) => c.id == first.chapterId);
+      final position = ReadingPosition.fromJson({
+        ...previous.position.toJson(),
+        'chapter': chapter,
+        'chapterId': first.chapterId,
+        'paragraphIndex': first.startParagraph,
+        'textOffset': first.startOffset,
+        'paragraphFraction': 0,
+        'contentRevision': first.contentRevision,
+        'revision': first.contentRevision,
+        'offset': 0,
+        'fraction': 0,
+        'width': 0,
+        'layout': '',
+      });
+      final now = DateTime.now().millisecondsSinceEpoch;
+      result = previous.withRange(
+        chapterTitle: novel.chapters[chapter].title,
+        position: position,
+        ranges: ranges,
+        quote: change.quote,
+        updatedAt: now > previous.rangeUpdatedAt
+            ? now
+            : previous.rangeUpdatedAt + 1,
+      );
+      if (edited != null) {
+        result = result.withAnnotation(_datedAnnotation(edited, previous));
+      }
+      final next = [for (final mark in marks) mark.id == id ? result : mark];
+      await _writeBookmarks(novelId, next);
+      _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
+    });
+    return result;
+  }
+
+  ReaderAnnotationData _datedAnnotation(
+    ReaderAnnotationData data,
+    ReaderBookmark? previous,
+  ) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final last = previous?.annotation.updatedAt ?? 0;
+    return data.at(now > last ? now : last + 1);
+  }
+
+  Future<ReaderBookmark?> _changeUnderline({
+    required Novel novel,
+    required ReadingPosition position,
+    required List<ReaderUnderlineRange> ranges,
+    required String quote,
+    required bool toggle,
+    ReaderAnnotationData? annotation,
+  }) async {
+    final chapterIds = novel.chapters.map((chapter) => chapter.id).toSet();
+    if (novel.id <= 0 ||
+        ranges.any((range) => !chapterIds.contains(range.chapterId))) {
+      throw const FormatException('暂时无法定位选中的文字，请重新选择');
+    }
+    final selected = canonicalReaderUnderlineRanges([
+      for (final range in ranges)
+        range.contentRevision.isEmpty && range.chapterId == position.chapterId
+            ? range.withRevision(position.contentRevision)
+            : range,
+    ], chapterOrder: novel.chapters.map((chapter) => chapter.id));
+    final excerpt = quote.trim();
+    if (excerpt.length > 12000) {
+      throw const FormatException('摘录过长，请选择不超过 12000 字的内容');
+    }
+    if (!position.offset.isFinite ||
+        position.offset < 0 ||
+        !position.fraction.isFinite ||
+        position.fraction < 0 ||
+        position.fraction > 1 ||
+        !position.width.isFinite ||
+        !position.fontSize.isFinite ||
+        !position.lineHeight.isFinite) {
+      throw const FormatException('暂时无法定位选中的文字，请重新选择');
+    }
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => _changeUnderline(
+          novel: novel,
+          position: position,
+          ranges: selected,
+          quote: excerpt,
+          toggle: toggle,
+          annotation: annotation,
+        ),
+      );
+    }
+    ReaderBookmark? result;
+    await _queuePositionWrite(() async {
+      final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
+      final matching = marks.where((mark) {
+        return mark.isUnderline &&
+            listEquals(
+              canonicalReaderUnderlineRanges(
+                mark.underlineRanges,
+                chapterOrder: novel.chapters.map((chapter) => chapter.id),
+              ),
+              selected,
+            );
+      }).toList();
+      final existing = matching.firstOrNull;
+      if (existing != null) {
+        if (!toggle) {
+          if (annotation == null) {
+            result = existing;
+            return;
+          }
+          result = existing.withAnnotation(
+            _datedAnnotation(annotation, existing),
+          );
+          final next = [
+            for (final mark in marks) mark.id == existing.id ? result! : mark,
+          ];
+          await _writeBookmarks(novel.id, next);
+          _bookmarks[novel.id] = next;
+          _updateUnderlineIndex(novel.id);
+          if (!_disposed) _bookmarkChanges.notifyListeners();
+          return;
+        }
+        final ids = matching.map((mark) => mark.id).toSet();
+        final next = marks.where((mark) => !ids.contains(mark.id)).toList();
+        await _writeBookmarks(novel.id, next);
+        _bookmarks[novel.id] = next;
+        _updateUnderlineIndex(novel.id);
+        if (!_disposed) _bookmarkChanges.notifyListeners();
+        return;
+      }
+      if (marks.length >= 1000) {
+        throw const FormatException('本书书签和划线已达 1000 个，请先整理');
+      }
+      final first = selected.first;
+      final chapter = novel.chapters.indexWhere((c) => c.id == first.chapterId);
+      final sameChapter = position.chapterId > 0
+          ? position.chapterId == first.chapterId
+          : position.chapter == chapter;
+      final anchor = ReadingPosition.fromJson({
+        ...position.toJson(),
+        'chapter': chapter,
+        'chapterId': first.chapterId,
+        'paragraphIndex': first.startParagraph,
+        'textOffset': first.startOffset,
+        'paragraphFraction': 0,
+        'contentRevision': first.contentRevision,
+        'revision': first.contentRevision,
+        if (!sameChapter) ...{'offset': 0, 'width': 0, 'layout': ''},
+      });
+      final createdAt = DateTime.now();
+      final mark = ReaderBookmark(
+        id: '${createdAt.microsecondsSinceEpoch}-${marks.length}',
+        createdAt: createdAt.toUtc(),
+        createdOffsetMinutes: createdAt.timeZoneOffset.inMinutes,
+        chapterTitle: novel.chapters[chapter].title,
+        position: anchor,
+        quote: excerpt,
+        underlineRanges: selected,
+        annotation: annotation == null
+            ? const ReaderAnnotationData()
+            : _datedAnnotation(annotation, null),
+      );
+      final next = [mark, ...marks];
+      await _writeBookmarks(novel.id, next);
+      _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
+      result = mark;
+    });
+    return result;
+  }
+
   Future<ReaderBookmark?> addBookmark({
     required Novel novel,
     required ReadingPosition position,
+    String quote = '',
   }) async {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then(
-        (_) => addBookmark(novel: novel, position: position),
+        (_) => addBookmark(novel: novel, position: position, quote: quote),
       );
     }
     if (!_acceptLocalPosition(novel, position.chapter)) return null;
     final index = chapterForPosition(novel, position);
+    final excerpt = quote.trim();
+    if (excerpt.length > 12000) {
+      throw const FormatException('摘录过长，请选择不超过 12000 字的内容');
+    }
     if (novel.id <= 0 ||
         index == null ||
         !position.offset.isFinite ||
@@ -1479,7 +2107,12 @@ class LibraryState extends ChangeNotifier {
       if (!_acceptLocalPosition(novel, position.chapter)) return;
       final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
       for (final mark in marks) {
-        if (chapterForPosition(novel, mark.position) == index &&
+        if (!mark.isUnderline &&
+            mark.quote == excerpt &&
+            chapterForPosition(novel, mark.position) == index &&
+            (excerpt.isEmpty ||
+                mark.position.paragraphIndex == position.paragraphIndex &&
+                    mark.position.textOffset == position.textOffset) &&
             (mark.position.offset - position.offset).abs() < 12 &&
             (mark.position.fontSize - position.fontSize).abs() < .01 &&
             (mark.position.lineHeight - position.lineHeight).abs() < .01 &&
@@ -1488,14 +2121,22 @@ class LibraryState extends ChangeNotifier {
           return;
         }
       }
+      if (marks.length >= 1000) {
+        throw const FormatException('本书书签已达 1000 个，请先整理书签');
+      }
+      final createdAt = DateTime.now();
       final mark = ReaderBookmark(
-        id: '${DateTime.now().microsecondsSinceEpoch}-${marks.length}',
+        id: '${createdAt.microsecondsSinceEpoch}-${marks.length}',
+        createdAt: createdAt.toUtc(),
+        createdOffsetMinutes: createdAt.timeZoneOffset.inMinutes,
         chapterTitle: novel.chapters[index].title,
         position: position,
+        quote: excerpt,
       );
       final next = [mark, ...marks];
       await _writeBookmarks(novel.id, next);
       _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
       if (!_disposed) _bookmarkChanges.notifyListeners();
       result = mark;
     });
@@ -1512,6 +2153,36 @@ class LibraryState extends ChangeNotifier {
       final next = marks.where((mark) => mark.id != id).toList();
       await _writeBookmarks(novelId, next);
       _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
+    });
+  }
+
+  Future<void> categorizeBookmark(int novelId, String id, String category) {
+    category = category.trim();
+    if (category.length > 30) throw const FormatException('分类名称最多 30 个字');
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => categorizeBookmark(novelId, id, category),
+      );
+    }
+    return _queuePositionWrite(() async {
+      final marks = _bookmarks[novelId] ?? const <ReaderBookmark>[];
+      final previous = marks.where((mark) => mark.id == id).firstOrNull;
+      if (previous == null || previous.category == category) return;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final next = [
+        for (final mark in marks)
+          mark.id == id
+              ? mark.withCategory(
+                  category,
+                  now > previous.categoryAt ? now : previous.categoryAt + 1,
+                )
+              : mark,
+      ];
+      await _writeBookmarks(novelId, next);
+      _bookmarks[novelId] = next;
+      _updateUnderlineIndex(novelId);
       if (!_disposed) _bookmarkChanges.notifyListeners();
     });
   }
@@ -2590,6 +3261,8 @@ class LibraryState extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    readingActivity.dispose();
+    readingMoments.dispose();
     _appearance.dispose();
     _application.dispose();
     _glassChanges.dispose();
@@ -2597,6 +3270,7 @@ class LibraryState extends ChangeNotifier {
     _settings.dispose();
     _history.dispose();
     _bookmarkChanges.dispose();
+    _underlineChanges.dispose();
     _searchChanges.dispose();
     _shelfViewChanges.dispose();
     _readerBehaviorChanges.dispose();
