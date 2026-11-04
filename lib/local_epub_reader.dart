@@ -13,6 +13,7 @@ import 'glass_dock.dart';
 import 'library_state.dart';
 import 'local_epub.dart';
 import 'local_epub_reader_tools.dart';
+import 'reader_dictionary.dart';
 import 'local_library.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
@@ -411,6 +412,13 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
           action.bookmark.position,
         );
         if (chapter != null) _goTo(chapter, restart: true);
+      } else if (action is ReaderOpenDictionary) {
+        _sheetOpen = false;
+        await showReaderDictionarySheet(
+          context: context,
+          word: _novel.title,
+          reduceMotion: widget.state.reduceMotion,
+        );
       }
     } finally {
       _sheetOpen = false;

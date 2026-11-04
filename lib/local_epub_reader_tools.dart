@@ -167,6 +167,12 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
       key: const ValueKey('epub-chapter-progress'),
     ),
     GlassTextButton(
+      key: const ValueKey('epub-open-dictionary'),
+      onPressed: () => Navigator.pop(context, const ReaderOpenDictionary()),
+      child: const Text('离线词典查词'),
+    ),
+    const SizedBox(height: 8),
+    GlassTextButton(
       onPressed: () => Navigator.pop(context, const ReaderEnterFocus()),
       child: const Text('专注阅读 · 隐藏控件'),
     ),

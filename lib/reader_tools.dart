@@ -32,6 +32,10 @@ class ReaderOpenFind extends ReaderToolAction {
   const ReaderOpenFind();
 }
 
+class ReaderOpenDictionary extends ReaderToolAction {
+  const ReaderOpenDictionary();
+}
+
 /// A bounded settings sheet. Typography drafts preview the article while
 /// preferences are committed once, when the gesture ends.
 class ReaderTools extends StatefulWidget {
@@ -294,6 +298,17 @@ class _ReaderToolsState extends State<ReaderTools> {
                       ? null
                       : () => Navigator.pop(context, const ReaderOpenFind()),
                   child: const Text('章内查找'),
+                ),
+                const SizedBox(height: 8),
+                GlassTextButton(
+                  key: const ValueKey('reader-open-dictionary'),
+                  onPressed: widget.position == null
+                      ? null
+                      : () => Navigator.pop(
+                          context,
+                          const ReaderOpenDictionary(),
+                        ),
+                  child: const Text('取词查词典'),
                 ),
                 if (LocalPlatform.android)
                   AnimatedBuilder(
