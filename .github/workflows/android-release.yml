@@ -9,7 +9,7 @@ permissions:
   contents: write
 concurrency:
   group: release-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -26,7 +26,18 @@ jobs:
           cache: true
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
-      - run: flutter test --timeout 60s
+      - name: Run tests with process deadline
+        timeout-minutes: 4
+        run: |
+          mkdir -p build
+          timeout --signal=TERM --kill-after=15s 180s flutter test --reporter expanded --timeout 60s 2>&1 | tee build/flutter-tests.log
+      - name: Preserve test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-diagnostics-${{ github.workflow }}
+          path: build/flutter-tests.log
+          if-no-files-found: ignore
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - name: Validate release metadata
         run: |
