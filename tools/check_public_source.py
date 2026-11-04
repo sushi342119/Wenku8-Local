@@ -21,6 +21,13 @@ PATTERNS = {
 }
 
 
+# This DOI in the unmodified Apache Commons Math notice is not a host address.
+# Only the complete, reviewed citation in this license file is exempt.
+UPSTREAM_LICENSE_CITATIONS = {
+    'assets/licenses/poi.txt': 'http://citeseerx.ist.psu.edu/viewdoc/download;?doi=' + '10.1.1.' + '173.1898&rep=rep1&type=pdf',
+}
+
+
 def inspect(root: Path) -> list[str]:
     issues = []
     for file in sorted(root.rglob('*')):
@@ -39,6 +46,9 @@ def inspect(root: Path) -> list[str]:
             text = file.read_text(encoding='utf-8')
         except (UnicodeDecodeError, ValueError):
             continue
+        citation = UPSTREAM_LICENSE_CITATIONS.get(relative.as_posix())
+        if citation:
+            text = text.replace(citation, '')
         for name, pattern in PATTERNS.items():
             if pattern.search(text):
                 # Never echo the matching credential or user data into CI logs.
