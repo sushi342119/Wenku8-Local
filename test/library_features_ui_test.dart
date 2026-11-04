@@ -258,6 +258,8 @@ void main() {
     await tester.pumpAndSettle();
     await pumpUntil(tester, () => !state.contains(5000));
     expect(state.contains(5000), isFalse);
+    await pumpUntil(tester, () => find.text('撤销').hitTestable().evaluate().isNotEmpty);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('撤销'));
     await tester.pumpAndSettle();
     await pumpUntil(tester, () => state.contains(5000));
@@ -370,6 +372,8 @@ void main() {
     await tester.pumpAndSettle();
     await pumpUntil(tester, () => state.shelf.isEmpty);
     expect(state.shelf, isEmpty);
+    await pumpUntil(tester, () => find.text('撤销').hitTestable().evaluate().isNotEmpty);
+    await tester.pumpAndSettle();
     await tester.tap(find.text('撤销'));
     await tester.pumpAndSettle();
     await pumpUntil(tester, () => state.contains(5000));
