@@ -544,9 +544,11 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
         label: item.semanticLabel ?? item.label,
         onTap: item.enabled && index >= 0 ? () => _commit(index) : null,
         child: ExcludeSemantics(
-          child: SizedBox(
-            height: 48,
-            child: Center(
+          child: ColoredBox(
+            color: Colors.transparent,
+            child: SizedBox(
+              height: 48,
+              child: Center(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -579,6 +581,7 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
                     ),
                   ),
                 ],
+              ),
               ),
             ),
           ),

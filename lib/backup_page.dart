@@ -218,12 +218,6 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                             : null,
                         child: const Text('从剪贴板读取备份'),
                       ),
-                      const Divider(height: 24),
-                      GlassTextButton(
-                        key: const ValueKey('backup-cloud-sync'),
-                        onPressed: _busy == null ? _openCloudSync : null,
-                        child: const Text('云端书库同步（S3 / 系统文档）'),
-                      ),
                     ],
                   ),
                 ),
@@ -315,6 +309,14 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                     ),
                   ),
                 ],
+                const SizedBox(height: 16),
+                ContentPanel(
+                  child: GlassTextButton(
+                    key: const ValueKey('backup-cloud-sync'),
+                    onPressed: _busy == null ? _openCloudSync : null,
+                    child: const Text('云端书库同步（S3 / 系统文档）'),
+                  ),
+                ),
               ],
             ),
           ),

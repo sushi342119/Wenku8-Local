@@ -536,7 +536,7 @@ class FrostedHeader extends StatelessWidget {
               child: ProgressiveBlur(
                 maxSigma: appearance.blur,
                 plateauHeight: statusHeight,
-                shadeOpacity: DockLayout.topEdgeShadeOpacity,
+                shadeOpacity: 0,
               ),
             ),
           if (highContrast)
@@ -607,7 +607,7 @@ class DockUnderlay extends StatelessWidget {
           contentHeight: contentHeight,
         ),
         child: ProgressiveBlur(
-          maxSigma: blur,
+          maxSigma: (blur * .16).clamp(0, 3.2),
           plateauHeight: DockLayout.bottomPaddingOf(context, viewPadding: true),
           fromBottom: true,
         ),

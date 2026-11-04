@@ -4,7 +4,7 @@ import 'package:flutter/services.dart';
 import 'dart:math' as math;
 
 enum AppLanguage {
-  system('跟随系统', null),
+  system('系统语言', null),
   simplified('简体中文', Locale('zh', 'CN')),
   hongKong('繁體中文 · 香港', Locale('zh', 'HK')),
   taiwan('繁體中文 · 台灣', Locale('zh', 'TW'));

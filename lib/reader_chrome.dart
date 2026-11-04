@@ -78,20 +78,11 @@ class ReaderEdgeBlur extends StatelessWidget {
                     ),
                   ),
                 if (blurBottom)
-                  Positioned(
+                  const Positioned(
                     bottom: 0,
                     left: 0,
                     right: 0,
-                    height: DockLayout.underlayExtentOf(context),
-                    child: ProgressiveBlur(
-                      maxSigma: blur * strength,
-                      plateauHeight: DockLayout.bottomPaddingOf(
-                        context,
-                        viewPadding: true,
-                      ),
-                      fromBottom: true,
-                      shadeOpacity: DockLayout.edgeShadeOpacity * strength,
-                    ),
+                    child: DockUnderlay(),
                   ),
               ],
             ),
