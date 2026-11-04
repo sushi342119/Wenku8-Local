@@ -91,7 +91,7 @@ jobs:
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip --clobber
-          elif [[ "$GITHUB_REF_TYPE" == "tag" || ( "$GITHUB_REF" == "refs/heads/main" && "$RELEASE_TAG" == "v1.6.2+44" ) ]]; then
+          elif [[ "$GITHUB_REF_TYPE" == "tag" || ( "$GITHUB_REF" == "refs/heads/main" && "$RELEASE_TAG" == "v1.7.0+45" ) ]]; then
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --latest --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
           else
             gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip

@@ -87,6 +87,8 @@ internal class BookArchiveImport(private val root: File) {
             }
             require(candidates.isNotEmpty()) { "压缩包中没有可导入的书籍或文档" }
             require(candidates.size <= 256) { "单次最多从压缩包导入 256 本书" }
+            var archiveTotal = 0L
+            val archiveMax = 1024L * 1024L * 1024L
             zip.readEntries(candidates) { entry, stream ->
                 val entryName = entry.name.replace('\\', '/').substringAfterLast('/')
                 var temp: File? = null
@@ -101,7 +103,9 @@ internal class BookArchiveImport(private val root: File) {
                             val read = stream.read(buffer)
                             if (read < 0) break
                             total += read
+                            archiveTotal += read
                             require(total <= max) { "文件超过 ${max / (1024 * 1024)} MiB 大小限制" }
+                            require(archiveTotal <= archiveMax) { "压缩包累计解压大小超过 1 GiB 限制" }
                             output.write(buffer, 0, read)
                         }
                     }

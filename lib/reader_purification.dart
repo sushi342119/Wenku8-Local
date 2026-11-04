@@ -43,13 +43,22 @@ class ReaderPurificationRule {
     builtIn: builtIn,
   );
 
+  static final Map<String, RegExp> _regExpCache = {};
+
   String apply(String input) {
     if (!enabled || pattern.isEmpty || input.isEmpty) return input;
     if (!isRegex) {
       return input.replaceAll(pattern, replacement);
     }
     try {
-      final regExp = RegExp(pattern, multiLine: true);
+      var regExp = _regExpCache[pattern];
+      if (regExp == null) {
+        if (_regExpCache.length >= 128) {
+          _regExpCache.remove(_regExpCache.keys.first);
+        }
+        regExp = RegExp(pattern, multiLine: true);
+        _regExpCache[pattern] = regExp;
+      }
       return input.replaceAll(regExp, replacement);
     } on FormatException {
       return input;

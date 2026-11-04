@@ -9,6 +9,7 @@ import 'catalog.dart';
 import 'library_state.dart';
 import 'local_library.dart';
 import 'local_platform.dart';
+import 'reading_activity.dart';
 
 /// 本地 PDF 阅读器：逐页渲染为图片，左右滑动翻页，进度复用书架章节进度。
 class LocalPdfReaderPage extends StatefulWidget {
@@ -27,9 +28,13 @@ class LocalPdfReaderPage extends StatefulWidget {
   State<LocalPdfReaderPage> createState() => _LocalPdfReaderPageState();
 }
 
-class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
+class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
+    with WidgetsBindingObserver {
   late final PageController _controller;
+  late final ReadingActivitySession _readingActivity;
   late int _page;
+  bool _activityAttached = true;
+  bool _activityForeground = true;
   final Map<int, Future<String>> _pending = {};
 
   int get _pageCount {
@@ -37,18 +42,52 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
     return book?.pageCount ?? 0;
   }
 
+  void _syncReadingActivity() {
+    _readingActivity.setActive(
+      _activityAttached && _activityForeground && _pageCount > 0,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _readingActivity = ReadingActivitySession(
+      store: widget.state.readingActivity,
+      bookId: widget.novel.id,
+    );
     final count = _pageCount;
     _page = count == 0
         ? 0
         : widget.state.chapterForNovel(widget.novel).clamp(0, count - 1);
     _controller = PageController(initialPage: _page);
+    _syncReadingActivity();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _activityForeground = state == AppLifecycleState.resumed;
+    _syncReadingActivity();
+  }
+
+  @override
+  void deactivate() {
+    _activityAttached = false;
+    _readingActivity.setActive(false);
+    super.deactivate();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    _activityAttached = true;
+    _syncReadingActivity();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _readingActivity.dispose();
     final book = widget.local.bookFor(widget.novel.id);
     if (book != null) {
       unawaited(LocalPlatform.clearPdfCache(book.fileUri).catchError((_) {}));
@@ -74,6 +113,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage> {
 
   void _onPageChanged(int page) {
     _page = page;
+    _pending.removeWhere((key, _) => (key - page).abs() > 4);
     widget.state.setChapter(widget.novel.id, page);
     if (mounted) setState(() {});
     // 首帧完成后优先预渲染下一页，避免翻页回调里同时启动多个解码任务。

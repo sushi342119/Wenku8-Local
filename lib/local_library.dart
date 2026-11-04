@@ -576,6 +576,7 @@ void _recordScanFailure(Map<String, String> failures, String name, Object error)
 
 Future<List> _decodeIndexFile(File file) async {
   final raw = await file.readAsString();
+  if (raw.length < 65536) return _decodeIndexJson(raw);
   return Isolate.run(() => _decodeIndexJson(raw));
 }
 
@@ -1114,7 +1115,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ..._unparsedIndexEntries,
       ],
     };
-    final json = await Isolate.run(() => _encodeIndexJson(payload));
+    final json = snapshot.length < 64
+        ? _encodeIndexJson(payload)
+        : await Isolate.run(() => _encodeIndexJson(payload));
     // 原子写入：先写临时文件再重命名，避免崩溃丢索引（修复#5）。
     final tmp = File('${dir.path}/index.json.tmp');
     final target = File('${dir.path}/index.json');

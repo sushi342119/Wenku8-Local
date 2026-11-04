@@ -233,14 +233,17 @@ internal class BookFolderScanner(private val activity: Activity) {
         books: MutableList<Map<String, Any?>>,
         warnings: MutableList<String>,
         onCount: (Int, Int) -> Unit,
+        depth: Int = 0,
     ) {
+        if (depth > 24 || books.size >= 5000) return
         val children = dir.listFiles() ?: return
         for (child in children) {
+            if (books.size >= 5000) break
             if (child.name.startsWith(".")) continue
             if (child.isDirectory) {
                 if (child.name.equals("Android", ignoreCase = true) && relativeFolder.isEmpty()) continue
                 val nextFolder = if (relativeFolder.isEmpty()) child.name else "$relativeFolder/${child.name}"
-                scanDirectory(child, nextFolder, allowed, seen, books, warnings, onCount)
+                scanDirectory(child, nextFolder, allowed, seen, books, warnings, onCount, depth + 1)
             } else if (child.isFile) {
                 val ext = child.name.substringAfterLast('.', "").lowercase()
                 if (ext !in allowed || !BookArchiveImport.supported(child.name)) continue
@@ -281,7 +284,9 @@ internal class BookFolderScanner(private val activity: Activity) {
         books: MutableList<Map<String, Any?>>,
         warnings: MutableList<String>,
         onCount: (Int, Int) -> Unit,
+        depth: Int = 0,
     ) {
+        if (depth > 24 || books.size >= 5000) return
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         val projection = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
@@ -293,6 +298,7 @@ internal class BookFolderScanner(private val activity: Activity) {
         try {
             activity.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
                 while (cursor.moveToNext()) {
+                    if (books.size >= 5000) break
                     val docId = cursor.getString(0) ?: continue
                     val name = cursor.getString(1) ?: continue
                     val mime = cursor.getString(2) ?: ""
@@ -301,7 +307,7 @@ internal class BookFolderScanner(private val activity: Activity) {
                     if (name.startsWith(".")) continue
                     if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
                         val nextFolder = if (relativeFolder.isEmpty()) name else "$relativeFolder/$name"
-                        scanDocumentTree(treeUri, docId, nextFolder, allowed, seen, books, warnings, onCount)
+                        scanDocumentTree(treeUri, docId, nextFolder, allowed, seen, books, warnings, onCount, depth + 1)
                     } else {
                         val ext = name.substringAfterLast('.', "").lowercase()
                         if (ext !in allowed || !BookArchiveImport.supported(name)) continue

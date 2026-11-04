@@ -36,17 +36,36 @@ class PortableBookPreparer {
     } on FileSystemException catch (_) {}
   }
 
+  static const int _maxSingleFileBytes = 256 * 1024 * 1024;
+  static const int _maxZipTotalBytes = 1024 * 1024 * 1024;
+  static const int _maxZipEntries = 256;
+
   Future<List<PreparedBookDocument>> prepare(String name, String path) =>
       convert(name, path);
 
-  Future<void> releasePaths(Iterable<String> paths) async {}
+  Future<void> releasePaths(Iterable<String> paths) async {
+    final rootPath = directory.absolute.path;
+    for (final raw in paths) {
+      if (raw.isEmpty) continue;
+      final file = File(raw);
+      if (!file.absolute.path.startsWith(rootPath)) continue;
+      try {
+        if (await file.exists()) await file.delete();
+      } on FileSystemException catch (_) {}
+    }
+  }
 
   static Future<List<PreparedCloudBook>> prepareFile(
     String name,
     String path,
   ) async {
     final ext = name.contains('.') ? name.split('.').last.toLowerCase() : '';
-    final bytes = await File(path).readAsBytes();
+    final file = File(path);
+    final length = await file.length();
+    if (length > _maxSingleFileBytes) {
+      throw const FormatException('文件超过 256 MiB 大小限制');
+    }
+    final bytes = await file.readAsBytes();
     return Isolate.run(() => _prepareBytes(name, ext, bytes));
   }
 
@@ -130,6 +149,8 @@ class PortableBookPreparer {
         try {
           final archive = ZipDecoder().decodeBytes(bytes);
           final results = <PreparedCloudBook>[];
+          var totalBytes = 0;
+          var count = 0;
           for (final entry in archive) {
             if (!entry.isFile) continue;
             final entryName = entry.name.split('/').last;
@@ -138,8 +159,15 @@ class PortableBookPreparer {
                 ? entryName.split('.').last.toLowerCase()
                 : '';
             if (entryExt == 'zip') continue;
+            if (++count > _maxZipEntries) break;
+            if (entry.size > _maxSingleFileBytes ||
+                totalBytes + entry.size > _maxZipTotalBytes) {
+              break;
+            }
             final entryBytes = entry.readBytes();
             if (entryBytes == null) continue;
+            totalBytes += entryBytes.length;
+            if (totalBytes > _maxZipTotalBytes) break;
             results.addAll(_prepareBytes(entryName, entryExt, entryBytes));
           }
           return results;
