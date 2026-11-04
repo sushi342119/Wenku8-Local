@@ -8,6 +8,7 @@ import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/main.dart';
 import 'package:wenku8_flutter/native_effects.dart';
 import 'package:wenku8_flutter/pages.dart';
+import 'support/pump_storage.dart';
 
 Finder _control(String label) => find
     .descendant(
@@ -380,7 +381,7 @@ void main() {
       await tester.pumpAndSettle();
       final app = tester.widget<MaterialApp>(find.byType(MaterialApp));
       final novel = demoNovels.first;
-      await tester.runAsync(() => state.toggleShelf(novel.id, novel: novel));
+      await pumpStorage(tester, () => state.toggleShelf(novel.id, novel: novel));
       await tester.pump();
       expect(tester.widget<MaterialApp>(find.byType(MaterialApp)), same(app));
       Navigator.of(tester.element(find.byType(HomeShell))).push(
@@ -401,7 +402,7 @@ void main() {
         find.byKey(const ValueKey('paragraph-0')),
       );
       for (var i = 0; i < 12; i++) {
-        await tester.runAsync(() => state.savePosition(
+        await pumpStorage(tester, () => state.savePosition(
           novel: novel,
           chapter: 0,
           offset: i * 25,
@@ -419,7 +420,7 @@ void main() {
           same(paragraph),
         );
       }
-      await tester.runAsync(() => state.setFontSize(23));
+      await pumpStorage(tester, () => state.setFontSize(23));
       await tester.pumpAndSettle();
       expect(tester.widget<MaterialApp>(find.byType(MaterialApp)), same(app));
       expect(
@@ -429,7 +430,7 @@ void main() {
             .fontSize,
         23,
       );
-      await tester.runAsync(() => state.setTheme(ThemeMode.dark));
+      await pumpStorage(tester, () => state.setTheme(ThemeMode.dark));
       await tester.pumpAndSettle();
       expect(
         tester.widget<MaterialApp>(find.byType(MaterialApp)),

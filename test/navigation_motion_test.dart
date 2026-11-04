@@ -10,6 +10,7 @@ import 'package:wenku8_flutter/glass_dock.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/main.dart';
 import 'package:wenku8_flutter/pages.dart';
+import 'support/pump_storage.dart';
 
 Future<LibraryState> mountApp(
   WidgetTester tester, {
@@ -466,7 +467,7 @@ void main() {
     'cover tags stay scoped when the same book appears in shelf and discovery',
     (tester) async {
       final state = await mountApp(tester);
-      await tester.runAsync(() => state.toggleShelf(
+      await pumpStorage(tester, () => state.toggleShelf(
         demoNovels.first.id, novel: demoNovels.first,
       ));
       await tester.tap(find.byKey(const ValueKey('dock-tab-1')));
@@ -483,7 +484,7 @@ void main() {
       expect(find.byKey(const ValueKey('detail-read-button')), findsOneWidget);
       // Detail loading saves metadata in the background. Drain that queue in
       // real async time before disposing its route and checking timer cleanup.
-      await tester.runAsync(() => state.rememberNovel(demoNovels.first));
+      await pumpStorage(tester, () => state.rememberNovel(demoNovels.first));
       await tester.pumpAndSettle();
       await tester.pumpWidget(const SizedBox.shrink());
       state.dispose();

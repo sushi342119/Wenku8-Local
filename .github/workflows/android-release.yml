@@ -43,6 +43,7 @@ jobs:
         timeout-minutes: 15
         shell: bash
         run: |
+          # Preserve the test process exit code through the log pipe.
           set -euo pipefail
           # Stop on the first failure so later widget-test hangs cannot hide it.
           mkdir -p build

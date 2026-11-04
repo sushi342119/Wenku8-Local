@@ -12,6 +12,7 @@ import 'package:wenku8_flutter/low_performance_page.dart';
 import 'package:wenku8_flutter/main.dart';
 import 'package:wenku8_flutter/performance_preferences.dart';
 import 'support/visual_review.dart';
+import 'support/pump_storage.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -174,6 +175,7 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
       await tester.pumpAndSettle();
+      await pumpUntil(tester, () => state.performance.glass);
       expect(state.performance.glass, true);
       await tester.ensureVisible(
         find.byKey(const ValueKey('performance-light-preset')),
@@ -184,6 +186,7 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
       await tester.pumpAndSettle();
+      await pumpUntil(tester, () => !state.performance.glass);
       expect(state.performance.glass, false);
       expect(tester.takeException(), isNull);
       await captureReview(tester, boundary, 'low-performance-settings');

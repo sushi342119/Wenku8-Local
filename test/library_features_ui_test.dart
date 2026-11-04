@@ -7,6 +7,7 @@ import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/main.dart';
 import 'package:wenku8_flutter/pages.dart';
+import 'support/pump_storage.dart';
 
 Novel _book(int id) => Novel(
   id: id,
@@ -200,8 +201,8 @@ void main() {
     (tester) async {
       SharedPreferences.setMockInitialValues({});
       final state = await LibraryState.load();
-      await tester.runAsync(() => state.toggleShelf(5000, novel: _book(5000)));
-      await tester.runAsync(() => state.setChapter(5000, 1));
+      await pumpStorage(tester, () => state.toggleShelf(5000, novel: _book(5000)));
+      await pumpStorage(tester, () => state.setChapter(5000, 1));
       final repository = _Repository()..failList = true;
       await tester.pumpWidget(NovelApp(state: state, repository: repository));
       await tester.pumpAndSettle();
@@ -247,8 +248,8 @@ void main() {
     tester,
   ) async {
     final state = await _mount(tester, _Repository());
-    await tester.runAsync(() => state.toggleShelf(5000, novel: _book(5000)));
-    await tester.runAsync(() => state.setChapter(5000, 1));
+    await pumpStorage(tester, () => state.toggleShelf(5000, novel: _book(5000)));
+    await pumpStorage(tester, () => state.setChapter(5000, 1));
     await tester.tap(find.byKey(const ValueKey('dock-tab-1')));
     await tester.pumpAndSettle();
     await tester.tap(_control('功能作品 5000书架操作'));
@@ -326,7 +327,7 @@ void main() {
     (tester) async {
       SharedPreferences.setMockInitialValues({'reduceMotion': true});
       final state = await LibraryState.load();
-      await tester.runAsync(() => state.savePosition(
+      await pumpStorage(tester, () => state.savePosition(
         novel: _book(5000),
         chapter: 0,
         offset: 700,
@@ -378,7 +379,7 @@ void main() {
       SharedPreferences.setMockInitialValues({'reduceMotion': true});
       final state = await LibraryState.load();
       final old = _book(5000);
-      await tester.runAsync(() => state.savePosition(
+      await pumpStorage(tester, () => state.savePosition(
         novel: old,
         chapter: 1,
         offset: 700,
