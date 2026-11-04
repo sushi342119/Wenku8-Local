@@ -12,12 +12,10 @@ const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
   defaultValue: 'sushi342119/Wenku8-Local',
 );
-const currentAppVersion = '1.6.1';
-const currentAppBuild = 43;
+const currentAppVersion = '1.6.2';
+const currentAppBuild = 44;
 const currentReleaseNotes = '''
-1. 应用更名为书屿，使用黑白狐狸图标。
-2. 统一项目展示、图标生成与发布说明。
-3. 加强正式签名检查，补充联网与隐私说明。
+1. 修复首页左上角仍显示 W8 的问题，统一使用书屿狐狸图标。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
