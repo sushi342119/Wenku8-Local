@@ -82,7 +82,13 @@ void main() {
     await tester.enterText(find.byType(TextField), '有 空格');
     await tester.runAsync(() async {
       await tester.testTextInput.receiveAction(TextInputAction.done);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+      for (
+        var i = 0;
+        i < 60 && find.textContaining('新建失败').evaluate().isEmpty;
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
     });
     await tester.pumpAndSettle();
     expect(find.textContaining('新建失败'), findsOneWidget);
@@ -123,7 +129,16 @@ void main() {
       Future<void> saveAndCheck(String filename, List<String> names) async {
         await tester.runAsync(() async {
           await tester.tap(find.text('保存'));
-          await Future<void>.delayed(const Duration(milliseconds: 50));
+          for (
+            var i = 0;
+            i < 120 &&
+                (local.books.single.fileName != filename ||
+                    !listEquals(TagStore.shared.tagNamesForBook(book.id), names));
+            i++
+          ) {
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
         });
         await tester.pumpAndSettle();
         expect(find.byType(AlertDialog), findsNothing);
@@ -161,7 +176,14 @@ void main() {
     await tester.tap(find.text('已读'));
     await tester.runAsync(() async {
       await tester.tap(find.text('保存'));
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      for (
+        var i = 0;
+        i < 120 && find.textContaining('保存失败').evaluate().isEmpty;
+        i++
+      ) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
     });
     await tester.pumpAndSettle();
     expect(find.textContaining('保存失败'), findsOneWidget);

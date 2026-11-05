@@ -124,6 +124,6 @@ class FakeSpeechAudio implements SpeechAudioSource {
 
 Future<void> listeningMicrotasks() async {
   for (var i = 0; i < 30; i++) {
-    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(const Duration(milliseconds: 1));
   }
 }
