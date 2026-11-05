@@ -61,6 +61,8 @@ class TagStore extends ChangeNotifier {
   static void resetForTesting() {
     _shared?.dispose();
     _shared = null;
+    // Test-only cascade: this method is itself @visibleForTesting.
+    // ignore: invalid_use_of_visible_for_testing_member
     LibraryFilter.shared.resetForTesting();
   }
 

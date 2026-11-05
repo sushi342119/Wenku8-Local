@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'app_interactions.dart';
 import 'app_palette.dart';
 import 'app_ui.dart';
-import 'archive_design.dart';
 import 'glass_palette.dart';
 import 'library_state.dart';
 import 'performance_preferences.dart';

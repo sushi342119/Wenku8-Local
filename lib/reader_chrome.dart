@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/material.dart' show Theme;
 import 'package:flutter/rendering.dart';
 
 import 'app_ui.dart';
