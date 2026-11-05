@@ -10,7 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const updateRepository = String.fromEnvironment(
   'UPDATE_REPOSITORY',
-  defaultValue: 'sushi342119/Wenku8-Local',
+  defaultValue: 'sushi342119/Shuyu',
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',

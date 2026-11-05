@@ -7,16 +7,16 @@
 <p align="center">基于 Flutter 的 Android 轻小说阅读客户端</p>
 
 <p align="center">
-  <a href="https://github.com/sushi342119/Wenku8-Local/releases"><img src="https://img.shields.io/github/v/release/sushi342119/Wenku8-Local?style=flat-square&color=60786B" alt="Release" /></a>
-  <a href="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml"><img src="https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml/badge.svg?branch=main" alt="Build" /></a>
+  <a href="https://github.com/sushi342119/Shuyu/releases"><img src="https://img.shields.io/github/v/release/sushi342119/Shuyu?style=flat-square&color=60786B" alt="Release" /></a>
+  <a href="https://github.com/sushi342119/Shuyu/actions/workflows/local-build.yml"><img src="https://github.com/sushi342119/Shuyu/actions/workflows/local-build.yml/badge.svg?branch=main" alt="Build" /></a>
   <img src="https://img.shields.io/badge/Platform-Android-60786B?style=flat-square" alt="Android" />
   <a href="assets/licenses/GPL-3.0.txt"><img src="https://img.shields.io/badge/License-GPL--3.0-60786B?style=flat-square" alt="GPL 3.0" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/sushi342119/Wenku8-Local/releases">下载</a> ·
+  <a href="https://github.com/sushi342119/Shuyu/releases">下载</a> ·
   <a href="CHANGELOG.md">更新日志</a> ·
-  <a href="https://github.com/sushi342119/Wenku8-Local/issues">问题反馈</a> ·
+  <a href="https://github.com/sushi342119/Shuyu/issues">问题反馈</a> ·
   <a href="docs/RELEASING.md">构建指南</a>
 </p>
 
@@ -47,7 +47,7 @@
 
 ## 下载
 
-从 [GitHub Releases](https://github.com/sushi342119/Wenku8-Local/releases) 下载 APK。当前版本提供 **arm64-v8a** 架构的 APK。
+从 [GitHub Releases](https://github.com/sushi342119/Shuyu/releases) 下载 APK。当前版本提供 **arm64-v8a** 架构的 APK。
 
 安装后，可在 **设置 → 关于书屿** 查看版本信息、更新说明并检查更新。
 
@@ -56,21 +56,21 @@
 开发环境：**Flutter 3.41.5 / Dart 3.11.3、JDK 17、Android SDK**。
 
 ```sh
-git clone https://github.com/sushi342119/Wenku8-Local.git
-cd Wenku8-Local
+git clone https://github.com/sushi342119/Shuyu.git
+cd Shuyu
 flutter pub get
 flutter build apk --release --target-platform android-arm64
 ```
 
 ### GitHub Actions
 
-- [Build Local APK](https://github.com/sushi342119/Wenku8-Local/actions/workflows/local-build.yml)：代码检查、本地书库测试和 ARM64 APK 构建。
+- [Build Local APK](https://github.com/sushi342119/Shuyu/actions/workflows/local-build.yml)：代码检查、本地书库测试和 ARM64 APK 构建。
 
 签名配置与发布流程见 [构建发布指南](docs/RELEASING.md)。
 
 ## 贡献
 
-欢迎通过 [Issues](https://github.com/sushi342119/Wenku8-Local/issues) 反馈问题或提出建议，通过 Pull Request 参与开发。提交问题时请提供应用版本、Android 版本和复现步骤。
+欢迎通过 [Issues](https://github.com/sushi342119/Shuyu/issues) 反馈问题或提出建议，通过 Pull Request 参与开发。提交问题时请提供应用版本、Android 版本和复现步骤。
 
 ## 致谢与许可
 

@@ -61,7 +61,7 @@ class AppUpdatePlugin : FlutterPlugin, ActivityAware, MethodChannel.MethodCallHa
                 val valid = uri.scheme == "https" && uri.host == "github.com" &&
                     uri.userInfo == null && uri.port in setOf(-1, 443) &&
                     segments.size >= 3 && segments[0] == "sushi342119" &&
-                    segments[1] == "Wenku8-Local" && segments[2] == "releases" &&
+                    segments[1] == "Shuyu" && segments[2] == "releases" &&
                     releasePage
                 if (!valid) {
                     result.error("INVALID_RELEASE", "更新页面地址无效", null)
