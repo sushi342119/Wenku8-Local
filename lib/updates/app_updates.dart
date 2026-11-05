@@ -14,18 +14,17 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.7.1',
+  defaultValue: '1.8.1',
 );
 const currentAppBuild = int.fromEnvironment(
   'APP_BUILD',
-  defaultValue: 46,
+  defaultValue: 48,
 );
 const currentReleaseNotes = '''
-1. 界面与交互重做：书库保留液态玻璃，阅读器改用实色底栏，主色改为蓝色，玻璃分关/轻/标准/强四档，按机型自动选初始档，不再运行时自动降档。
-2. 阅读器统一骨架：TXT、EPUB、PDF 共用目录/排版/亮度/听书底栏，PDF 跟随纸色、夜读默认反色，字号范围放宽到 14–30。
-3. 接入翻页与竖排阅读：支持横排翻页、竖排翻页、点击翻页与音量键翻页，目录/书签/划线合并为一个面板。
-4. 书架效率：列表/网格切换、快速滚动条、多选、标签与状态统一筛选，随机选书默认快速 900ms。
-5. 修复翻页模式切回滚动时位置恢复可能失效的问题。
+1. 优化全站深色模式，统一页面配色并移除装饰性英文小标题。
+2. 优化书籍编号显示，使用更简洁的短编号。
+3. 调整阅读页透明底栏与单章进度条。
+4. 增加章末底部留白，修复“继续下一章”按钮被底栏进度条遮挡的问题。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
