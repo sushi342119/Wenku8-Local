@@ -2361,6 +2361,21 @@ Future<_DeleteFileResult> _removeBookRecordOnly(
 
 enum _ShelfBookAction { removeFromShelf, editInfo, deleteFile }
 
+class _SettingsBentoItem {
+  const _SettingsBentoItem({
+    this.key,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+  final Key? key;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+}
+
 class SettingsPage extends StatelessWidget {
   const SettingsPage({
     super.key,
@@ -2378,545 +2393,691 @@ class SettingsPage extends StatelessWidget {
   );
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-    animation: state.settingsChanges,
-    builder: (context, child) => GlassHeaderLayout(
-      showHeader: showHeader,
-      header: buildHeader(context),
-      body: ListView(
-        key: const PageStorageKey('settings'),
-        padding: EdgeInsets.fromLTRB(
-          24,
-          MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight + 20,
-          24,
-          MediaQuery.paddingOf(context).bottom + 120,
-        ),
-        children: [
-          sectionHeader(context, '阅读偏好', ''),
-          const SizedBox(height: 14),
-          ContentPanel(
-            child: Column(
-              children: [
-                _appearanceSetting(context),
-                const Divider(height: 22),
-                Row(
-                  children: [
-                    const Icon(CupertinoIcons.textformat, size: 21),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text(
-                            '应用字体',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                          const SizedBox(height: 5),
-                          Text(
-                            state.currentFont.displayName,
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Theme.of(
-                                context,
-                              ).colorScheme.onSurfaceVariant,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    GlassTextButton(
-                      key: const ValueKey('settings-font-picker'),
-                      onPressed: () => _showFontPicker(context),
-                      child: const Text('选择'),
-                    ),
-                  ],
-                ),
-                const Divider(height: 22),
-                ReaderValueSlider(
-                  sliderKey: const ValueKey('settings-font-slider'),
-                  label: '阅读字号',
-                  value: state.fontSize,
-                  min: 15,
-                  max: 27,
-                  divisions: 12,
-                  format: (value) => '${value.round()} pt',
-                  onCommitted: (value) =>
-                      _savePreference(context, () => state.setFontSize(value)),
-                ),
-                if (LocalPlatform.android)
-                  Row(
-                    children: [
-                      Icon(
-                        CupertinoIcons.sun_max,
-                        size: 21,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          '阅读时保持亮屏',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      CupertinoSwitch(
-                        value: state.keepScreenOn,
-                        activeTrackColor: Theme.of(context).colorScheme.primary,
-                        onChanged: (value) => _savePreference(
-                          context,
-                          () => state.setKeepScreenOn(value),
-                        ),
-                      ),
-                    ],
-                  ),
-                const Divider(height: 13),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Row(
-                    children: [
-                      Icon(
-                        CupertinoIcons.circle_grid_3x3,
-                        color: Theme.of(context).colorScheme.primary,
-                        size: 21,
-                      ),
-                      const SizedBox(width: 12),
-                      const Expanded(
-                        child: Text(
-                          '减少动态效果',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                      CupertinoSwitch(
-                        value: state.reduceMotion,
-                        activeTrackColor: Theme.of(context).colorScheme.primary,
-                        onChanged: (value) => _savePreference(
-                          context,
-                          () => state.setReduceMotion(value),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const Divider(height: 22),
-                LanguageSettingMenu(
-                  key: const ValueKey('settings-language'),
-                  state: state,
-                ),
-                const Divider(height: 22),
-                JellyTapSurface(
-                  key: const ValueKey('settings-dictionaries'),
-                  onTap: () => showDictionaryManagementSheet(
-                    context: context,
-                    reduceMotion: state.reduceMotion,
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(CupertinoIcons.book, size: 21),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '离线词典',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(CupertinoIcons.chevron_forward, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-                const Divider(height: 22),
-                JellyTapSurface(
-                  key: const ValueKey('settings-purification-rules'),
-                  onTap: () => showReaderPurificationSheet(
-                    context: context,
-                    reduceMotion: state.reduceMotion,
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(CupertinoIcons.wand_stars, size: 21),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '正文替换与净化规则',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(CupertinoIcons.chevron_forward, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-                const Divider(height: 22),
-                JellyTapSurface(
-                  key: const ValueKey('settings-font-settings-page'),
-                  onTap: () => pushNovelPage<void>(
-                    context,
-                    FontSettingsPage(state: state),
-                    reduceMotion: state.reduceMotion,
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(CupertinoIcons.textformat, size: 21),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '字体管理与按需下载',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(CupertinoIcons.chevron_forward, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-                const Divider(height: 22),
-                JellyTapSurface(
-                  key: const ValueKey('settings-palette-page'),
-                  onTap: () => pushNovelPage<void>(
-                    context,
-                    PaletteSettingsPage(state: state),
-                    reduceMotion: state.reduceMotion,
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(CupertinoIcons.paintbrush, size: 21),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '主题调色盘',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(CupertinoIcons.chevron_forward, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-                const Divider(height: 22),
-                JellyTapSurface(
-                  key: const ValueKey('settings-reading-widget-page'),
-                  onTap: () => pushNovelPage<void>(
-                    context,
-                    ReadingWidgetSettingsPage(state: state),
-                    reduceMotion: state.reduceMotion,
-                  ),
-                  child: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 10),
-                    child: Row(
-                      children: [
-                        Icon(CupertinoIcons.rectangle_on_rectangle, size: 21),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            '桌面阅读小组件',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ),
-                        Icon(CupertinoIcons.chevron_forward, size: 14),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
+  Widget build(BuildContext context) {
+    final localLib = LocalPlatform.android ? localLibraryOf(repository) : null;
+    final updateScope = AppUpdatesScope.maybeOf(context);
+    final versionText =
+        '版本 ${updateScope?.installed?.version ?? currentAppVersion}'
+        ' · 构建 ${updateScope?.installed?.build ?? currentAppBuild}'
+        '${updateScope?.available == true ? ' · 有新版本' : ''}';
+
+    return AnimatedBuilder(
+      animation: state.settingsChanges,
+      builder: (context, child) => GlassHeaderLayout(
+        showHeader: showHeader,
+        header: buildHeader(context),
+        body: ListView(
+          key: const PageStorageKey('settings'),
+          cacheExtent: 0,
+          padding: EdgeInsets.fromLTRB(
+            24,
+            MediaQuery.paddingOf(context).top +
+                FrostedHeader.toolbarHeight +
+                20,
+            24,
+            MediaQuery.paddingOf(context).bottom + 120,
           ),
-          const SizedBox(height: 24),
-          if (repository case final NovelRepository source) ...[
-            sectionHeader(context, '阅读记录', ''),
+          children: [
+            // ── 01 / 阅读偏好（核心显示、字号与阅读工具箱整合） ────────────────────
+            sectionHeader(context, '阅读偏好', '排版 · 词典 · 工具'),
             const SizedBox(height: 14),
             ContentPanel(
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  JellyTapSurface(
-                    key: const ValueKey('settings-reading-history'),
-                    onTap: () => openReadingHistory(context, state, source),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
-                        children: [
-                          Icon(CupertinoIcons.clock, size: 21),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              '阅读历史',
+                  _appearanceSetting(context),
+                  _settingsDivider(context),
+                  Row(
+                    children: [
+                      _settingsIconBadge(context, CupertinoIcons.textformat),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '应用字体',
                               style: TextStyle(fontWeight: FontWeight.w600),
                             ),
+                            const SizedBox(height: 4),
+                            Text(
+                              state.currentFont.displayName,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      GlassTextButton(
+                        key: const ValueKey('settings-font-picker'),
+                        onPressed: () => _showFontPicker(context),
+                        child: const Text('选择'),
+                      ),
+                    ],
+                  ),
+                  _settingsDivider(context),
+                  ReaderValueSlider(
+                    sliderKey: const ValueKey('settings-font-slider'),
+                    label: '阅读字号',
+                    value: state.fontSize,
+                    min: 15,
+                    max: 27,
+                    divisions: 12,
+                    format: (value) => '${value.round()} pt',
+                    onCommitted: (value) =>
+                        _savePreference(context, () => state.setFontSize(value)),
+                  ),
+                  if (LocalPlatform.android) ...[
+                    _settingsDivider(context),
+                    Row(
+                      children: [
+                        _settingsIconBadge(context, CupertinoIcons.sun_max),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text(
+                            '阅读时保持亮屏',
+                            style: TextStyle(fontWeight: FontWeight.w600),
                           ),
-                          Icon(CupertinoIcons.chevron_right, size: 14),
-                        ],
+                        ),
+                        CupertinoSwitch(
+                          value: state.keepScreenOn,
+                          activeTrackColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          onChanged: (value) => _savePreference(
+                            context,
+                            () => state.setKeepScreenOn(value),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  _settingsDivider(context),
+                  LanguageSettingMenu(
+                    key: const ValueKey('settings-language'),
+                    state: state,
+                  ),
+                  _settingsSubgroupHeader(context, '阅读与排版工具箱'),
+                  _settingsBentoGrid(context, [
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-palette-page'),
+                      icon: CupertinoIcons.paintbrush,
+                      title: '主题调色盘',
+                      subtitle: '极光与纸张色系',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        PaletteSettingsPage(state: state),
+                        reduceMotion: state.reduceMotion,
                       ),
                     ),
-                  ),
-                  const Divider(height: 22),
-                  JellyTapSurface(
-                    key: const ValueKey('settings-reading-statistics'),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-font-settings-page'),
+                      icon: CupertinoIcons.textformat_alt,
+                      title: '字体管理与按需下载',
+                      subtitle: '内置与导入字库',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        FontSettingsPage(state: state),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-dictionaries'),
+                      icon: CupertinoIcons.book,
+                      title: '离线词典',
+                      subtitle: '本地查词词库',
+                      onTap: () => showDictionaryManagementSheet(
+                        context: context,
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                    _SettingsBentoItem(
+                      key: const ValueKey('settings-purification-rules'),
+                      icon: CupertinoIcons.wand_stars,
+                      title: '正文替换与净化规则',
+                      subtitle: '正则与文本纠错',
+                      onTap: () => showReaderPurificationSheet(
+                        context: context,
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                  ]),
+                  const SizedBox(height: 8),
+                  _settingsNavRow(
+                    context,
+                    rowKey: const ValueKey('settings-reading-widget-page'),
+                    icon: CupertinoIcons.rectangle_on_rectangle,
+                    title: '桌面阅读小组件',
+                    subtitle: '配置主屏幕阅读进度卡片',
                     onTap: () => pushNovelPage<void>(
                       context,
-                      ReadingStatisticsPage(state: state, repository: source),
+                      ReadingWidgetSettingsPage(state: state),
                       reduceMotion: state.reduceMotion,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
-                        children: [
-                          Icon(CupertinoIcons.chart_bar, size: 21),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              '阅读统计与报告',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          Icon(CupertinoIcons.chevron_right, size: 14),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const Divider(height: 22),
-                  JellyTapSurface(
-                    key: const ValueKey('settings-bookmarks'),
-                    onTap: () => pushNovelPage<void>(
-                      context,
-                      BookmarkLibraryPage(state: state, repository: source),
-                      reduceMotion: state.reduceMotion,
-                    ),
-                    child: const Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: Row(
-                        children: [
-                          Icon(CupertinoIcons.bookmark, size: 21),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              '书签与划线',
-                              style: TextStyle(fontWeight: FontWeight.w600),
-                            ),
-                          ),
-                          Icon(CupertinoIcons.chevron_right, size: 14),
-                        ],
-                      ),
                     ),
                   ),
                 ],
               ),
             ),
             const SizedBox(height: 24),
-          ],
-          if (repository case final OfflineNovelRepository offline) ...[
-            sectionHeader(context, '离线阅读', ''),
+
+            // ── 02 / 书库与数据（阅读记录、离线缓存、备份与本地书库整合） ─────────
+            sectionHeader(context, '书库与数据', '记录 · 缓存 · 备份'),
             const SizedBox(height: 14),
             ContentPanel(
-              onTap: () => pushNovelPage<void>(
-                context,
-                OfflineCachePage(
-                  repository: offline,
-                  reduceMotion: state.reduceMotion,
-                  onOpen: (pageContext, novel) => openDetail(
-                    pageContext,
-                    novel,
-                    state,
-                    offline,
-                    fromCache: true,
-                  ),
-                ),
-                reduceMotion: state.reduceMotion,
-              ),
-              child: const Row(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(CupertinoIcons.cloud_download, size: 21),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      '缓存管理',
-                      style: TextStyle(fontWeight: FontWeight.w600),
+                  if (repository case final NovelRepository source) ...[
+                    _settingsBentoGrid(context, [
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reading-history'),
+                        icon: CupertinoIcons.clock,
+                        title: '阅读历史',
+                        subtitle: '足迹与章节续读',
+                        onTap: () => openReadingHistory(context, state, source),
+                      ),
+                      if (repository case final OfflineNovelRepository offline)
+                        _SettingsBentoItem(
+                          icon: CupertinoIcons.cloud_download,
+                          title: '缓存管理',
+                          subtitle: '已下载离线章节',
+                          onTap: () => pushNovelPage<void>(
+                            context,
+                            OfflineCachePage(
+                              repository: offline,
+                              reduceMotion: state.reduceMotion,
+                              onOpen: (pageContext, novel) => openDetail(
+                                pageContext,
+                                novel,
+                                state,
+                                offline,
+                                fromCache: true,
+                              ),
+                            ),
+                            reduceMotion: state.reduceMotion,
+                          ),
+                        ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-reading-statistics'),
+                        icon: CupertinoIcons.chart_bar,
+                        title: '阅读统计与报告',
+                        subtitle: '时长与日历分析',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          ReadingStatisticsPage(
+                            state: state,
+                            repository: source,
+                          ),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                      _SettingsBentoItem(
+                        key: const ValueKey('settings-bookmarks'),
+                        icon: CupertinoIcons.bookmark,
+                        title: '书签与划线',
+                        subtitle: '汇总书签与批注',
+                        onTap: () => pushNovelPage<void>(
+                          context,
+                          BookmarkLibraryPage(state: state, repository: source),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                      ),
+                    ]),
+                    _settingsSubgroupHeader(context, '存储与本地书库'),
+                  ] else if (repository
+                      case final OfflineNovelRepository offline) ...[
+                    _settingsNavRow(
+                      context,
+                      icon: CupertinoIcons.cloud_download,
+                      title: '缓存管理',
+                      subtitle: '管理已下载章节与离线缓存空间',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        OfflineCachePage(
+                          repository: offline,
+                          reduceMotion: state.reduceMotion,
+                          onOpen: (pageContext, novel) => openDetail(
+                            pageContext,
+                            novel,
+                            state,
+                            offline,
+                            fromCache: true,
+                          ),
+                        ),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                    _settingsDivider(context),
+                  ],
+                  _settingsNavRow(
+                    context,
+                    rowKey: const ValueKey('settings-backup'),
+                    icon: CupertinoIcons.folder,
+                    title: '备份与恢复',
+                    subtitle: '导出或恢复书架、进度、书签与设置',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      LibraryBackupPage(state: state),
+                      reduceMotion: state.reduceMotion,
                     ),
                   ),
-                  Icon(CupertinoIcons.chevron_right, size: 14),
+                  if (localLib != null) ...[
+                    _settingsDivider(context),
+                    _settingsNavRow(
+                      context,
+                      rowKey: const ValueKey('settings-local-library'),
+                      icon: CupertinoIcons.book,
+                      title: '本地书库',
+                      subtitle: '选择文件夹，扫描导入 TXT / PDF',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        LocalLibraryPage(
+                          state: state,
+                          local: localLib,
+                          repository: repository!,
+                        ),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                    _settingsDivider(context),
+                    _settingsNavRow(
+                      context,
+                      rowKey: const ValueKey('settings-tag-manage'),
+                      icon: CupertinoIcons.tag,
+                      title: '标签管理',
+                      subtitle: '新建、重命名或删除书架标签',
+                      onTap: () => pushNovelPage<void>(
+                        context,
+                        TagManagePage(state: state, local: localLib),
+                        reduceMotion: state.reduceMotion,
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 24),
-          ],
-          sectionHeader(context, '玻璃外观', '实时预览'),
-          const SizedBox(height: 14),
-          ContentPanel(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _glassSettingLabel(
-                  context,
-                  '模糊度',
-                  '${state.glassBlur.round()}',
-                ),
-                CupertinoSlider(
-                  key: const ValueKey('glass-blur-slider'),
-                  value: state.glassBlur,
-                  min: 0,
-                  max: 24,
-                  divisions: 24,
-                  activeColor: Theme.of(context).colorScheme.primary,
-                  onChanged: (value) =>
-                      state.setGlassBlur(value, persist: false),
-                  onChangeEnd: state.setGlassBlur,
-                ),
-                const Divider(height: 22),
-                _glassSettingLabel(
-                  context,
-                  '不透明度',
-                  '${(state.glassOpacity * 100).round()}%',
-                ),
-                CupertinoSlider(
-                  key: const ValueKey('glass-opacity-slider'),
-                  value: state.glassOpacity,
-                  min: 0,
-                  max: 1,
-                  divisions: 100,
-                  activeColor: Theme.of(context).colorScheme.primary,
-                  onChanged: (value) =>
-                      state.setGlassOpacity(value, persist: false),
-                  onChangeEnd: state.setGlassOpacity,
-                ),
-                GlassTextButton(
-                  onPressed: () async {
-                    await state.setGlassBlur(8);
-                    await state.setGlassOpacity(.87);
-                  },
-                  child: const Text('恢复默认'),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          sectionHeader(context, '本地数据', ''),
-          const SizedBox(height: 14),
-          ContentPanel(
-            key: const ValueKey('settings-backup'),
-            onTap: () => pushNovelPage<void>(
-              context,
-              LibraryBackupPage(state: state),
-              reduceMotion: state.reduceMotion,
-            ),
-            child: const Row(
-              children: [
-                Icon(CupertinoIcons.folder, size: 21),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '备份与恢复',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Icon(CupertinoIcons.chevron_right, size: 14),
-              ],
-            ),
-          ),
-          if (LocalPlatform.android && localLibraryOf(repository) != null) ...[
+
+            // ── 03 / 玻璃外观（实时光学预览） ────────────────────────────────────
+            sectionHeader(context, '玻璃外观', '实时预览'),
             const SizedBox(height: 14),
-            FeatureEntry(
-              key: const ValueKey('settings-local-library'),
-              title: '本地书库',
-              icon: CupertinoIcons.book,
-              subtitle: '选择文件夹，扫描导入 TXT / PDF',
-              onTap: () => pushNovelPage<void>(
-                context,
-                LocalLibraryPage(
-                  state: state,
-                  local: localLibraryOf(repository)!,
-                  repository: repository!,
-                ),
-                reduceMotion: state.reduceMotion,
+            ContentPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      _settingsIconBadge(context, CupertinoIcons.sparkles),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              '液态空间玻璃材质',
+                              style: TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '实时调节全局散射模糊与表面透光率',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      GlassTextButton(
+                        onPressed: () async {
+                          await state.setGlassBlur(8);
+                          await state.setGlassOpacity(.87);
+                        },
+                        child: const Text('恢复默认'),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 22),
+                  _glassSettingLabel(
+                    context,
+                    '模糊度',
+                    '${state.glassBlur.round()}',
+                  ),
+                  CupertinoSlider(
+                    key: const ValueKey('glass-blur-slider'),
+                    value: state.glassBlur,
+                    min: 0,
+                    max: 24,
+                    divisions: 24,
+                    activeColor: Theme.of(context).colorScheme.primary,
+                    onChanged: (value) =>
+                        state.setGlassBlur(value, persist: false),
+                    onChangeEnd: state.setGlassBlur,
+                  ),
+                  const Divider(height: 18),
+                  _glassSettingLabel(
+                    context,
+                    '不透明度',
+                    '${(state.glassOpacity * 100).round()}%',
+                  ),
+                  CupertinoSlider(
+                    key: const ValueKey('glass-opacity-slider'),
+                    value: state.glassOpacity,
+                    min: 0,
+                    max: 1,
+                    divisions: 100,
+                    activeColor: Theme.of(context).colorScheme.primary,
+                    onChanged: (value) =>
+                        state.setGlassOpacity(value, persist: false),
+                    onChangeEnd: state.setGlassOpacity,
+                  ),
+                ],
               ),
             ),
+            const SizedBox(height: 24),
+
+            // ── 04 / 系统与关于（动效、低性能模式、触感反馈与版本更新整合） ───────
+            sectionHeader(context, '系统与关于', '性能 · 触感 · 版本'),
             const SizedBox(height: 14),
-            FeatureEntry(
-              key: const ValueKey('settings-tag-manage'),
-              title: '标签管理',
-              icon: CupertinoIcons.tag,
-              subtitle: '新建、重命名或删除书架标签',
-              onTap: () => pushNovelPage<void>(
-                context,
-                TagManagePage(state: state, local: localLibraryOf(repository)),
-                reduceMotion: state.reduceMotion,
+            ContentPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Row(
+                      children: [
+                        _settingsIconBadge(
+                          context,
+                          CupertinoIcons.circle_grid_3x3,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                '减少动态效果',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              const SizedBox(height: 3),
+                              Text(
+                                '减弱界面弹簧形变与过渡动画',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        CupertinoSwitch(
+                          value: state.reduceMotion,
+                          activeTrackColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          onChanged: (value) => _savePreference(
+                            context,
+                            () => state.setReduceMotion(value),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  _settingsDivider(context),
+                  _settingsNavRow(
+                    context,
+                    rowKey: const ValueKey('settings-performance'),
+                    icon: CupertinoIcons.speedometer,
+                    title: '低性能设备模式',
+                    subtitle: '降低高开销光影与模糊以省电提速',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      LowPerformancePage(state: state),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                  _settingsDivider(context),
+                  _settingsNavRow(
+                    context,
+                    rowKey: const ValueKey('settings-haptics'),
+                    icon: CupertinoIcons.waveform,
+                    title: '振动反馈',
+                    subtitle: '触控与翻页触觉反馈',
+                    trailingText: state.haptics.enabled ? '已开启' : '已关闭',
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      HapticSettingsPage(state: state),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                  _settingsDivider(context),
+                  _settingsNavRow(
+                    context,
+                    rowKey: const ValueKey('settings-app-update'),
+                    icon: CupertinoIcons.arrow_down_circle,
+                    title: '关于书屿',
+                    subtitle: versionText,
+                    onTap: () => pushNovelPage<void>(
+                      context,
+                      AppUpdatePage(updates: updateScope),
+                      reduceMotion: state.reduceMotion,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
-          const SizedBox(height: 24),
-          sectionHeader(context, '性能与流畅度', ''),
-          const SizedBox(height: 14),
-          ContentPanel(
-            key: const ValueKey('settings-performance'),
-            onTap: () => pushNovelPage<void>(
-              context,
-              LowPerformancePage(state: state),
-              reduceMotion: state.reduceMotion,
-            ),
-            child: const Row(
-              children: [
-                Icon(CupertinoIcons.speedometer, size: 21),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    '低性能设备模式',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Icon(CupertinoIcons.chevron_right, size: 14),
-              ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          ContentPanel(
-            key: const ValueKey('settings-haptics'),
-            onTap: () => pushNovelPage<void>(
-              context,
-              HapticSettingsPage(state: state),
-              reduceMotion: state.reduceMotion,
-            ),
-            child: Row(
-              children: [
-                const Icon(CupertinoIcons.waveform, size: 21),
-                const SizedBox(width: 12),
-                const Expanded(
-                  child: Text(
-                    '振动反馈',
-                    style: TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                ),
-                Text(state.haptics.enabled ? '已开启' : '已关闭'),
-                const SizedBox(width: 10),
-                const Icon(CupertinoIcons.chevron_right, size: 14),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          sectionHeader(context, '关于', ''),
-          const SizedBox(height: 14),
-          FeatureEntry(
-            key: const ValueKey('settings-app-update'),
-            title: '关于书屿',
-            icon: CupertinoIcons.arrow_down_circle,
-            subtitle:
-                '版本 ${AppUpdatesScope.maybeOf(context)?.installed?.version ?? currentAppVersion}'
-                ' · 构建 ${AppUpdatesScope.maybeOf(context)?.installed?.build ?? currentAppBuild}'
-                '${AppUpdatesScope.maybeOf(context)?.available == true ? ' · 有新版本' : ''}',
-            onTap: () => pushNovelPage<void>(
-              context,
-              AppUpdatePage(updates: AppUpdatesScope.maybeOf(context)),
-              reduceMotion: state.reduceMotion,
+        ),
+      ),
+    );
+  }
+
+  Widget _settingsIconBadge(BuildContext context, IconData icon) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      width: 34,
+      height: 34,
+      decoration: BoxDecoration(
+        color: scheme.primary.withValues(alpha: dark ? 0.16 : 0.10),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: scheme.primary.withValues(alpha: dark ? 0.28 : 0.16),
+          width: 0.8,
+        ),
+      ),
+      alignment: Alignment.center,
+      child: Icon(icon, size: 18, color: scheme.primary),
+    );
+  }
+
+  Widget _settingsDivider(BuildContext context) =>
+      const Divider(height: 18, indent: 46);
+
+  Widget _settingsSubgroupHeader(BuildContext context, String label) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: 12, bottom: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 12),
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6,
+                color: scheme.primary.withValues(alpha: 0.85),
+              ),
             ),
           ),
         ],
       ),
-    ),
+    );
+  }
+
+  Widget _settingsBentoGrid(
+    BuildContext context,
+    List<_SettingsBentoItem> items,
+  ) => LayoutBuilder(
+    builder: (context, constraints) {
+      final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
+      if (constraints.maxWidth < 260 * scale) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final (index, item) in items.indexed) ...[
+              if (index > 0) _settingsDivider(context),
+              _settingsNavRow(
+                context,
+                rowKey: item.key,
+                icon: item.icon,
+                title: item.title,
+                subtitle: item.subtitle,
+                onTap: item.onTap,
+              ),
+            ],
+          ],
+        );
+      }
+      final rows = <Widget>[];
+      for (var i = 0; i < items.length; i += 2) {
+        if (i > 0) rows.add(const SizedBox(height: 10));
+        final first = items[i];
+        final second = i + 1 < items.length ? items[i + 1] : null;
+        rows.add(
+          Row(
+            children: [
+              Expanded(child: _settingsBentoTile(context, first)),
+              if (second != null) ...[
+                const SizedBox(width: 10),
+                Expanded(child: _settingsBentoTile(context, second)),
+              ],
+            ],
+          ),
+        );
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: rows,
+      );
+    },
   );
+
+  Widget _settingsBentoTile(BuildContext context, _SettingsBentoItem item) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return JellyTapSurface(
+      key: item.key,
+      onTap: item.onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        decoration: BoxDecoration(
+          color: scheme.primary.withValues(alpha: dark ? 0.09 : 0.055),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: scheme.primary.withValues(alpha: dark ? 0.20 : 0.12),
+            width: 0.8,
+          ),
+        ),
+        child: Row(
+          children: [
+            _settingsIconBadge(context, item.icon),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 13.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    item.subtitle,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _settingsNavRow(
+    BuildContext context, {
+    Key? rowKey,
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    String? trailingText,
+    required VoidCallback onTap,
+  }) {
+    final muted = Theme.of(context).colorScheme.onSurfaceVariant;
+    return JellyTapSurface(
+      key: rowKey,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          children: [
+            _settingsIconBadge(context, icon),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 3),
+                    Text(
+                      subtitle,
+                      style: TextStyle(fontSize: 12, color: muted),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            if (trailingText != null) ...[
+              const SizedBox(width: 8),
+              Text(trailingText, style: TextStyle(fontSize: 13, color: muted)),
+            ],
+            const SizedBox(width: 8),
+            Icon(CupertinoIcons.chevron_forward, size: 14, color: muted),
+          ],
+        ),
+      ),
+    );
+  }
 
   /// 应用字体选择：内置字体 + 从手机导入的字体。
   /// SettingsPage 为 StatelessWidget，刷新依赖 state 的通知。
@@ -3088,11 +3249,7 @@ class SettingsPage extends StatelessWidget {
   Widget _appearanceSetting(BuildContext context) {
     final label = Row(
       children: [
-        Icon(
-          CupertinoIcons.moon_stars,
-          size: 21,
-          color: Theme.of(context).colorScheme.primary,
-        ),
+        _settingsIconBadge(context, CupertinoIcons.moon_stars),
         const SizedBox(width: 12),
         const Expanded(
           child: Text('外观模式', style: TextStyle(fontWeight: FontWeight.w600)),
