@@ -7069,7 +7069,7 @@ class _ReaderPageState extends State<ReaderPage>
                     SliverPadding(
                       padding: EdgeInsets.only(
                         top: 48,
-                        bottom: MediaQuery.paddingOf(context).bottom + 116,
+                        bottom: MediaQuery.paddingOf(context).bottom + 216,
                       ),
                       sliver: SliverToBoxAdapter(
                         child: Column(
