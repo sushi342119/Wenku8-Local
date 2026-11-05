@@ -1601,39 +1601,51 @@ class NovelCover extends StatelessWidget {
   }
 
   Widget _visual({bool clip = true, bool recordArrival = true}) {
-    final fallback = Padding(
-      padding: EdgeInsets.all(width * .11),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          AppText(
-            novel.title,
-            textScaler: TextScaler.noScaling,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: width * .16,
-              height: 1.25,
+    final palette = novel.colors.length >= 2
+        ? [novel.colors.first, novel.colors.last]
+        : const [Color(0xFF2C3444), accent];
+    final fallback = DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: palette,
+        ),
+      ),
+      child: Padding(
+        padding: EdgeInsets.all(width * .11),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            AppText(
+              novel.title,
+              textScaler: TextScaler.noScaling,
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: width * .16,
+                height: 1.25,
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          AppText(
-            novel.author,
-            textScaler: TextScaler.noScaling,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: .75),
-              fontSize: width * .085,
+            const SizedBox(height: 8),
+            AppText(
+              novel.author,
+              textScaler: TextScaler.noScaling,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: .78),
+                fontSize: width * .085,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
-    final face = novel.coverUrl == null
+    final rawFace = novel.coverUrl == null
         ? fallback
         : Builder(
             builder: (context) {
@@ -1675,6 +1687,29 @@ class NovelCover extends StatelessWidget {
               );
             },
           );
+    final face = Stack(
+      fit: StackFit.expand,
+      children: [
+        rawFace,
+        IgnorePointer(
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+                colors: [
+                  Colors.white.withValues(alpha: .20),
+                  Colors.black.withValues(alpha: .16),
+                  Colors.white.withValues(alpha: .07),
+                  Colors.transparent,
+                ],
+                stops: const [0.0, 0.038, 0.068, 0.16],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
     return Container(
       width: width,
       height: height,
@@ -1694,7 +1729,7 @@ class NovelCover extends StatelessWidget {
   }
 }
 
-/// Extends grayscale cover luminance behind floating controls.
+/// Extends chromatic-luminance cover aura behind floating controls.
 class CoverGlow extends StatelessWidget {
   const CoverGlow(this.novel, {super.key});
 
@@ -1727,7 +1762,7 @@ class CoverGlow extends StatelessWidget {
               stops: [
                 0,
                 ((top + 36) / rect.height).clamp(0.0, 1.0),
-                ((top + 170) / rect.height).clamp(0.0, 1.0),
+                ((top + 190) / rect.height).clamp(0.0, 1.0),
                 1,
               ],
             ).createShader(rect);
@@ -1738,25 +1773,25 @@ class CoverGlow extends StatelessWidget {
               children: [
                 ImageFiltered(
                   imageFilter: ImageFilter.blur(
-                    sigmaX: 30,
-                    sigmaY: 30,
+                    sigmaX: 34,
+                    sigmaY: 34,
                     tileMode: TileMode.clamp,
                   ),
                   child: ColorFiltered(
                     colorFilter: const ColorFilter.matrix([
-                      .2126,
-                      .7152,
-                      .0722,
+                      .4882,
+                      .4649,
+                      .0469,
                       0,
                       0,
-                      .2126,
-                      .7152,
-                      .0722,
+                      .1382,
+                      .8149,
+                      .0469,
                       0,
                       0,
-                      .2126,
-                      .7152,
-                      .0722,
+                      .1382,
+                      .4649,
+                      .3969,
                       0,
                       0,
                       0,
@@ -1774,11 +1809,11 @@ class CoverGlow extends StatelessWidget {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: [
-                        background.withValues(alpha: dark ? .45 : .53),
-                        background.withValues(alpha: .84),
+                        background.withValues(alpha: dark ? .38 : .46),
+                        background.withValues(alpha: .82),
                         background,
                       ],
-                      stops: const [0, .58, 1],
+                      stops: const [0, .62, 1],
                     ),
                   ),
                 ),

@@ -20,8 +20,8 @@ abstract final class ArchiveDesign {
   static const darkInk = Color(0xFFF2F2F2);
   static const darkMuted = Color(0xFFB7B7B7);
   static const darkMilk = Color(0xFFF6F6F6);
-  static const panelRadius = 4.0;
-  static const coverRadius = 3.0;
+  static const panelRadius = 12.0;
+  static const coverRadius = 7.0;
 
   /// A thin neutral milk layer, not a white opaque sheet or another blur pass.
   static Color glassTint(Brightness brightness, {required double opacity}) =>
@@ -362,31 +362,69 @@ class _ArchiveBackdropPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final bottom = math.min(size.height, top + 240);
     final dark = color.computeLuminance() > .5;
+    final primaryOrbRect = Rect.fromCircle(
+      center: Offset(size.width * .22, top + 36),
+      radius: math.max(120.0, size.width * .42),
+    );
+    final primaryOrb = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          (dark ? const Color(0xFF6366F1) : const Color(0xFF818CF8)).withValues(
+            alpha: dark ? .11 : .085,
+          ),
+          Colors.transparent,
+        ],
+      ).createShader(primaryOrbRect);
+    canvas.drawRect(Offset.zero & Size(size.width, bottom), primaryOrb);
+
+    final secondaryOrbRect = Rect.fromCircle(
+      center: Offset(size.width * .82, top + 64),
+      radius: math.max(100.0, size.width * .36),
+    );
+    final secondaryOrb = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          (dark ? const Color(0xFF14B8A6) : const Color(0xFF38BDF8)).withValues(
+            alpha: dark ? .08 : .065,
+          ),
+          Colors.transparent,
+        ],
+      ).createShader(secondaryOrbRect);
+    canvas.drawRect(Offset.zero & Size(size.width, bottom), secondaryOrb);
+
     final film = Paint()
-      ..color = filmColor.withValues(alpha: dark ? .018 : .42);
-    // Two restrained frosted file planes in the existing small header raster.
+      ..color = filmColor.withValues(alpha: dark ? .024 : .46);
+    // Two restrained frosted prism planes in the existing small header raster.
     // They are paint geometry: no backdrop filter, full-screen layer or ticker.
-    canvas.drawPath(
-      Path()
-        ..moveTo(size.width * .42, top)
-        ..lineTo(size.width, top)
-        ..lineTo(size.width, bottom * .82)
-        ..lineTo(size.width * .78, bottom * .82)
-        ..close(),
-      film,
+    final firstPrism = Path()
+      ..moveTo(size.width * .42, top)
+      ..lineTo(size.width, top)
+      ..lineTo(size.width, bottom * .82)
+      ..lineTo(size.width * .78, bottom * .82)
+      ..close();
+    canvas.drawPath(firstPrism, film);
+
+    film.color = filmColor.withValues(alpha: dark ? .016 : .32);
+    final secondPrism = Path()
+      ..moveTo(size.width * .60, top + 18)
+      ..lineTo(size.width, top + 18)
+      ..lineTo(size.width, bottom)
+      ..lineTo(size.width * .92, bottom)
+      ..close();
+    canvas.drawPath(secondPrism, film);
+
+    final rimPaint = Paint()
+      ..color = filmColor.withValues(alpha: dark ? .07 : .65)
+      ..strokeWidth = .8
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(
+      Offset(size.width * .42, top),
+      Offset(size.width * .78, bottom * .82),
+      rimPaint,
     );
-    film.color = filmColor.withValues(alpha: dark ? .012 : .28);
-    canvas.drawPath(
-      Path()
-        ..moveTo(size.width * .60, top + 18)
-        ..lineTo(size.width, top + 18)
-        ..lineTo(size.width, bottom)
-        ..lineTo(size.width * .92, bottom)
-        ..close(),
-      film,
-    );
+
     final paint = Paint()
-      ..color = color.withValues(alpha: .045)
+      ..color = color.withValues(alpha: .04)
       ..strokeWidth = .5;
     for (var x = 24.0; x < size.width; x += 48) {
       canvas.drawLine(Offset(x, 0), Offset(x, bottom), paint);

@@ -573,10 +573,13 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
                   const SizedBox(height: 3),
                   ExcludeSemantics(
                     child: SizedBox(
-                      width: 12,
-                      height: 1.5,
-                      child: ColoredBox(
-                        color: scheme.onSurface.withValues(alpha: proximity),
+                      width: 8 + 8 * proximity,
+                      height: 2,
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          color: scheme.onSurface.withValues(alpha: proximity),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
                     ),
                   ),

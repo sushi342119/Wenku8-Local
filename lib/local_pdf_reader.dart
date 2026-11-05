@@ -156,70 +156,168 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                   style: TextStyle(color: Colors.white70),
                 ),
               )
-            : PageView.builder(
-                controller: _controller,
-                itemCount: count,
-                onPageChanged: _onPageChanged,
-                itemBuilder: (context, page) => FutureBuilder<String>(
-                  future: _render(page),
-                  builder: (context, snapshot) {
-                    if (snapshot.hasData) {
-                      return InteractiveViewer(
-                        minScale: 1,
-                        maxScale: 4,
-                        child: Center(
-                          child: Image.file(
-                            File(snapshot.data!),
-                            fit: BoxFit.contain,
-                            cacheWidth:
-                                (MediaQuery.devicePixelRatioOf(context) *
-                                        MediaQuery.sizeOf(context).width)
-                                    .round()
-                                    .clamp(800, 2400),
-                            errorBuilder: (context, error, stack) {
-                              _pending.remove(page);
-                              return const Icon(
-                                Icons.broken_image_outlined,
-                                color: Colors.white38,
-                                size: 48,
-                              );
-                            },
+            : Stack(
+                children: [
+                  Positioned.fill(
+                    child: PageView.builder(
+                      controller: _controller,
+                      itemCount: count,
+                      onPageChanged: _onPageChanged,
+                      itemBuilder: (context, page) => FutureBuilder<String>(
+                        future: _render(page),
+                        builder: (context, snapshot) {
+                          if (snapshot.hasData) {
+                            return InteractiveViewer(
+                              minScale: 1,
+                              maxScale: 4,
+                              child: Center(
+                                child: Image.file(
+                                  File(snapshot.data!),
+                                  fit: BoxFit.contain,
+                                  cacheWidth:
+                                      (MediaQuery.devicePixelRatioOf(context) *
+                                              MediaQuery.sizeOf(context).width)
+                                          .round()
+                                          .clamp(800, 2400),
+                                  errorBuilder: (context, error, stack) {
+                                    _pending.remove(page);
+                                    return const Icon(
+                                      Icons.broken_image_outlined,
+                                      color: Colors.white38,
+                                      size: 48,
+                                    );
+                                  },
+                                ),
+                              ),
+                            );
+                          }
+                          if (snapshot.hasError) {
+                            return Center(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(
+                                    Icons.broken_image_outlined,
+                                    color: Colors.white38,
+                                    size: 48,
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    '页面加载失败',
+                                    style: TextStyle(color: Colors.white70),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  TextButton(
+                                    onPressed: () {
+                                      _pending.remove(page);
+                                      if (mounted) setState(() {});
+                                    },
+                                    child: const Text('重试'),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white54,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                  if (count > 1)
+                    Positioned(
+                      left: 20,
+                      right: 20,
+                      bottom: MediaQuery.paddingOf(context).bottom + 16,
+                      child: Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 420),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: const Color(
+                                0xFF222226,
+                              ).withValues(alpha: .88),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(
+                                color: Colors.white.withValues(alpha: .12),
+                                width: .8,
+                              ),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 4,
+                              ),
+                              child: Row(
+                                children: [
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    color: Colors.white,
+                                    disabledColor: Colors.white30,
+                                    onPressed: _page > 0
+                                        ? () => _controller.previousPage(
+                                            duration: NovelMotion.enter,
+                                            curve: NovelMotion.ease,
+                                          )
+                                        : null,
+                                    icon: const Icon(
+                                      Icons.chevron_left_rounded,
+                                    ),
+                                    tooltip: '上一页',
+                                  ),
+                                  Expanded(
+                                    child: SliderTheme(
+                                      data: SliderTheme.of(context).copyWith(
+                                        trackHeight: 3,
+                                        thumbShape: const RoundSliderThumbShape(
+                                          enabledThumbRadius: 6,
+                                        ),
+                                        overlayShape:
+                                            const RoundSliderOverlayShape(
+                                              overlayRadius: 14,
+                                            ),
+                                      ),
+                                      child: Slider(
+                                        value: _page
+                                            .clamp(0, count - 1)
+                                            .toDouble(),
+                                        min: 0,
+                                        max: (count - 1).toDouble(),
+                                        activeColor: Colors.white,
+                                        inactiveColor: Colors.white24,
+                                        onChanged: (value) =>
+                                            _controller.jumpToPage(
+                                              value.round().clamp(0, count - 1),
+                                            ),
+                                      ),
+                                    ),
+                                  ),
+                                  IconButton(
+                                    visualDensity: VisualDensity.compact,
+                                    color: Colors.white,
+                                    disabledColor: Colors.white30,
+                                    onPressed: _page + 1 < count
+                                        ? () => _controller.nextPage(
+                                            duration: NovelMotion.enter,
+                                            curve: NovelMotion.ease,
+                                          )
+                                        : null,
+                                    icon: const Icon(
+                                      Icons.chevron_right_rounded,
+                                    ),
+                                    tooltip: '下一页',
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                      );
-                    }
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(
-                              Icons.broken_image_outlined,
-                              color: Colors.white38,
-                              size: 48,
-                            ),
-                            const SizedBox(height: 12),
-                            const Text(
-                              '页面加载失败',
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                            const SizedBox(height: 12),
-                            TextButton(
-                              onPressed: () {
-                                _pending.remove(page);
-                                if (mounted) setState(() {});
-                              },
-                              child: const Text('重试'),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return const Center(
-                      child: CircularProgressIndicator(color: Colors.white54),
-                    );
-                  },
-                ),
+                      ),
+                    ),
+                ],
               ),
       ),
     );
