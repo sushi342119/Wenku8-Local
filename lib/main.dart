@@ -28,6 +28,8 @@ import 'performance_preferences.dart';
 import 'reading_widget_cards.dart';
 import 'reading_widget_controller.dart';
 import 'touch_sampling.dart';
+import 'local_platform.dart';
+import 'ui_preferences.dart';
 import 'updates/app_updates.dart';
 import 'updates/update_page.dart';
 import 'wenku_errors.dart';
@@ -86,7 +88,16 @@ Future<void> main() async {
     try {
       await state.loadFonts();
     } catch (_) {}
-    if (state.performance.needsRuntimeEffects) {
+    // Automatic glass tier: RAM ≤ 4 GB or Android ≤ 10 starts on 轻. A failed
+    // query keeps 标准; the user can always pick a tier by hand.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        state.setDeviceProfile(
+          DeviceProfile.fromMap(await LocalPlatform.deviceProfile()),
+        );
+      } catch (_) {}
+    }
+    if (state.effectivePerformance.needsRuntimeEffects) {
       try {
         await NativeEffects.prepare();
       } catch (_) {}
@@ -280,6 +291,7 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
       state.appPalette.source,
       state.appPalette.seed,
       state.systemTonalColors?.signature,
+      state.paletteVariant,
     );
     if (_themeKey != key) {
       _themeKey = key;
@@ -293,6 +305,7 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
         fontFamilyFallback: state.fontFamilyFallback,
         palette: state.appPalette,
         systemColors: state.systemTonalColors,
+        originalVariant: state.paletteVariant,
       ),
     );
   }
@@ -302,6 +315,8 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
     return AnimatedBuilder(
       animation: state.applicationChanges,
       builder: (context, child) {
+        // 动效档: 标准 keeps v1.7.1 durations, 轻 (default) the shortened ones.
+        NovelMotion.standard = state.motionLevel == MotionLevel.standard;
         final typefaceChanged = _lastFontId != state.appFontId;
         _lastFontId = state.appFontId;
         return MaterialApp(
@@ -330,7 +345,7 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
           builder: (context, child) {
             final media = MediaQuery.of(context);
             final content = PerformanceScope(
-              preferences: state.performance,
+              preferences: state.effectivePerformance,
               explicitReduceMotion:
                   media.disableAnimations || state.reduceMotion,
               child: MediaQuery(
@@ -343,14 +358,20 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
                   child: AnimatedBuilder(
                     animation: state.glassChanges,
                     child: child,
-                    builder: (context, child) => GlassAppearance(
-                      blur: state.glassBlur,
-                      opacity: state.glassOpacity,
-                      child: ListeningScope(
-                        controller: listening,
-                        child: child!,
-                      ),
-                    ),
+                    builder: (context, child) {
+                      final glass = state.resolvedGlass;
+                      return GlassAppearance(
+                        blur: glass.blur,
+                        opacity: glass.opacity,
+                        refractionScale: glass.tier.refractionScale,
+                        edgeMode: glass.tier.edge,
+                        highlight: glass.tier.highlight,
+                        child: ListeningScope(
+                          controller: listening,
+                          child: child!,
+                        ),
+                      );
+                    },
                   ),
                 ),
               ),

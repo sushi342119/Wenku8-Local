@@ -7,6 +7,8 @@ import 'book_tags.dart';
 import 'feature_pages.dart';
 import 'library_state.dart';
 import 'local_library.dart';
+import 'filename_tags.dart';
+import 'library_filter.dart';
 import 'wenku_errors.dart';
 
 /// 为某本书勾选标签；本地书籍保存时同步改原文件名。
@@ -91,6 +93,19 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
     }
   }
 
+  /// Before/after source filename when saving would rename a local file.
+  ({String before, String after})? _renamePreview() {
+    if (!isLocalNovelId(widget.bookId)) return null;
+    final book = widget.local?.bookFor(widget.bookId);
+    if (book == null) return null;
+    final names = [
+      for (final id in _selected)
+        if (_store.tagById(id) case final tag?) tag.name,
+    ];
+    final after = appendFilenameTags(stripFilenameTags(book.fileName), names);
+    return after == book.fileName ? null : (before: book.fileName, after: after);
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -158,6 +173,12 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
                   ),
                 ],
               ),
+              if (_renamePreview() case final preview?)
+                _FilenameChangeNotice(
+                  key: const ValueKey('tag-filename-warning'),
+                  before: preview.before,
+                  after: preview.after,
+                ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(top: 12),
@@ -184,6 +205,91 @@ class _TagEditorDialogState extends State<_TagEditorDialog> {
       ],
     ),
   );
+}
+
+/// Persistent warning-colour notice shown above the save button whenever the
+/// save would rename the source file (design §5.5).
+class _FilenameChangeNotice extends StatelessWidget {
+  const _FilenameChangeNotice({
+    super.key,
+    required this.before,
+    required this.after,
+  });
+  final String before, after;
+
+  @override
+  Widget build(BuildContext context) {
+    final error = Theme.of(context).colorScheme.error;
+    return Container(
+      margin: const EdgeInsets.only(top: 12),
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: error.withValues(alpha: .08),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: error.withValues(alpha: .4)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '保存将修改源文件名',
+            style: TextStyle(color: error, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text('改名前：$before', style: const TextStyle(fontSize: 12)),
+          Text('改名后：$after', style: const TextStyle(fontSize: 12)),
+        ],
+      ),
+    );
+  }
+}
+
+/// Adds [tagId] to each book one at a time. Each local book renames its own
+/// file through [LocalLibraryStore.setTagsForBook], which leaves the old
+/// filename and tags unchanged if the rename fails. Successes are re-read to
+/// confirm; failures are listed and nothing else is touched.
+Future<BatchTagResult> addTagToBooks({
+  required Iterable<({int id, String title})> books,
+  required String tagId,
+  LocalLibraryStore? local,
+}) async {
+  final store = TagStore.shared;
+  final ok = <int>[];
+  final failed = <({int id, String title, String reason})>[];
+  for (final book in books) {
+    final before = store.tagsForBook(book.id).map((t) => t.id).toSet();
+    if (before.contains(tagId)) {
+      ok.add(book.id);
+      continue;
+    }
+    final next = {...before, tagId};
+    try {
+      if (isLocalNovelId(book.id)) {
+        if (local == null) throw StateError('本地书库尚未加载');
+        await local.setTagsForBook(book.id, next);
+      } else {
+        await store.setTagsForBook(book.id, next);
+      }
+      final confirmed = store.tagsForBook(book.id).any((t) => t.id == tagId);
+      if (!confirmed) {
+        // Roll back the same way it was written (local: rename back).
+        if (isLocalNovelId(book.id)) {
+          await local!.setTagsForBook(book.id, before);
+        } else {
+          await store.setTagsForBook(book.id, before);
+        }
+        throw StateError('保存后未确认到新标签');
+      }
+      ok.add(book.id);
+    } catch (error) {
+      failed.add((
+        id: book.id,
+        title: book.title,
+        reason: describeSafeError(error, fallback: '保存失败'),
+      ));
+    }
+  }
+  return BatchTagResult(ok, failed);
 }
 
 /// 标签库管理：新建、重命名、删除。

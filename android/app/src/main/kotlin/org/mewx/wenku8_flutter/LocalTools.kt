@@ -75,12 +75,27 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             "performanceGlass", "performanceBlur", "performanceEdgeBlur",
             "performanceMotion", "performanceShelf3d", "shelf", "reading_history_hidden",
             "recentSearches", "local_shelf_removed", "tag_defs", "tag_map",
+            // 2026-11 UI round (additive; mirrors UiPreferenceKeys.all in Dart).
+            "glassTier", "glassAdvanced", "motionLevel", "randomPickPace",
+            "pdfNightInvert", "shelfLayout", "tagMatchMode", "paletteVariant",
         )
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         if (handleLibrary(call, result)) return
         when (call.method) {
+            // Read-only facts for choosing the automatic glass tier.
+            "deviceProfile" -> {
+                val memory = try {
+                    val manager = activity.getSystemService(Context.ACTIVITY_SERVICE) as? android.app.ActivityManager
+                    val info = android.app.ActivityManager.MemoryInfo()
+                    manager?.getMemoryInfo(info)
+                    info.totalMem
+                } catch (_: Exception) {
+                    0L
+                }
+                result.success(mapOf("sdkInt" to Build.VERSION.SDK_INT, "totalMemoryBytes" to memory))
+            }
             "getKeepScreenOn" -> result.success(
                 activity.window.attributes.flags and WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON != 0
             )

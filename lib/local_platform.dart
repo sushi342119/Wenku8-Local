@@ -113,6 +113,10 @@ abstract final class LocalPlatform {
   static bool get fileActions => android || ios || harmony;
   static bool get storageDiagnostics => android || ios || harmony;
   static bool get volumePaging => android || harmony;
+  /// SDK level and total RAM, used once per launch for the glass tier.
+  static Future<Map<Object?, Object?>?> deviceProfile() => channel
+      .invokeMethod<Map<Object?, Object?>>('deviceProfile')
+      .timeout(const Duration(milliseconds: 600));
   static Future<bool> exportBackup(String text, String name) async =>
       await channel.invokeMethod<bool>('exportBackup', {
         'text': text,

@@ -28,6 +28,7 @@ import 'native_effects.dart';
 import 'performance_preferences.dart';
 import 'scroll_edge_blur.dart';
 import 'route_identity.dart';
+import 'ui_preferences.dart' show GlassEdgeMode, OriginalPaletteVariant;
 import 'dock_layout.dart';
 import 'control_material_scope.dart';
 
@@ -90,10 +91,32 @@ class GlassAppearance extends InheritedWidget {
     required super.child,
     this.blur = 8,
     this.opacity = .87,
+    this.refractionScale = 1,
+    this.edgeMode = GlassEdgeMode.full,
+    this.highlight = false,
   });
 
   final double blur;
   final double opacity;
+
+  /// Dock/plate refraction width relative to the v1.7.1 look (tier 标准 = 1).
+  final double refractionScale;
+
+  /// 轻 keeps only the header blur; 关 paints a solid header plane.
+  final GlassEdgeMode edgeMode;
+
+  /// 强 adds a faint specular rim on glass plates.
+  final bool highlight;
+
+  /// Copies tier fields when an overlay re-wraps the captured appearance.
+  GlassAppearance rewrap(Widget child) => GlassAppearance(
+    blur: blur,
+    opacity: opacity,
+    refractionScale: refractionScale,
+    edgeMode: edgeMode,
+    highlight: highlight,
+    child: child,
+  );
 
   static GlassAppearance of(BuildContext context) =>
       context.dependOnInheritedWidgetOfExactType<GlassAppearance>() ??
@@ -109,7 +132,11 @@ class GlassAppearance extends InheritedWidget {
 
   @override
   bool updateShouldNotify(GlassAppearance oldWidget) =>
-      blur != oldWidget.blur || opacity != oldWidget.opacity;
+      blur != oldWidget.blur ||
+      opacity != oldWidget.opacity ||
+      refractionScale != oldWidget.refractionScale ||
+      edgeMode != oldWidget.edgeMode ||
+      highlight != oldWidget.highlight;
 }
 
 /// System icons follow the app's resolved theme, including a manual theme
@@ -137,11 +164,17 @@ ThemeData novelTheme(
   List<String>? fontFamilyFallback,
   AppPalettePreferences palette = const AppPalettePreferences(),
   SystemTonalColors? systemColors,
+  // Callers that omit it (tests, previews) keep the v1.7.1 ink look; the app
+  // passes the stored choice, whose default is the new blue.
+  OriginalPaletteVariant originalVariant = OriginalPaletteVariant.ink,
 }) {
   final dark = brightness == Brightness.dark;
-  final original =
+  final fallsBackToOriginal =
       palette.source == AppPaletteSource.original ||
       palette.source == AppPaletteSource.system && systemColors == null;
+  final vivid =
+      fallsBackToOriginal && originalVariant == OriginalPaletteVariant.vivid;
+  final original = fallsBackToOriginal && !vivid;
   late final baseScheme = ColorScheme.fromSeed(
     seedColor: accent,
     brightness: brightness,
@@ -166,7 +199,9 @@ ThemeData novelTheme(
           surfaceTint: Colors.transparent,
         )
       : baseScheme;
-  final scheme = original
+  final scheme = vivid
+      ? VividPalette.scheme(brightness)
+      : original
       ? classicScheme
       : palette.source == AppPaletteSource.system
       ? systemColors!.scheme(brightness)
@@ -181,8 +216,19 @@ ThemeData novelTheme(
     colorScheme: scheme,
     scaffoldBackgroundColor: original
         ? (dark ? ArchiveDesign.darkBackground : canvas)
+        : vivid
+        ? scheme.surfaceDim
         : scheme.surface,
-    extensions: [AppTonalColors.forScheme(scheme, original: original)],
+    extensions: [
+      vivid
+          // Page wash uses the design background (#F4F5F7 / #111214).
+          ? AppTonalColors.forScheme(
+              scheme,
+              original: false,
+            ).copyWith(pageStart: scheme.surfaceDim, pageEnd: scheme.surfaceDim)
+          : AppTonalColors.forScheme(scheme, original: original),
+      if (vivid) PageWash(scheme.surfaceDim),
+    ],
     cupertinoOverrideTheme: CupertinoThemeData(
       brightness: brightness,
       primaryColor: scheme.primary,
@@ -261,13 +307,12 @@ abstract final class AppControls {
       shape: const easy.LiquidGlassShape.continuousRoundedRectangle(
         cornerRadius: 100,
       ),
-      specular: const easy.LiquidGlassLight.specular(
-        intensity: 0,
-        thickness: 0,
-      ),
+      specular: appearance.highlight && plate
+          ? const easy.LiquidGlassLight.specular(intensity: .18, thickness: 1)
+          : const easy.LiquidGlassLight.specular(intensity: 0, thickness: 0),
       glow: const easy.LiquidGlassLight.glow(intensity: 0, thickness: 0),
       refractionIndex: 1.03,
-      refractionWidth: plate ? 16 : 8,
+      refractionWidth: (plate ? 16 : 8) * appearance.refractionScale,
       dispersion: 0,
       blur: 0,
       color: GlassAppearance.tintOf(context, opacity: appearance.opacity)
@@ -424,9 +469,14 @@ class Atmosphere extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: dark
-              ? [ArchiveDesign.darkBackground, const Color(0xFF171B17)]
-              : [ArchiveDesign.surface, ArchiveDesign.background],
+          colors: switch (Theme.of(context).extension<PageWash>()) {
+            final wash? => [wash.color, wash.color],
+            _ when dark => [
+              ArchiveDesign.darkBackground,
+              const Color(0xFF171B17),
+            ],
+            _ => [ArchiveDesign.surface, ArchiveDesign.background],
+          },
         ),
       ),
       child: NativeScrollEdgeGroup(
@@ -531,12 +581,48 @@ class FrostedHeader extends StatelessWidget {
       height: statusHeight + toolbarHeight + extraHeight + featherHeight,
       child: Stack(
         children: [
-          if (!highContrast && blurBackground)
+          if (!highContrast &&
+              blurBackground &&
+              appearance.edgeMode != GlassEdgeMode.none)
             Positioned.fill(
               child: ProgressiveBlur(
                 maxSigma: appearance.blur,
                 plateauHeight: statusHeight,
                 shadeOpacity: 0,
+              ),
+            ),
+          // Glass tier 关: a solid plane fading out over the feather, so the
+          // status bar and toolbar stay legible without any backdrop sample.
+          if (!highContrast &&
+              blurBackground &&
+              appearance.edgeMode == GlassEdgeMode.none)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  key: const ValueKey('frosted-header-solid'),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      stops: [
+                        0,
+                        (statusHeight + toolbarHeight + extraHeight) /
+                            (statusHeight +
+                                toolbarHeight +
+                                extraHeight +
+                                featherHeight),
+                        1,
+                      ],
+                      colors: [
+                        Theme.of(context).colorScheme.surface,
+                        Theme.of(context).colorScheme.surface,
+                        Theme.of(context).colorScheme.surface.withValues(
+                          alpha: 0,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
               ),
             ),
           if (highContrast)
@@ -598,7 +684,11 @@ class DockUnderlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final blur = GlassAppearance.of(context).blur;
+    final appearance = GlassAppearance.of(context);
+    // Tier 轻 keeps only the header blur; 关 has no edge blur at all.
+    final blur = appearance.edgeMode == GlassEdgeMode.full
+        ? appearance.blur
+        : 0.0;
     return IgnorePointer(
       child: SizedBox(
         key: const ValueKey('dock-underlay'),
@@ -2448,10 +2538,8 @@ class _GlassOverlayRoute<T> extends PopupRoute<T>
     );
     final surface = surfaceWrapper?.call(material) ?? material;
     return themes.wrap(
-      GlassAppearance(
-        blur: appearance.blur,
-        opacity: appearance.opacity,
-        child: Material(
+      appearance.rewrap(
+        Material(
           type: MaterialType.transparency,
           child: LayoutBuilder(
             builder: (context, constraints) {

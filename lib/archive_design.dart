@@ -20,7 +20,10 @@ abstract final class ArchiveDesign {
   static const darkInk = Color(0xFFF2F2F2);
   static const darkMuted = Color(0xFFB7B7B7);
   static const darkMilk = Color(0xFFF6F6F6);
-  static const panelRadius = 12.0;
+  // Design 2026-11: cards and panels 14 (was 12); bottom sheets 24.
+  static const panelRadius = 14.0;
+  static const sheetRadius = 24.0;
+  static const controlRadius = 10.0;
   static const coverRadius = 7.0;
 
   /// A thin neutral milk layer, not a white opaque sheet or another blur pass.

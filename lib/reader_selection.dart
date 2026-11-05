@@ -450,10 +450,8 @@ class ReaderSelection extends StatelessWidget {
                 (anchors.secondaryAnchor ?? anchors.primaryAnchor) +
                 const Offset(0, 8),
           ),
-          child: GlassAppearance(
-            blur: appearance.blur,
-            opacity: appearance.opacity,
-            child: Theme(
+          child: appearance.rewrap(
+            Theme(
               data: readerTheme,
               child: Material(
                 type: MaterialType.transparency,

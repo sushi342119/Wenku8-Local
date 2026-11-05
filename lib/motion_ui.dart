@@ -15,12 +15,28 @@ export 'loading_handoff.dart';
 /// One motion vocabulary for controls, menus, sheets and in-place expansion.
 /// The paper flight/reveal are choreographed sequences, not repeating effects.
 abstract final class NovelMotion {
+  /// Motion level (动效档). 轻 is the 2026-11 default with shortened times;
+  /// 标准 restores v1.7.1. 关 is handled by reduce-motion (100ms fades).
+  /// Set once per app build from LibraryState.motionLevel.
+  static bool standard = false;
+
   static const contact = Duration(milliseconds: 120);
-  static const enter = Duration(milliseconds: 420);
-  static const exit = Duration(milliseconds: 320);
-  static const coverFlight = Duration(milliseconds: 1000);
-  static const coverReturn = Duration(milliseconds: 840);
-  static const reveal = enter;
+  static Duration get enter =>
+      Duration(milliseconds: standard ? 420 : 320);
+  static Duration get exit => Duration(milliseconds: standard ? 320 : 240);
+  static Duration get coverFlight =>
+      Duration(milliseconds: standard ? 1000 : 560);
+  static Duration get coverReturn =>
+      Duration(milliseconds: standard ? 840 : 460);
+  static Duration get reveal => enter;
+
+  /// Reader controls show / hide (design §4: 180 / 140ms, both levels).
+  static const chromeShow = Duration(milliseconds: 180);
+  static const chromeHide = Duration(milliseconds: 140);
+
+  /// Carousel tap-to-centre (420 → 320ms at 轻).
+  static Duration get carouselCenter =>
+      Duration(milliseconds: standard ? 420 : 320);
   static const ease = Curves.easeOutCubic;
   static const retract = Curves.easeInCubic;
   static const settle = Cubic(.2, 1.08, .34, 1);

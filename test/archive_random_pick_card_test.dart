@@ -34,6 +34,7 @@ Widget _app({
   ValueChanged<String>? onPicked,
   ValueChanged<String>? onOpenDetail,
   bool reduceMotion = false,
+  Duration totalDuration = const Duration(milliseconds: 2400),
 }) {
   return MaterialApp(
     home: MediaQuery(
@@ -47,6 +48,7 @@ Widget _app({
             weightOf: weightOf,
             onPicked: onPicked,
             onOpenDetail: onOpenDetail ?? (_) {},
+            totalDuration: totalDuration,
           ),
         ),
       ),
@@ -209,6 +211,25 @@ void main() {
   testWidgets('empty candidates cannot be drawn', (tester) async {
     await tester.pumpWidget(_app(books: const []));
     expect(find.byType(ElevatedButton), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('quick pace finishes the reveal in 900ms', (tester) async {
+    final picked = <String>[];
+    await tester.pumpWidget(
+      _app(
+        onPicked: picked.add,
+        totalDuration: const Duration(milliseconds: 900),
+      ),
+    );
+    await tester.tap(find.text('抽阅一本'));
+    await tester.pump();
+    expect(picked, hasLength(1));
+    await tester.pump(const Duration(milliseconds: 900));
+    await tester.pump();
+    // Animation done: the button is enabled again and the result shows.
+    expect(find.text('抽阅中…'), findsNothing);
+    expect(find.text(picked.single), findsWidgets);
     expect(tester.takeException(), isNull);
   });
 }

@@ -68,7 +68,7 @@ void main({Future<void> Function(WidgetTester, GlobalKey, String)? capture}) {
 
   for (final brightness in [Brightness.light, Brightness.dark]) {
     testWidgets(
-      '120 drag/reversal frames keep exact finger deltas with persistent ${brightness.name} blur',
+      '120 drag/reversal frames keep exact finger deltas with ${brightness.name} blur unmounted',
       (tester) async {
         await mount(tester, brightness: brightness);
         scroll(tester).position.jumpTo(4500);
@@ -84,7 +84,8 @@ void main({Future<void> Function(WidgetTester, GlobalKey, String)? capture}) {
           tester.element(find.byType(ReaderEdgeBlur)),
           same(originalEdges),
         );
-        expect(find.byType(ProgressiveBlur), findsNWidgets(2));
+        // Design P0: hidden controls mount no blur layer while text scrolls.
+        expect(find.byType(ProgressiveBlur), findsNothing);
         if (capture != null) {
           await capture(
             tester,

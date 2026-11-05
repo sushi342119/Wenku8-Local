@@ -94,7 +94,14 @@ void main() {
         closeTo(p, .002),
       );
     }
+    // 标准 keeps the v1.7.1 1000ms flight; 轻 (default) shortens it to 560ms.
+    NovelMotion.standard = true;
     expect(NovelMotion.coverFlight.inMilliseconds * .42, 420);
+    NovelMotion.standard = false;
+    expect(NovelMotion.coverFlight, const Duration(milliseconds: 560));
+    expect(NovelMotion.coverReturn, const Duration(milliseconds: 460));
+    expect(NovelMotion.enter, const Duration(milliseconds: 320));
+    expect(NovelMotion.exit, const Duration(milliseconds: 240));
     expect(
       PaperCoverRectTween(
         begin: const Rect.fromLTWH(24, 360, 56, 76),

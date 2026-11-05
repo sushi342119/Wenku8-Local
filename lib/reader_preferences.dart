@@ -8,14 +8,31 @@ const maximumReaderFontSize = 27.0;
 
 enum ReaderPaper {
   system('跟随外观'),
+  // Legacy values: never offered again, still decoded and drawn unchanged.
   milk('奶白'),
   parchment('羊皮纸'),
   sage('浅苔'),
-  night('夜读');
+  night('夜读'),
+  // Design 2026-11 §3 papers (text contrast ≥ 7:1).
+  white('纯白'),
+  mist('雾灰'),
+  green('浅绿'),
+  sand('暖沙'),
+  oled('纯黑');
 
   const ReaderPaper(this.label);
   final String label;
+
+  /// Choices shown in the picker, in design order.
+  static const choices = [system, white, mist, green, sand, night, oled];
 }
+
+/// Warm-light overlay: 0–40 % maps to at most 0.18 alpha of #FF9A3C.
+const readerWarmthMax = .4;
+const readerWarmthColor = Color(0xFFFF9A3C);
+Color readerWarmthOverlay(double warmth) => readerWarmthColor.withValues(
+  alpha: (warmth.clamp(0.0, readerWarmthMax) / readerWarmthMax) * .18,
+);
 
 enum ReaderMode {
   scroll('上下滚动'),
@@ -137,6 +154,7 @@ class ReaderPreferences {
     this.backgroundImage,
     this.backgroundOpacity = .18,
     this.backgroundFit = BoxFit.cover,
+    this.warmth = 0,
   });
   final ReaderPaper paper;
   final double margin, paragraphGap, autoScrollSpeed;
@@ -167,6 +185,9 @@ class ReaderPreferences {
   final String? backgroundImage;
   final double backgroundOpacity;
   final BoxFit backgroundFit;
+
+  /// 0–[readerWarmthMax]; drawn as an overlay, never changes text layout.
+  final double warmth;
   String get layoutKey {
     final geometry =
         leftMargin == 26 &&
@@ -199,14 +220,44 @@ class ReaderPreferences {
     ReaderPaper.milk => const Color(0xFFF6F5EF),
     ReaderPaper.parchment => const Color(0xFFEDE2CA),
     ReaderPaper.sage => const Color(0xFFE4EBDD),
-    ReaderPaper.night => ArchiveDesign.darkBackground,
+    ReaderPaper.night => const Color(0xFF0E0F11),
+    ReaderPaper.white => const Color(0xFFFFFFFF),
+    ReaderPaper.mist => const Color(0xFFF2F3F5),
+    ReaderPaper.green => const Color(0xFFE7F0E6),
+    ReaderPaper.sand => const Color(0xFFF3ECDD),
+    ReaderPaper.oled => const Color(0xFF000000),
   };
-  Color controlForeground(bool dark) =>
-      paper == ReaderPaper.night || paper == ReaderPaper.system && dark
-      ? ArchiveDesign.darkInk
-      : const Color(0xFF30352F);
+
+  /// Solid control panel colour for each paper (design §3).
+  Color panel(bool dark) => switch (paper) {
+    ReaderPaper.white => const Color(0xFFF3F4F6),
+    ReaderPaper.mist => const Color(0xFFE6E8EB),
+    ReaderPaper.green => const Color(0xFFDAE6D9),
+    ReaderPaper.sand => const Color(0xFFE8DFCC),
+    ReaderPaper.night => const Color(0xFF1A1B1E),
+    ReaderPaper.oled => const Color(0xFF121314),
+    _ => Color.lerp(
+      background(dark),
+      controlForeground(dark),
+      darkPaper(dark) ? .08 : .05,
+    )!,
+  };
+  Color controlForeground(bool dark) => switch (paper) {
+    ReaderPaper.white => const Color(0xFF1F2125),
+    ReaderPaper.mist => const Color(0xFF23262B),
+    ReaderPaper.green => const Color(0xFF1F2A20),
+    ReaderPaper.sand => const Color(0xFF2B261C),
+    // Full-brightness ink; at the default 0.82 this lands on the design's
+    // #B9BCC2 (night) and #9EA2A8 (OLED).
+    ReaderPaper.night => const Color(0xFFE0E3E9),
+    ReaderPaper.oled => const Color(0xFFC1C6CD),
+    _ when darkPaper(dark) => ArchiveDesign.darkInk,
+    _ => const Color(0xFF30352F),
+  };
   bool darkPaper(bool dark) =>
-      paper == ReaderPaper.night || paper == ReaderPaper.system && dark;
+      paper == ReaderPaper.night ||
+      paper == ReaderPaper.oled ||
+      paper == ReaderPaper.system && dark;
   Color foreground(bool dark) => darkPaper(dark)
       ? Color.lerp(
           background(dark),
@@ -250,6 +301,7 @@ class ReaderPreferences {
     if (backgroundImage != null) 'backgroundImage': backgroundImage,
     'backgroundOpacity': backgroundOpacity,
     'backgroundFit': backgroundFit.name,
+    if (warmth != 0) 'warmth': warmth,
   };
   factory ReaderPreferences.fromJson(Map<String, dynamic> json) {
     double number(String key, double min, double max, double fallback) {
@@ -321,6 +373,7 @@ class ReaderPreferences {
       backgroundFit: (json['backgroundFit'] ?? 'cover') == 'contain'
           ? BoxFit.contain
           : BoxFit.cover,
+      warmth: number('warmth', 0, readerWarmthMax, 0),
       autoScrollSpeed: number('autoScrollSpeed', 8, 80, 24),
       mode: ReaderMode.values.byName(json['mode'] ?? 'scroll'),
       verticalLatinOrientation: ReaderVerticalLatinOrientation.values.byName(
@@ -382,6 +435,7 @@ class ReaderPreferences {
     bool clearBackground = false,
     double? backgroundOpacity,
     BoxFit? backgroundFit,
+    double? warmth,
   }) => ReaderPreferences(
     paper: paper ?? this.paper,
     margin: margin ?? this.margin,
@@ -420,6 +474,7 @@ class ReaderPreferences {
         : backgroundImage ?? this.backgroundImage,
     backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
     backgroundFit: backgroundFit ?? this.backgroundFit,
+    warmth: warmth ?? this.warmth,
   );
 
   /// A book can keep its typography while interaction and device settings
@@ -459,5 +514,6 @@ class ReaderPreferences {
     statusSideInset: statusSideInset,
     statusFontSize: statusFontSize,
     statusTopOffset: statusTopOffset,
+    warmth: warmth,
   );
 }

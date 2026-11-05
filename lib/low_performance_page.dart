@@ -45,8 +45,8 @@ class _LowPerformancePageState extends State<LowPerformancePage> {
                 ),
                 const Expanded(
                   child: ArchiveRouteTitle(
-                    title: '低性能设备模式',
-                    code: 'SYSTEM / PERFORMANCE',
+                    title: '自定义效果',
+                    code: 'APPEARANCE / CUSTOM',
                   ),
                 ),
               ],
@@ -64,10 +64,10 @@ class _LowPerformancePageState extends State<LowPerformancePage> {
               children: [
                 ContentPanel(
                   child: _option(
-                    title: '低性能设备模式',
+                    title: '在玻璃档位上进一步限制',
                     description: preferences.enabled
-                        ? '轻量预设已启用，可按需要保留下面的效果。'
-                        : '一键减少图形开销；关闭后恢复原来的外观。',
+                        ? '已启用：只保留下面开启的效果，其余按“关”处理。'
+                        : '关闭时完全按玻璃档位显示；开启后可逐项关闭效果。',
                     value: preferences.enabled,
                     switchKey: 'low-performance-mode',
                     onChanged: _saving

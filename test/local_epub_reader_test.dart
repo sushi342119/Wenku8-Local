@@ -699,13 +699,13 @@ void main() {
 
   test('EPUB 复用字号行距钳制和持久化', () async {
     await state.setTypography(fontSize: 100, lineHeight: 10);
-    expect(state.fontSize, 27);
+    expect(state.fontSize, 30);
     expect(state.lineHeight, 2.2);
     await state.setTypography(fontSize: 1, lineHeight: .1);
-    expect(state.fontSize, 15);
+    expect(state.fontSize, 14);
     expect(state.lineHeight, 1.3);
     final restored = await LibraryState.load();
-    expect(restored.fontSize, 15);
+    expect(restored.fontSize, 14);
     expect(restored.lineHeight, 1.3);
     restored.dispose();
   });

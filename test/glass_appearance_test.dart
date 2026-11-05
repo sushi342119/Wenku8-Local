@@ -295,6 +295,18 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('设置').last);
       await tester.pumpAndSettle();
+      // The v1.7.1 sliders now live under 外观与性能 → 高级.
+      final advanced = find.byKey(const ValueKey('glass-advanced-toggle'));
+      await tester.scrollUntilVisible(
+        advanced,
+        180,
+        scrollable: find.descendant(
+          of: find.byKey(const PageStorageKey('settings')),
+          matching: find.byType(Scrollable),
+        ),
+      );
+      await tester.tap(advanced);
+      await tester.pumpAndSettle();
       final blurFinder = find.byKey(const ValueKey('glass-blur-slider'));
       await tester.scrollUntilVisible(
         blurFinder,

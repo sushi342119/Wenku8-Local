@@ -196,7 +196,7 @@ void main({
   );
 
   testWidgets(
-    'focus reading hides controls but retains live edge blur without shifting paragraphs',
+    'focus reading hides controls and unmounts edge blur without shifting paragraphs',
     (tester) async {
       await reader(tester, brightness: Brightness.dark);
       _scroll(tester).position.jumpTo(900);

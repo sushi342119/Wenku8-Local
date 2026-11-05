@@ -48,6 +48,7 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
     this.onPicked,
     this.filterHeader,
     this.emptyState,
+    this.totalDuration = const Duration(milliseconds: 900),
   });
 
   final List<T> books;
@@ -66,6 +67,9 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 
   final Widget? filterHeader;
   final Widget? emptyState;
+
+  /// 900ms 快速 (default) or 2400ms 仪式.
+  final Duration totalDuration;
 
   @override
   State<ArchiveRandomPickCard<T>> createState() =>
@@ -88,9 +92,7 @@ class _ArchiveRandomPickCardState<T extends Object>
   Color get _shadow =>
       _dark ? const Color(0x40000000) : const Color(0x1439352F);
 
-  static const _durationMs = 2400;
-
-  // 时间轴：
+  // 仪式 (2400ms) 时间轴：
   //    0–280ms  第一次洗牌
   //  280–620ms  第二次洗牌
   // 620–1020ms  第三次洗牌
@@ -98,29 +100,31 @@ class _ArchiveRandomPickCardState<T extends Object>
   // 1380–1530ms 停顿 150ms
   // 1530–2180ms 翻面
   // 2180–2400ms 后卡淡出，结果卡归位
-  static const _shuffleIntervals = <Interval>[
-    Interval(0, 280 / _durationMs),
-    Interval(280 / _durationMs, 620 / _durationMs),
-    Interval(620 / _durationMs, 1020 / _durationMs),
+  //
+  // 快速 (900ms, default)：洗牌 400ms（3 × ~133ms），翻牌 500ms
+  // （抽出 100 · 翻面 300 · 归位 100），无停顿。
+  static const _ceremony = <int>[2400, 280, 620, 1020, 1380, 1530, 2180];
+  static const _quick = <int>[900, 130, 265, 400, 500, 500, 800];
+
+  List<int> get _timeline =>
+      widget.totalDuration.inMilliseconds <= 900 ? _quick : _ceremony;
+  int get _durationMs => _timeline[0];
+  double _t(int i) => _timeline[i] / _durationMs;
+
+  List<Interval> get _shuffleIntervals => [
+    Interval(0, _t(1)),
+    Interval(_t(1), _t(2)),
+    Interval(_t(2), _t(3)),
   ];
 
-  static const _liftInterval = Interval(
-    1020 / _durationMs,
-    1380 / _durationMs,
-    curve: Curves.easeInOutCubic,
-  );
+  Interval get _liftInterval =>
+      Interval(_t(3), _t(4), curve: Curves.easeInOutCubic);
 
-  static const _flipInterval = Interval(
-    1530 / _durationMs,
-    2180 / _durationMs,
-    curve: Curves.easeInOutCubic,
-  );
+  Interval get _flipInterval =>
+      Interval(_t(5), _t(6), curve: Curves.easeInOutCubic);
 
-  static const _finishInterval = Interval(
-    2180 / _durationMs,
-    1,
-    curve: Curves.easeInOutCubic,
-  );
+  Interval get _finishInterval =>
+      Interval(_t(6), 1, curve: Curves.easeInOutCubic);
 
   final math.Random _random = math.Random();
 
@@ -143,7 +147,7 @@ class _ArchiveRandomPickCardState<T extends Object>
 
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: _durationMs),
+      duration: Duration(milliseconds: _durationMs),
     )..addStatusListener(_handleAnimationStatus);
 
     _captureSnapshot();
@@ -574,7 +578,7 @@ class _ArchiveRandomPickCardState<T extends Object>
           }
         }
 
-        final shuffleFinished = time >= 1020 / _durationMs;
+        final shuffleFinished = time >= _t(3);
         final lift = _liftInterval.transform(time);
         final flip = _flipInterval.transform(time);
         final finish = _finishInterval.transform(time);
