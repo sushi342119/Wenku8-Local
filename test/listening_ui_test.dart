@@ -517,7 +517,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(control('reader-listening-entry'));
       await tester.pumpAndSettle();
-      expect(find.text('听书'), findsOneWidget);
+      // The bottom action bar captions its button 听书 as well.
+      expect(
+        find.descendant(
+          of: find.byType(ListeningPanel),
+          matching: find.text('听书'),
+        ),
+        findsOneWidget,
+      );
       await tester.tap(control('listening-play-pause'));
       await tester.pumpAndSettle();
       for (var i = 0; i < 8; i++) {

@@ -305,6 +305,8 @@ void main() {
           matching: find.byType(Scrollable),
         ),
       );
+      // ensureVisible's jump is laid out on the next frame; tap after it.
+      await tester.pumpAndSettle();
       await tester.tap(advanced);
       await tester.pumpAndSettle();
       final blurFinder = find.byKey(const ValueKey('glass-blur-slider'));

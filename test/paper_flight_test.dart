@@ -160,10 +160,12 @@ void main() {
     final initial = render.debugMeshDraws;
     clock.forward();
     await tester.pump();
-    for (var i = 0; i < 120; i++) {
+    // 轻 (default) flight is 560ms: one mesh paint per 120 Hz tick.
+    final ticks = (NovelMotion.coverFlight.inMicroseconds / 8334).ceil();
+    for (var i = 0; i < ticks; i++) {
       await tester.pump(const Duration(microseconds: 8334));
     }
-    expect(render.debugMeshDraws - initial, inInclusiveRange(120, 121));
+    expect(render.debugMeshDraws - initial, inInclusiveRange(ticks, ticks + 1));
     expect(render.debugChildPaints, 0);
     expect(builds, 1);
     expect(clock.value, 1);
@@ -194,7 +196,10 @@ void main() {
       expect(bend.debugMeshDraws, greaterThan(0));
       expect(bend.debugChildPaints, lessThanOrEqualTo(1));
       expect(bend.progress, inExclusiveRange(0, 1));
-      expect(bend.progress, closeTo(.22, .005));
+      expect(
+        bend.progress,
+        closeTo(220 / NovelMotion.coverFlight.inMilliseconds, .005),
+      );
       await tester.pumpAndSettle();
       final landed = find.descendant(
         of: find.byType(DetailPage),

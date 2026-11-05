@@ -301,7 +301,8 @@ void main({
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('shelf-book-71')), findsOneWidget);
       await tester.enterText(find.byKey(const ValueKey('shelf-search')), '');
-      await tester.tap(find.text('全部'));
+      // The search-scope chip 全部 shares the label; open the status filter.
+      await tester.tap(find.byKey(const ValueKey('shelf-filter')));
       await tester.pumpAndSettle();
       await tester.tap(
         find.descendant(

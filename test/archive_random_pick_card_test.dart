@@ -226,7 +226,8 @@ void main() {
     await tester.pump();
     expect(picked, hasLength(1));
     await tester.pump(const Duration(milliseconds: 900));
-    await tester.pump();
+    // AnimationController 在超过时长的首帧派发 completed 状态。
+    await tester.pump(const Duration(microseconds: 1));
     // Animation done: the button is enabled again and the result shows.
     expect(find.text('抽阅中…'), findsNothing);
     expect(find.text(picked.single), findsWidgets);

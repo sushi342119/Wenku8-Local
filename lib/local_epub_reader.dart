@@ -575,12 +575,12 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       onPressed: _total == 0 ? null : _catalogue,
       unavailable: _total == 0 ? '本书没有目录' : null,
     ),
+    // Zero chapters: truly disabled (onPressed null), as in v1.7.1.
     ReaderAction(
       icon: CupertinoIcons.textformat_size,
       caption: '排版',
       label: '阅读设置',
       onPressed: _total == 0 ? null : _settings,
-      unavailable: _total == 0 ? '本书没有可排版的正文' : null,
     ),
     ReaderAction(
       key: const ValueKey('reader-appearance-entry'),
@@ -590,13 +590,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       onPressed: () =>
           showReaderAppearanceSheet(context, state: widget.state),
     ),
-    const ReaderAction(
-      key: ValueKey('reader-listening-entry'),
-      icon: CupertinoIcons.headphones,
-      caption: '听书',
-      label: '听书',
-      unavailable: 'EPUB 暂不支持听书：听书目前只接入了 TXT 正文的分段朗读',
-    ),
+    // No 听书 entry: EPUB listening is not wired, so it is not offered.
   ];
 
   Widget _readerScaffold(BuildContext context) {

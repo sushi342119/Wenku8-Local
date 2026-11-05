@@ -6550,6 +6550,10 @@ class _ReaderPageState extends State<ReaderPage>
         : _novel.chapters[_chapter];
     _layoutWidth = MediaQuery.sizeOf(context).width;
     _layoutFontId = widget.state.appFontId;
+    // Keep this State subscribed to the app theme: a global typeface switch
+    // must reach didChangeDependencies, which re-anchors and re-saves the
+    // position with the new font (the scaffold reads Theme in a Builder).
+    Theme.of(context);
     // Unified reader skeleton: paper theme, solid controls and warm light
     // apply below; sheets opened from this State keep the app theme.
     return ReaderPaperScope(
