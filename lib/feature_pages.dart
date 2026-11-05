@@ -87,7 +87,7 @@ class ArchiveFeaturePage extends StatelessWidget {
   const ArchiveFeaturePage({
     super.key,
     required this.title,
-    required this.code,
+    this.code = '',
     required this.child,
     this.actions = const [],
     this.canPop = true,

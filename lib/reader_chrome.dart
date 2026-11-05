@@ -91,7 +91,7 @@ class ReaderEdgeBlur extends StatelessWidget {
                     child: ProgressiveBlur(
                       maxSigma: blur * strength,
                       plateauHeight: top + topInset + headerExtent,
-                      shadeOpacity: DockLayout.topEdgeShadeOpacity * strength,
+                      shadeOpacity: 0,
                     ),
                   ),
                 if (!highContrast && blur == 0)

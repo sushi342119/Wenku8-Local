@@ -220,7 +220,7 @@ class ReaderPreferences {
     ReaderPaper.milk => const Color(0xFFF6F5EF),
     ReaderPaper.parchment => const Color(0xFFEDE2CA),
     ReaderPaper.sage => const Color(0xFFE4EBDD),
-    ReaderPaper.night => const Color(0xFF0E0F11),
+    ReaderPaper.night => const Color(0xFF0A0E17),
     ReaderPaper.white => const Color(0xFFFFFFFF),
     ReaderPaper.mist => const Color(0xFFF2F3F5),
     ReaderPaper.green => const Color(0xFFE7F0E6),
@@ -234,8 +234,8 @@ class ReaderPreferences {
     ReaderPaper.mist => const Color(0xFFE6E8EB),
     ReaderPaper.green => const Color(0xFFDAE6D9),
     ReaderPaper.sand => const Color(0xFFE8DFCC),
-    ReaderPaper.night => const Color(0xFF1A1B1E),
-    ReaderPaper.oled => const Color(0xFF121314),
+    ReaderPaper.night => const Color(0xFF121826),
+    ReaderPaper.oled => const Color(0xFF0D1119),
     _ => Color.lerp(
       background(dark),
       controlForeground(dark),
@@ -249,7 +249,7 @@ class ReaderPreferences {
     ReaderPaper.sand => const Color(0xFF2B261C),
     // Full-brightness ink; at the default 0.82 this lands on the design's
     // #B9BCC2 (night) and #9EA2A8 (OLED).
-    ReaderPaper.night => const Color(0xFFE0E3E9),
+    ReaderPaper.night => const Color(0xFFE2E8F4),
     ReaderPaper.oled => const Color(0xFFC1C6CD),
     _ when darkPaper(dark) => ArchiveDesign.darkInk,
     _ => const Color(0xFF30352F),

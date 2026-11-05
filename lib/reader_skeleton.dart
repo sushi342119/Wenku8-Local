@@ -8,7 +8,6 @@ import 'app_palette.dart';
 import 'app_ui.dart';
 import 'glass_palette.dart';
 import 'library_state.dart';
-import 'performance_preferences.dart';
 import 'reader_preferences.dart';
 
 /// Shared reading skeleton for TXT / EPUB / PDF (design 2026-11 §5.3).
@@ -57,12 +56,12 @@ ThemeData readerPaperTheme(ThemeData base, ReaderPreferences prefs) {
             extension is! AppTonalColors &&
             extension is! PageWash)
           extension,
-      // Solid reader panels take the paper's control-panel colour.
+      // Translucent reader controls take the paper's control-panel colour.
       GlassPalette(tint: panel, thumb: dark ? control : Colors.white),
       if (tonal != null)
         tonal.copyWith(
           milk: panel,
-          darkMilk: panel,
+          darkMilk: dark ? control : panel,
           glassSurface: panel,
           thumb: dark ? control : Colors.white,
           action: control,
@@ -71,31 +70,18 @@ ThemeData readerPaperTheme(ThemeData base, ReaderPreferences prefs) {
   );
 }
 
-/// Glass refraction and backdrop blur are off for the whole reader; other
-/// effect switches (motion, edge blur ≤ σ4) are inherited unchanged.
+/// Reader scope inherits the parent performance/glass configuration so the
+/// bottom dock and progress bar stay translucent rather than turning into
+/// an opaque black board.
 class ReaderSolidScope extends StatelessWidget {
   const ReaderSolidScope({super.key, required this.child});
   final Widget child;
 
   @override
-  Widget build(BuildContext context) {
-    final parent = PerformanceScope.of(context);
-    final effects = {
-      for (final effect in PerformanceEffect.values)
-        if (effect != PerformanceEffect.glass &&
-            effect != PerformanceEffect.blur &&
-            parent.allows(effect))
-          effect,
-    };
-    return PerformanceScope(
-      preferences: PerformancePreferences(enabled: true, effects: effects),
-      explicitReduceMotion: PerformanceScope.reduceMotionOf(context),
-      child: child,
-    );
-  }
+  Widget build(BuildContext context) => child;
 }
 
-/// Paper theme + solid controls + warm-light overlay for one reader.
+/// Paper theme + warm-light overlay for one reader.
 class ReaderPaperScope extends StatefulWidget {
   const ReaderPaperScope({super.key, required this.state, required this.child});
   final LibraryState state;
@@ -216,7 +202,7 @@ class ReaderActionBar extends StatelessWidget {
   }
 }
 
-/// Solid bottom panel (radius 24): progress, optional navigation, actions.
+/// Transparent bottom panel: progress, optional navigation, actions.
 class ReaderBottomPanel extends StatelessWidget {
   const ReaderBottomPanel({
     super.key,
@@ -229,43 +215,21 @@ class ReaderBottomPanel extends StatelessWidget {
   final List<ReaderAction> actions;
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final dark = theme.brightness == Brightness.dark;
-    final color =
-        theme.extension<GlassPalette>()?.tint ??
-        theme.colorScheme.surfaceContainerLow;
-    return DecoratedBox(
-      key: const ValueKey('reader-bottom-panel'),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(ArchiveDesign.sheetRadius),
-        border: dark
-            ? Border.all(color: Colors.white.withValues(alpha: .08))
-            : null,
-        boxShadow: dark
-            ? null
-            : const [
-                BoxShadow(
-                  color: Color(0x1F101828),
-                  blurRadius: 32,
-                  offset: Offset(0, 12),
-                ),
-              ],
+  Widget build(BuildContext context) => DecoratedBox(
+    key: const ValueKey('reader-bottom-panel'),
+    decoration: const BoxDecoration(color: Colors.transparent),
+    child: Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ?progress,
+          ?navigation,
+          ReaderActionBar(actions: actions),
+        ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ?progress,
-            ?navigation,
-            ReaderActionBar(actions: actions),
-          ],
-        ),
-      ),
-    );
-  }
+    ),
+  );
 }
 
 /// 11sp status line shown while the controls are hidden.
@@ -379,7 +343,7 @@ class _ReaderAppearancePanelState extends State<ReaderAppearancePanel> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const ArchiveSection(title: '亮度与纸色', code: 'READER / PAPER'),
+            const ArchiveSection(title: '亮度与纸色'),
             const SizedBox(height: 4),
             Text('与“设置 → 阅读偏好”是同一份设置，任一处修改都会同步。', style: muted),
             const SizedBox(height: 14),

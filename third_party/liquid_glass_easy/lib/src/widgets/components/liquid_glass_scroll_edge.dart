@@ -295,12 +295,14 @@ class _LiquidGlassScrollEdgeState extends State<LiquidGlassScrollEdge>
   /// Both styles share the tint — they differ only in how the backdrop
   /// blur is layered underneath it.
   Widget _buildStyled(BuildContext context, Color fade, bool top) {
+    final Color effectiveFade = top ? fade : Colors.transparent;
     final Widget tint = DecoratedBox(
-      decoration:
-          BoxDecoration(gradient: _rampGradient(fade, top, widget.curve)),
+      decoration: BoxDecoration(
+        gradient: _rampGradient(effectiveFade, top, widget.curve),
+      ),
     );
 
-    if (widget.blur <= 0) return tint;
+    if (widget.blur <= 0 || !top) return tint;
 
     return Stack(
       fit: StackFit.expand,

@@ -28,7 +28,8 @@ void main() {
       );
     }
     expect(ArchiveDesign.fileCode(42), 'WK-00042');
-    expect(ArchiveDesign.fileCode(123456), 'WK-123456');
+    expect(ArchiveDesign.fileCode(123456), 'WK-23456');
+    expect(ArchiveDesign.fileCode(0x40000001), 'LC-00001');
   });
 
   for (final brightness in Brightness.values) {
@@ -56,7 +57,6 @@ void main() {
                       const Expanded(
                         child: ArchiveMasthead(
                           title: '书屿',
-                          code: 'WENKU8 / READING ARCHIVE',
                           brand: true,
                         ),
                       ),
@@ -72,7 +72,6 @@ void main() {
                     children: const [
                       ArchiveSection(
                         title: '简介',
-                        code: '01 / SYNOPSIS',
                         subtitle: '清晰的阅读与档案信息',
                       ),
                       SizedBox(height: 16),
@@ -198,13 +197,13 @@ void main() {
       find.text('01 / ${demoNovels.take(5).length.toString().padLeft(2, '0')}'),
       findsOneWidget,
     );
-    expect(find.text('WENKU8 / READING ARCHIVE'), findsOneWidget);
+    expect(find.text('WENKU8 / READING ARCHIVE'), findsNothing);
     expect(find.byType(ArchiveBackdrop), findsOneWidget);
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('dock-tab-1'))),
     );
     await tester.pumpAndSettle();
-    expect(find.text('02 / PERSONAL ARCHIVE'), findsOneWidget);
+    expect(find.text('02 / PERSONAL ARCHIVE'), findsNothing);
     expect(find.byType(ArchiveBackdrop), findsOneWidget);
     await tester.tapAt(
       tester.getCenter(find.byKey(const ValueKey('dock-tab-0'))),
@@ -215,7 +214,7 @@ void main() {
     expect(find.byKey(const ValueKey('expanded-search-input')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('inline-search-close')));
     await tester.pumpAndSettle();
-    expect(find.text('WENKU8 / READING ARCHIVE'), findsOneWidget);
+    expect(find.text('WENKU8 / READING ARCHIVE'), findsNothing);
     expect(tester.takeException(), isNull);
     expect(tester.binding.transientCallbackCount, 0);
     await tester.pumpWidget(const SizedBox.shrink());

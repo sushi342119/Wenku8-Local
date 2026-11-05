@@ -81,16 +81,16 @@ class _ArchiveRandomPickCardState<T extends Object>
     with SingleTickerProviderStateMixin {
   bool get _dark => Theme.of(context).brightness == Brightness.dark;
   Color get _paper =>
-      _dark ? const Color(0xFF1E211F) : const Color(0xFFFAF7F0);
-  Color get _ink => _dark ? const Color(0xFFE8E2D6) : const Color(0xFF39352F);
+      _dark ? const Color(0xFF121826) : const Color(0xFFFAF7F0);
+  Color get _ink => _dark ? const Color(0xFFF3F6FC) : const Color(0xFF39352F);
   Color get _muted =>
-      _dark ? const Color(0xFF9A917F) : const Color(0xFF6E665A);
+      _dark ? const Color(0xFF9BA8C2) : const Color(0xFF6E665A);
   Color get _border =>
-      _dark ? const Color(0xFF3A352C) : const Color(0xFFDCD4C6);
+      _dark ? const Color(0xFF28344E) : const Color(0xFFDCD4C6);
   Color get _accent =>
-      _dark ? const Color(0xFFB89B6E) : const Color(0xFF715B42);
+      _dark ? const Color(0xFF818CF8) : const Color(0xFF715B42);
   Color get _shadow =>
-      _dark ? const Color(0x40000000) : const Color(0x1439352F);
+      _dark ? const Color(0x52000000) : const Color(0x1439352F);
 
   // 仪式 (2400ms) 时间轴：
   //    0–280ms  第一次洗牌

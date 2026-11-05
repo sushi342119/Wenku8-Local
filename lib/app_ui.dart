@@ -179,23 +179,36 @@ ThemeData novelTheme(
     seedColor: accent,
     brightness: brightness,
     dynamicSchemeVariant: DynamicSchemeVariant.monochrome,
-    primary: dark ? Colors.white : ink,
-    onPrimary: dark ? ink : Colors.white,
+    primary: dark ? const Color(0xFF818CF8) : ink,
+    onPrimary: dark ? ArchiveDesign.darkBackground : Colors.white,
+    secondary: dark ? const Color(0xFF2DD4BF) : accent,
+    onSecondary: dark ? ArchiveDesign.darkBackground : Colors.white,
     surface: dark ? ArchiveDesign.darkSurface : ArchiveDesign.surface,
     onSurface: dark ? ArchiveDesign.darkInk : ink,
     onSurfaceVariant: dark ? ArchiveDesign.darkMuted : const Color(0xFF646B62),
   );
   late final classicScheme = dark
       ? baseScheme.copyWith(
+          primary: const Color(0xFF818CF8),
+          onPrimary: ArchiveDesign.darkBackground,
+          primaryContainer: const Color(0xFF1E2942),
+          onPrimaryContainer: const Color(0xFFE0E7FF),
+          secondary: const Color(0xFF2DD4BF),
+          onSecondary: ArchiveDesign.darkBackground,
+          secondaryContainer: const Color(0xFF152E32),
+          onSecondaryContainer: const Color(0xFFCCFBF1),
+          tertiary: const Color(0xFFF59E0B),
           surfaceDim: ArchiveDesign.darkBackground,
           surfaceBright: ArchiveDesign.darkRaisedHigh,
           surfaceContainerLowest: ArchiveDesign.darkBackground,
           surfaceContainerLow: ArchiveDesign.darkSurface,
           surfaceContainer: ArchiveDesign.darkRaised,
-          surfaceContainerHigh: const Color(0xFF333333),
+          surfaceContainerHigh: const Color(0xFF1C263B),
           surfaceContainerHighest: ArchiveDesign.darkRaisedHigh,
-          outline: const Color(0xFF7A7A7A),
+          outline: const Color(0xFF47587A),
           outlineVariant: ArchiveDesign.darkOutline,
+          inverseSurface: ArchiveDesign.darkInk,
+          onInverseSurface: ArchiveDesign.darkBackground,
           surfaceTint: Colors.transparent,
         )
       : baseScheme;
@@ -221,7 +234,7 @@ ThemeData novelTheme(
         : scheme.surface,
     extensions: [
       vivid
-          // Page wash uses the design background (#F4F5F7 / #111214).
+          // Page wash uses the design background (#F4F5F7 / #0A0E17).
           ? AppTonalColors.forScheme(
               scheme,
               original: false,
@@ -239,20 +252,20 @@ ThemeData novelTheme(
     textTheme: ThemeData(brightness: brightness).textTheme.apply(
       fontFamily: fontFamily,
       fontFamilyFallback: fontFamilyFallback,
-      bodyColor: original ? (dark ? Colors.white : ink) : scheme.onSurface,
-      displayColor: original ? (dark ? Colors.white : ink) : scheme.onSurface,
+      bodyColor: original ? (dark ? ArchiveDesign.darkInk : ink) : scheme.onSurface,
+      displayColor: original ? (dark ? ArchiveDesign.darkInk : ink) : scheme.onSurface,
     ),
     dividerColor: original
-        ? (dark ? const Color(0xFF353C35) : hairline)
+        ? (dark ? ArchiveDesign.darkOutline : hairline)
         : scheme.outlineVariant,
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
-      fillColor: scheme.surface,
+      fillColor: dark ? ArchiveDesign.darkRaised : scheme.surface,
       border: OutlineInputBorder(
         borderRadius: BorderRadius.circular(ArchiveDesign.panelRadius),
         borderSide: BorderSide(
           color: original
-              ? (dark ? const Color(0xFF353C35) : hairline)
+              ? (dark ? ArchiveDesign.darkOutline : hairline)
               : scheme.outlineVariant,
         ),
       ),
@@ -470,10 +483,11 @@ class Atmosphere extends StatelessWidget {
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
           colors: switch (Theme.of(context).extension<PageWash>()) {
-            final wash? => [wash.color, wash.color],
+            final wash? when !dark => [wash.color, wash.color],
             _ when dark => [
               ArchiveDesign.darkBackground,
-              const Color(0xFF171B17),
+              const Color(0xFF0E1525),
+              const Color(0xFF131C30),
             ],
             _ => [ArchiveDesign.surface, ArchiveDesign.background],
           },
@@ -699,6 +713,7 @@ class DockUnderlay extends StatelessWidget {
         child: ProgressiveBlur(
           maxSigma: (blur * .16).clamp(0, 3.2),
           plateauHeight: DockLayout.bottomPaddingOf(context, viewPadding: true),
+          shadeOpacity: 0,
           fromBottom: true,
         ),
       ),
@@ -1449,23 +1464,7 @@ class GlassTextButton extends StatelessWidget {
 }
 
 Widget sectionHeader(BuildContext context, String title, String subtitle) =>
-    ArchiveSection(
-      title: title,
-      subtitle: subtitle,
-      code: switch (title) {
-        '更多书籍' => '02 / ARCHIVE INDEX',
-        '简介' => '01 / SYNOPSIS',
-        '目录' => '02 / CONTENTS',
-        '使用方式' => '00 / READING MODE',
-        '阅读偏好' => '01 / READING PROFILE',
-        '阅读记录' || '最近阅读' => '02 / READING LOG',
-        '离线阅读' => '03 / LOCAL ARCHIVE',
-        '玻璃外观' => '04 / OPTICAL SURFACE',
-        '本地数据' => '05 / DATA MANAGEMENT',
-        '性能诊断' => '06 / DIAGNOSTICS',
-        _ => '01 / CATALOG',
-      },
-    );
+    ArchiveSection(title: title, subtitle: subtitle);
 
 class ContentPanel extends StatefulWidget {
   const ContentPanel({
@@ -1495,6 +1494,8 @@ class _ContentPanelState extends State<ContentPanel> {
   @override
   Widget build(BuildContext context) {
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final theme = Theme.of(context);
+    final dark = theme.brightness == Brightness.dark;
     return AnimatedScale(
       scale: _pressed && !reduceMotion ? .975 : 1,
       duration: reduceMotion
@@ -1503,32 +1504,51 @@ class _ContentPanelState extends State<ContentPanel> {
           ? NovelMotion.contact
           : NovelMotion.enter,
       curve: NovelMotion.settle,
-      child: Material(
-        color: widget.backgroundColor ?? Theme.of(context).colorScheme.surface,
-        shape: RoundedRectangleBorder(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(widget.radius),
-          side: BorderSide(color: Theme.of(context).dividerColor, width: .7),
+          boxShadow: dark
+              ? [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: .36),
+                    blurRadius: 18,
+                    offset: const Offset(0, 6),
+                  ),
+                ]
+              : null,
         ),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          enableFeedback: false,
-          onTap: widget.onTap == null
-              ? null
-              : () {
-                  AppHaptics.play(context, widget.haptic);
-                  setState(() => _iconActivation++);
-                  widget.onTap!();
-                },
-          onHighlightChanged: widget.onTap == null
-              ? null
-              : (pressed) => setState(() => _pressed = pressed),
-          splashFactory: NoSplash.splashFactory,
-          highlightColor: Colors.transparent,
-          child: ArchiveIconContact(
-            pressed: _pressed,
-            activation: _iconActivation,
-            child: ArchiveRegistration(
-              child: Padding(padding: widget.padding, child: widget.child),
+        child: Material(
+          color: widget.backgroundColor ?? theme.colorScheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(widget.radius),
+            side: BorderSide(
+              color: dark
+                  ? theme.colorScheme.primary.withValues(alpha: .16)
+                  : theme.dividerColor,
+              width: dark ? .85 : .7,
+            ),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            enableFeedback: false,
+            onTap: widget.onTap == null
+                ? null
+                : () {
+                    AppHaptics.play(context, widget.haptic);
+                    setState(() => _iconActivation++);
+                    widget.onTap!();
+                  },
+            onHighlightChanged: widget.onTap == null
+                ? null
+                : (pressed) => setState(() => _pressed = pressed),
+            splashFactory: NoSplash.splashFactory,
+            highlightColor: Colors.transparent,
+            child: ArchiveIconContact(
+              pressed: _pressed,
+              activation: _iconActivation,
+              child: ArchiveRegistration(
+                child: Padding(padding: widget.padding, child: widget.child),
+              ),
             ),
           ),
         ),
@@ -1831,7 +1851,7 @@ class CoverGlow extends StatelessWidget {
       return const SizedBox.shrink();
     }
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final background = dark ? const Color(0xFF101010) : Colors.white;
+    final background = dark ? ArchiveDesign.darkBackground : Colors.white;
     return FutureBuilder(
       future: LegacyCover.bytes(novel.id, url: novel.coverUrl),
       builder: (context, snapshot) {

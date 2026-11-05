@@ -133,23 +133,23 @@ class SystemTonalColors {
 /// Design 2026-11 §3 colours: the blue second version of "原版".
 abstract final class VividPalette {
   static const primary = Color(0xFF3B5BFD);
-  static const primaryDark = Color(0xFF7C93FF);
+  static const primaryDark = Color(0xFF818CF8);
   static const accent = Color(0xFF00B3A4);
   static const accentDark = Color(0xFF2DD4BF);
   static const danger = Color(0xFFE5484D);
   static const dangerDark = Color(0xFFFF6369);
   static const background = Color(0xFFF4F5F7);
-  static const backgroundDark = Color(0xFF111214);
+  static const backgroundDark = Color(0xFF0A0E17);
   static const surface = Color(0xFFFFFFFF);
-  static const surfaceDark = Color(0xFF1B1C1F);
+  static const surfaceDark = Color(0xFF121826);
   static const raised = Color(0xFFF9FAFB);
-  static const raisedDark = Color(0xFF25272B);
+  static const raisedDark = Color(0xFF182032);
   static const ink = Color(0xFF16181D);
-  static const inkDark = Color(0xFFEDEEF0);
+  static const inkDark = Color(0xFFF3F6FC);
   static const muted = Color(0xFF5E6470);
-  static const mutedDark = Color(0xFF9BA1AC);
+  static const mutedDark = Color(0xFF9BA8C2);
   static const divider = Color(0xFFE3E5E9);
-  static const dividerDark = Color(0xFF2E3035);
+  static const dividerDark = Color(0xFF243048);
 
   static ColorScheme scheme(Brightness brightness) {
     final dark = brightness == Brightness.dark;
@@ -238,7 +238,7 @@ class AppTonalColors extends ThemeExtension<AppTonalColors> {
     return AppTonalColors(
       pageStart: original
           ? (dark ? ArchiveDesign.darkBackground : ArchiveDesign.surface)
-          : s.surface,
+          : (dark ? s.surfaceContainerLowest : s.surface),
       pageEnd: original
           ? (dark ? ArchiveDesign.darkSurface : ArchiveDesign.background)
           : s.surfaceContainerLow,
@@ -250,19 +250,21 @@ class AppTonalColors extends ThemeExtension<AppTonalColors> {
           ? ArchiveDesign.darkSurface
           : s.surfaceContainerLow,
       active: original
-          ? Color.lerp(s.onSurface, s.surface, dark ? .46 : .48)!
+          ? (dark
+                ? Color.lerp(s.primary, s.surface, .32)!
+                : Color.lerp(s.onSurface, s.surface, .48)!)
           : dark
           ? Color.lerp(s.surface, s.primary, .62)!
           : s.primary,
       track: original
-          ? Color.lerp(s.surface, s.onSurface, dark ? .16 : .10)!
+          ? Color.lerp(s.surface, s.onSurface, dark ? .18 : .10)!
           : s.surfaceContainerHighest,
       thumb: original
-          ? ArchiveDesign.milk
+          ? (dark ? ArchiveDesign.darkMilk : ArchiveDesign.milk)
           : dark
           ? s.onSurface
           : s.surfaceContainerLowest,
-      action: original ? s.onSurface : s.primary,
+      action: original ? (dark ? s.primary : s.onSurface) : s.primary,
     );
   }
   Color tint(Brightness brightness, double opacity) =>

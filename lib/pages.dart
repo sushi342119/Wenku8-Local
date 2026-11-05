@@ -586,7 +586,6 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
                   alignment: Alignment.centerLeft,
                   child: const ArchiveMasthead(
                     title: '书屿',
-                    code: 'WENKU8 / READING ARCHIVE',
                     brand: true,
                   ),
                 ),
@@ -718,7 +717,6 @@ class DiscoverPage extends StatefulWidget {
       const Expanded(
         child: ArchiveMasthead(
           title: '书屿',
-          code: 'WENKU8 / READING ARCHIVE',
           brand: true,
         ),
       ),
@@ -1481,11 +1479,8 @@ class ShelfPage extends StatefulWidget {
 
   Widget buildHeader(BuildContext context) => Row(
     children: [
-      Expanded(
-        child: const ArchiveMasthead(
-          title: '书架',
-          code: '02 / PERSONAL ARCHIVE',
-        ),
+      const Expanded(
+        child: ArchiveMasthead(title: '书架'),
       ),
       GlassIconButton(
         icon: CupertinoIcons.clock,
@@ -2924,7 +2919,7 @@ class SettingsPage extends StatelessWidget {
 
   Widget buildHeader(BuildContext context) => Align(
     alignment: Alignment.centerLeft,
-    child: const ArchiveMasthead(title: '设置', code: '03 / SYSTEM PROFILE'),
+    child: const ArchiveMasthead(title: '设置'),
   );
 
   @override
@@ -3447,10 +3442,12 @@ class SettingsPage extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
         decoration: BoxDecoration(
-          color: scheme.primary.withValues(alpha: dark ? 0.09 : 0.055),
+          color: dark
+              ? ArchiveDesign.darkRaised.withValues(alpha: 0.92)
+              : scheme.primary.withValues(alpha: 0.055),
           borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: scheme.primary.withValues(alpha: dark ? 0.20 : 0.12),
+            color: scheme.primary.withValues(alpha: dark ? 0.24 : 0.12),
             width: 0.8,
           ),
         ),
@@ -5621,19 +5618,10 @@ class _ReaderPageState extends State<ReaderPage>
     return (_scroll.offset / max).clamp(0.0, 1.0);
   }
 
-  /// 全书进度（0~1）：前面章节权重 + 当前章权重 × 章内比例。
+  /// 当前章节进度（0~1）。
   double _bookProgress() {
-    if (_totalWeight <= 0 || _chapterWeights.isEmpty) return 0;
-    final before = _chapter < _chapterPrefix.length
-        ? _chapterPrefix[_chapter]
-        : _totalWeight;
-    final current = _chapter < _chapterWeights.length
-        ? _chapterWeights[_chapter]
-        : 0;
-    return ((before + current * _chapterScrollRatio) / _totalWeight).clamp(
-      0.0,
-      1.0,
-    );
+    if (_novel.chapters.isEmpty) return 0;
+    return _chapterScrollRatio.clamp(0.0, 1.0);
   }
 
   /// 滚动时更新进度条（拖动中不跟随，避免打架）。
@@ -5645,70 +5633,29 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  /// 进度条是否显示：多章，或单章可滚动时显示。
+  /// 进度条是否显示：多章，或单章可滚动/多页时显示。
   bool get _showProgressBar {
     if (_novel.chapters.length > 1) return true;
+    if (_paginated) return _paged.pageCount > 1;
     return _scroll.hasClients && _scroll.position.maxScrollExtent > 0;
   }
 
-  /// 把全书进度换算为目标章节和章内比例。
+  /// 把当前章进度换算为当前章节和章内比例。
   ({int chapter, double ratio}) _progressToTarget(double progress) {
-    if (_chapterWeights.isEmpty || _totalWeight <= 0) {
+    if (_novel.chapters.isEmpty) {
       return (chapter: 0, ratio: 0);
     }
-    var target = (progress * _totalWeight).clamp(0, _totalWeight.toDouble());
-    for (var i = 0; i < _chapterWeights.length; i++) {
-      final w = _chapterWeights[i];
-      if (target <= w || i == _chapterWeights.length - 1) {
-        final ratio = w > 0 ? (target / w).clamp(0.0, 1.0) : 0.0;
-        return (chapter: i, ratio: ratio);
-      }
-      target -= w;
-    }
-    return (chapter: _chapterWeights.length - 1, ratio: 1);
+    final current = _chapter.clamp(0, _novel.chapters.length - 1);
+    return (chapter: current, ratio: progress.clamp(0.0, 1.0));
   }
 
-  /// 拖动结束：跳转到目标位置。
+  /// 拖动结束：跳转到当前章节目标位置。
   Future<void> _jumpToProgress(double progress) async {
     final target = _progressToTarget(progress);
-    if (target.chapter != _chapter) {
-      _go(target.chapter);
-      // 等新章节布局完成后再滚动：用 postFrame 回调链等待有内容尺寸。
-      // 每次重试前 scheduleFrame 确保下一帧会被调度，避免回调链 stall；
-      // 另有独立 Timer 兜底：应用暂停、无帧可调度时也能结束等待，
-      // 不依赖"回调里检查 DateTime"这条本身就需要帧的路径。
-      // Stopwatch 而非 DateTime，避免系统时间调整影响。
-      final done = Completer<void>();
-      final stopwatch = Stopwatch()..start();
-      final watchdog = Timer(const Duration(seconds: 2), () {
-        if (!done.isCompleted) done.complete();
-      });
-      void waitForLayout() {
-        if (done.isCompleted) return;
-        if (!mounted || stopwatch.elapsed >= const Duration(seconds: 2)) {
-          if (!done.isCompleted) done.complete();
-          return;
-        }
-        if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
-          done.complete();
-          return;
-        }
-        // 确保下一帧被调度，否则回调链可能停住。
-        SchedulerBinding.instance.scheduleFrame();
-        WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
-      }
-
-      WidgetsBinding.instance.addPostFrameCallback((_) => waitForLayout());
-      try {
-        await done.future;
-      } finally {
-        watchdog.cancel();
-        stopwatch.stop();
-      }
-    }
     if (!mounted) return;
-    // 超时/卸载也会结束等待，此时布局可能仍不可用，必须再检查。
-    if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
+    if (_paginated) {
+      _paged.seek(target.ratio);
+    } else if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
       final max = _scroll.position.maxScrollExtent;
       if (max > 0) {
         _scroll.jumpTo((target.ratio * max).clamp(0.0, max));
@@ -5720,7 +5667,7 @@ class _ReaderPageState extends State<ReaderPage>
   /// 拖动预览文字：第 N 章 · X%。
   String _dragPreviewText(double progress) {
     final target = _progressToTarget(progress);
-    final pct = (progress * 100).round();
+    final pct = (target.ratio * 100).round();
     return '${isLocalNovelId(_novel.id) ? '目录项 ${target.chapter + 1}' : '第 ${target.chapter + 1} 章'} · $pct%';
   }
 
@@ -6634,7 +6581,9 @@ class _ReaderPageState extends State<ReaderPage>
               ),
             ),
             // Mounted only while controls show (strength 0 builds nothing).
-            Positioned.fill(child: ReaderEdgeBlur(animation: _chrome)),
+            Positioned.fill(
+              child: ReaderEdgeBlur(animation: _chrome),
+            ),
             Positioned(
               top: 0,
               left: 0,
@@ -6656,7 +6605,7 @@ class _ReaderPageState extends State<ReaderPage>
                       Expanded(
                         child: ArchiveRouteTitle(
                           title: _novel.title,
-                          code: 'READ / ${ArchiveDesign.fileCode(_novel.id)}',
+                          code: ArchiveDesign.fileCode(_novel.id),
                         ),
                       ),
                       GlassIconButton(

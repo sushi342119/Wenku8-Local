@@ -448,7 +448,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               // Solid physical faces occlude other files; milk comes from shading,
               // not alpha that lets readable rear text bleed through the surface.
               backgroundColor: dark
-                  ? const Color(0xFF2D332D)
+                  ? const Color(0xFF1A2338)
                   : const Color(0xFFF2F0E9),
               onTap: tap,
               child: MediaQuery.withNoTextScaling(
@@ -491,7 +491,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               radius: 0,
               padding: const EdgeInsets.fromLTRB(10, 9, 10, 8),
               backgroundColor: dark
-                  ? const Color(0xFF292F29)
+                  ? const Color(0xFF151D2F)
                   : ArchiveDesign.milk,
               onTap: tap,
               child: Column(
@@ -1411,7 +1411,7 @@ class ArchiveBoxDepthRender extends RenderBox
       Paint()
         ..shader = LinearGradient(
           colors: _dark
-              ? [const Color(0xFF41473D), const Color(0xFF2D332C)]
+              ? [const Color(0xFF25324E), const Color(0xFF1A2338)]
               : [const Color(0xFFE3DFD3), ArchiveDesign.milk],
         ).createShader(top.getBounds()),
     );
@@ -1420,7 +1420,7 @@ class ArchiveBoxDepthRender extends RenderBox
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = .4
-        ..color = (_dark ? ArchiveDesign.milk : const Color(0xFF9A927F))
+        ..color = (_dark ? ArchiveDesign.darkMilk : const Color(0xFF9A927F))
             .withValues(alpha: .24),
     );
     _spineLayer.layer = context.pushTransform(

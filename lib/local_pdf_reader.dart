@@ -352,7 +352,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
                           Expanded(
                             child: ArchiveRouteTitle(
                               title: widget.novel.title,
-                              code: 'PDF / ${ArchiveDesign.fileCode(widget.novel.id)}',
+                              code: ArchiveDesign.fileCode(widget.novel.id),
                             ),
                           ),
                           GlassIconButton(

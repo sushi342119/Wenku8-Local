@@ -93,70 +93,25 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     return (_scroll.offset / max).clamp(0.0, 1.0);
   }
 
-  /// Display-only chapter weights (XHTML sizes); null = equal weights.
-  /// Saved positions keep chapter + in-chapter fraction exactly as before.
-  List<int>? _weights;
-
-  double _weight(int i) =>
-      _weights == null ? 1 : _weights![i].toDouble();
-
-  double _before(int chapter) {
-    var sum = 0.0;
-    for (var i = 0; i < chapter; i++) {
-      sum += _weight(i);
-    }
-    return sum;
-  }
-
-  double get _weightTotal => _before(_total);
-
-  /// 全书进度：按章节字数（XHTML 大小）加权；权重未就绪时每章按 1。
+  /// 当前章节进度（0~1）。
   double _bookProgress() {
     if (_total <= 0) return 0;
-    final total = _weightTotal;
-    if (total <= 0) return 0;
-    return ((_before(_chapter) + _weight(_chapter) * _chapterRatio) / total)
-        .clamp(0.0, 1.0);
+    return _chapterRatio.clamp(0.0, 1.0);
   }
 
-  double _chapterStart(int chapter) {
-    final total = _weightTotal;
-    return total <= 0 ? 0 : _before(chapter) / total;
-  }
+  double _chapterStart(int chapter) => 0.0;
 
-  /// 把全书进度换算为目标章节和章内比例（边界归前一章末尾，与 TXT 一致）。
+  /// 把当前章进度换算为当前章节和章内比例。
   ({int chapter, double ratio}) _progressToTarget(double progress) {
     if (_total <= 0) return (chapter: 0, ratio: 0);
-    var target = progress.clamp(0.0, 1.0) * _weightTotal;
-    for (var i = 0; i < _total; i++) {
-      final w = _weight(i);
-      if (target <= w || i == _total - 1) {
-        return (chapter: i, ratio: (w <= 0 ? 0.0 : target / w).clamp(0.0, 1.0));
-      }
-      target -= w;
-    }
-    return (chapter: _total - 1, ratio: 1);
-  }
-
-  Future<void> _loadWeights() async {
-    List<int>? weights;
-    try {
-      weights = await widget.local.epubChapterWeights(_novel.id);
-    } catch (_) {
-      return; // Keep equal weights; display only.
-    }
-    if (!mounted || weights == null || weights.length != _total) return;
-    _weights = weights;
-    _updateProgress();
+    return (chapter: _chapter, ratio: progress.clamp(0.0, 1.0));
   }
 
   /// 进度条是否显示：多章，或单章可滚动时显示。
   bool get _showProgressBar => _total > 1 || (_total == 1 && _singleScrollable);
 
-  String _dragPreviewText(double progress) {
-    final target = _progressToTarget(progress);
-    return '第 ${target.chapter + 1} 章 · ${(progress * 100).round()}%';
-  }
+  String _dragPreviewText(double progress) =>
+      '第 ${_chapter + 1} 章 · ${(progress.clamp(0.0, 1.0) * 100).round()}%';
 
   void _updateProgress() {
     if (_progressDragging || !mounted) return;
@@ -218,7 +173,6 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     }
     _scroll.addListener(_onScroll);
     _progressValue.value = _total == 0 ? 0 : _chapterStart(_chapter);
-    unawaited(_loadWeights());
     // 先读旧的章内位置；必须在恢复滚动之后才开始保存，否则旧位置被 0 覆盖。
     double? restoreRatio;
     final saved = widget.state.positionFor(_novel.id);
@@ -386,10 +340,9 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     _showChrome(true);
   }
 
-  /// 拖动结束：跳到目标章，待新章布局完成后按比例滚动。
+  /// 拖动结束：在当前章节内按比例滚动跳转。
   Future<void> _jumpToProgress(double progress) async {
     final target = _progressToTarget(progress);
-    if (target.chapter != _chapter) _goTo(target.chapter);
     final ticket = ++_jumpTicket;
     // 恢复进行中被进度条打断时，恢复的 finally 不会再设 tracking；
     // 此次跳转接管保存，否则之后滚动将一直不保存。
@@ -620,7 +573,9 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                 ),
               ),
             ),
-            Positioned.fill(child: ReaderEdgeBlur(animation: _chrome)),
+            Positioned.fill(
+              child: ReaderEdgeBlur(animation: _chrome),
+            ),
             Positioned(
               top: 0,
               left: 0,
@@ -642,7 +597,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                       Expanded(
                         child: ArchiveRouteTitle(
                           title: _novel.title,
-                          code: 'READ / ${ArchiveDesign.fileCode(_novel.id)}',
+                          code: ArchiveDesign.fileCode(_novel.id),
                         ),
                       ),
                       GlassIconButton(

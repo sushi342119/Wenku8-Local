@@ -218,7 +218,6 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     final books = widget.local.books;
     return ArchiveFeaturePage(
       title: '本地书库',
-      code: 'LOCAL / BOOK ARCHIVE',
       actions: [
         GlassIconButton(
           icon: CupertinoIcons.refresh,
