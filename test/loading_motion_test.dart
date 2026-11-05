@@ -53,6 +53,11 @@ void main() {
   ) async {
     SharedPreferences.setMockInitialValues({});
     final state = await LibraryState.load();
+    // The paragraph entrance is optional and off by default (design §4);
+    // turn it on to check its stagger.
+    await state.setReaderPreferences(
+      state.readerPreferences.copyWith(chapterEntrance: true),
+    );
     final repository = _PendingContent();
     await tester.pumpWidget(
       MaterialApp(
@@ -110,14 +115,16 @@ void main() {
     await tester.pump(
       NovelMotion.coverFlight - const Duration(milliseconds: 80),
     );
-    await tester.pump(const Duration(milliseconds: 100));
+    // Sample the reveal at the same fraction for 轻 (320ms) and 标准 (420ms).
+    Duration scaled(int ms) => NovelMotion.reveal * (ms / 420);
+    await tester.pump(scaled(100));
     final title = _revealProgress(tester, 'detail-title-reveal');
     final author = _revealProgress(tester, 'detail-author-reveal');
     final summary = _revealProgress(tester, 'detail-summary-reveal');
     expect(title, greaterThan(author));
     expect(author, greaterThan(summary));
     expect(summary, 0);
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pump(scaled(200));
     expect(
       _revealProgress(tester, 'detail-summary-reveal'),
       greaterThan(_revealProgress(tester, 'detail-directory-reveal')),

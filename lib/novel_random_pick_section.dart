@@ -8,6 +8,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'archive_random_pick_card.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
+import 'library_filter.dart';
+import 'ui_preferences.dart';
 
 /// 首页随机抽阅的标签筛选包装组件。
 /// 管理标签筛选及按书籍 ID 持久化的抽取次数。
@@ -16,10 +18,18 @@ class NovelRandomPickSection extends StatefulWidget {
     super.key,
     required this.books,
     required this.onOpenDetail,
+    this.matchMode = TagMatchMode.any,
+    this.pace = RandomPickPace.quick,
   });
 
   final List<Novel> books;
   final ValueChanged<Novel> onOpenDetail;
+
+  /// Shared with the shelf; OR stays the default like the old random pick.
+  final TagMatchMode matchMode;
+
+  /// 快速 900ms by default; 仪式 2400ms is optional.
+  final RandomPickPace pace;
 
   @override
   State<NovelRandomPickSection> createState() => _NovelRandomPickSectionState();
@@ -32,7 +42,8 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   static const _border = Color(0xFFDCD4C6);
   static const _accent = Color(0xFF715B42);
 
-  final Set<String> _selectedTagIds = {};
+  /// Same selection as the shelf and the carousel (LibraryFilter.shared).
+  Set<String> get _selectedTagIds => LibraryFilter.shared.tagIds;
   final TagStore _tagStore = TagStore.shared;
   final Map<int, int> _drawCounts = {};
   SharedPreferences? _preferences;
@@ -44,13 +55,19 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   void initState() {
     super.initState();
     _tagStore.addListener(_onTagsChanged);
+    LibraryFilter.shared.addListener(_onFilterChanged);
     unawaited(_loadDrawCounts());
   }
 
   @override
   void dispose() {
     _tagStore.removeListener(_onTagsChanged);
+    LibraryFilter.shared.removeListener(_onFilterChanged);
     super.dispose();
+  }
+
+  void _onFilterChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadDrawCounts() async {
@@ -127,33 +144,28 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   }
 
   void _onTagsChanged() {
-    final validIds = _tagStore.tags.map((t) => t.id).toSet();
-    setState(() {
-      _selectedTagIds.removeWhere((id) => !validIds.contains(id));
-    });
+    LibraryFilter.shared.prune(_tagStore);
+    if (mounted) setState(() {});
   }
 
   void _toggleTag(String tagId, bool selected) {
-    setState(() {
-      if (selected) {
-        _selectedTagIds.add(tagId);
-      } else {
-        _selectedTagIds.remove(tagId);
-      }
-    });
+    if (_selectedTagIds.contains(tagId) != selected) {
+      LibraryFilter.shared.toggleTag(tagId);
+    }
   }
 
-  void _clearFilter() {
-    setState(_selectedTagIds.clear);
-  }
+  void _clearFilter() => LibraryFilter.shared.setSingleTag(null);
 
   List<Novel> _filterBooks() {
     if (_selectedTagIds.isEmpty) return widget.books;
     return widget.books
-        .where((book) {
-          final bookTags = _tagStore.tagsForBook(book.id);
-          return bookTags.any((tag) => _selectedTagIds.contains(tag.id));
-        })
+        .where(
+          (book) => LibraryFilter.shared.matchesTags(
+            book.id,
+            widget.matchMode,
+            store: _tagStore,
+          ),
+        )
         .toList(growable: false);
   }
 
@@ -293,6 +305,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
         weightOf: _weightOf,
         onPicked: _recordPick,
         onOpenDetail: widget.onOpenDetail,
+        totalDuration: widget.pace.duration,
         filterHeader: _buildFilterHeader(candidates.length),
         emptyState: emptyState,
       ),

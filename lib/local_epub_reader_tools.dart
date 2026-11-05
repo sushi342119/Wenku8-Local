@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'app_ui.dart';
 import 'catalog.dart';
 import 'library_state.dart';
+import 'ui_preferences.dart' show readerFontSizeMin, readerFontSizeMax;
 import 'reader_tools.dart';
 
 class LocalEpubReaderTools extends StatefulWidget {
@@ -134,9 +135,9 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
       sliderKey: const ValueKey('reader-font-slider'),
       label: '字体大小',
       value: widget.state.fontSize,
-      min: 15,
-      max: 27,
-      divisions: 12,
+      min: readerFontSizeMin,
+      max: readerFontSizeMax,
+      divisions: 16,
       format: (value) => '${value.round()} pt',
       onPreview: (value) => _typography(fontSize: value, persist: false),
       onCommitted: (value) => _typography(fontSize: value),

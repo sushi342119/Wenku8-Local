@@ -196,7 +196,7 @@ void main({
   );
 
   testWidgets(
-    'focus reading hides controls but retains live edge blur without shifting paragraphs',
+    'focus reading hides controls and unmounts edge blur without shifting paragraphs',
     (tester) async {
       await reader(tester, brightness: Brightness.dark);
       _scroll(tester).position.jumpTo(900);
@@ -216,7 +216,15 @@ void main({
       if (capture != null) await capture(tester, boundary, 'reader-focus-dark');
       await tester.tapAt(const Offset(210, 310));
       await tester.pumpAndSettle();
-      expect(find.byType(GlassIconButton), findsNWidgets(3));
+      // Header: back, bookmarks, more; the bottom panel adds its action bar.
+      expect(
+        find.descendant(
+          of: find.byKey(const ValueKey('reader-chrome-header')),
+          matching: find.byType(GlassIconButton),
+        ),
+        findsNWidgets(3),
+      );
+      expect(find.byKey(const ValueKey('reader-action-bar')), findsOneWidget);
       expect(
         find.byKey(const ValueKey('reader-bookmarks-entry')),
         findsOneWidget,

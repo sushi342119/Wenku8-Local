@@ -147,9 +147,14 @@ void main({
       remote.books[71] = novel.withChapters([
         const NovelChapter('插图', fresh, id: 71001),
       ]);
+      // Bring the retry button above the reader's bottom panel (taller since
+      // the 2026-11 action bar), whatever the slot height.
+      final dockTop = tester
+          .getRect(find.byKey(const ValueKey('reader-chrome-dock')))
+          .top;
       await tester.drag(
         find.byKey(const ValueKey('reader-scroll')),
-        const Offset(0, -360),
+        Offset(0, dockTop / 2 - tester.getCenter(find.text('重试本章插图')).dy),
       );
       await tester.pumpAndSettle();
       expect(find.text('重试本章插图').hitTestable(), findsOneWidget);
@@ -270,6 +275,8 @@ void main({
           matching: find.byType(Scrollable),
         ),
       );
+      // ensureVisible's jump is laid out on the next frame; tap after it.
+      await tester.pumpAndSettle();
       await _tapIo(tester, find.text('缓存管理'));
       await _settleIo(tester);
       expect(find.byType(OfflineCachePage), findsOneWidget);

@@ -28,6 +28,8 @@ import 'user_fonts.dart';
 import 'font_catalog.dart';
 import 'app_palette.dart';
 import 'palette_platform.dart';
+import 'reader_preferences.dart';
+import 'ui_preferences.dart';
 
 const _libraryWriteTimeout = Duration(seconds: 8);
 const _maxImportedFontBytes = 100 * 1024 * 1024;
@@ -443,7 +445,13 @@ class LibraryState extends ChangeNotifier {
           : fallback;
     }
 
-    _fontSize = preference('readerFontSize', 19, 15, 27);
+    // Range widened to 14–30; older records (15–27) load unchanged.
+    _fontSize = preference(
+      'readerFontSize',
+      19,
+      readerFontSizeMin,
+      readerFontSizeMax,
+    );
     _lineHeight = preference('readerLineHeight', 1.72, 1.3, 2.2);
     _reduceMotion = _prefs.get('reduceMotion') == true;
     _haptics = HapticPreferences.fromRecords({
@@ -472,6 +480,7 @@ class LibraryState extends ChangeNotifier {
     });
     _glassBlur = preference('glassBlur', 8, 0, 24);
     _glassOpacity = preference('glassOpacity', .87, 0, 1);
+    _loadUiPreferences();
     _keepScreenOn = _prefs.get('readerKeepScreenOn') == true;
     _shelfSort = switch (_prefs.get('shelfSort')) {
       'recentAdded' => 'recentAdded',
@@ -704,6 +713,16 @@ class LibraryState extends ChangeNotifier {
   PerformancePreferences _performance = const PerformancePreferences();
   double _glassBlur = 8;
   double _glassOpacity = .87;
+  GlassTier? _glassTier;
+  bool _glassAdvanced = false;
+  DeviceProfile _deviceProfile = const DeviceProfile();
+  MotionLevel _motionLevel = MotionLevel.light;
+  RandomPickPace _randomPickPace = RandomPickPace.quick;
+  bool _pdfNightInvert = true;
+  ShelfLayout _shelfLayout = ShelfLayout.list;
+  TagMatchMode _tagMatchMode = TagMatchMode.any;
+  OriginalPaletteVariant _paletteVariant = OriginalPaletteVariant.vivid;
+  ReaderPreferences _readerPreferences = const ReaderPreferences();
   bool _disposed = false;
   bool _historyNotificationQueued = false;
 
@@ -835,9 +854,39 @@ class LibraryState extends ChangeNotifier {
       ? AppTypeface.sourceHanSerif
       : AppTypeface.system;
   PerformancePreferences get performance => _performance;
-  bool get effectiveReduceMotion => _reduceMotion || !_performance.motion;
+  bool get effectiveReduceMotion =>
+      _reduceMotion ||
+      !_performance.motion ||
+      _motionLevel == MotionLevel.off;
   double get glassBlur => _glassBlur;
   double get glassOpacity => _glassOpacity;
+
+  /// Null means the tier is chosen automatically from [deviceProfile].
+  GlassTier? get glassTierChoice => _glassTier;
+  bool get glassAdvanced => _glassAdvanced;
+  DeviceProfile get deviceProfile => _deviceProfile;
+  MotionLevel get motionLevel => _motionLevel;
+  RandomPickPace get randomPickPace => _randomPickPace;
+  bool get pdfNightInvert => _pdfNightInvert;
+  ShelfLayout get shelfLayout => _shelfLayout;
+  TagMatchMode get tagMatchMode => _tagMatchMode;
+  OriginalPaletteVariant get paletteVariant => _paletteVariant;
+  ReaderPreferences get readerPreferences => _readerPreferences;
+
+  /// Tier, advanced sliders and the custom switches resolved together.
+  ResolvedGlass get resolvedGlass => resolveGlass(
+    chosen: _glassTier,
+    lowEndDevice: _deviceProfile.lowEnd,
+    advanced: _glassAdvanced,
+    sliderBlur: _glassBlur,
+    sliderOpacity: _glassOpacity,
+    custom: _performance,
+  );
+
+  /// What PerformanceScope publishes. [performance] stays the raw custom
+  /// switches so the settings page and old records keep their meaning.
+  PerformancePreferences get effectivePerformance =>
+      resolvedGlass.performance;
 
   bool contains(int id) => _shelf.contains(id);
   int chapterFor(int id) => _chapters[id] ?? _positions[id]?.chapter ?? 0;
@@ -2309,6 +2358,64 @@ class LibraryState extends ChangeNotifier {
     return result;
   }
 
+  /// PDF page bookmark. Same [ReaderBookmark] record as text books:
+  /// `chapter` is the 0-based page (as `chapter_<id>` already stores for PDF),
+  /// `chapterId` 0 so lookup falls back to the page index, offsets zero.
+  /// The generic [addBookmark] cannot be used because PDF page "chapters"
+  /// carry no revision and are refused by the local chapter guard.
+  Future<ReaderBookmark?> addPageBookmark({
+    required Novel novel,
+    required int page,
+    required int pageCount,
+  }) async {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => addPageBookmark(novel: novel, page: page, pageCount: pageCount),
+      );
+    }
+    if (novel.id <= 0 || page < 0 || page >= pageCount) return null;
+    ReaderBookmark? result;
+    await _queuePositionWrite(() async {
+      final marks = _bookmarks[novel.id] ?? const <ReaderBookmark>[];
+      for (final mark in marks) {
+        if (!mark.isUnderline &&
+            mark.quote.isEmpty &&
+            mark.position.chapterId == 0 &&
+            mark.position.chapter == page) {
+          result = mark;
+          return;
+        }
+      }
+      if (marks.length >= 1000) {
+        throw const FormatException('本书书签已达 1000 个，请先整理书签');
+      }
+      final createdAt = DateTime.now();
+      final mark = ReaderBookmark(
+        id: '${createdAt.microsecondsSinceEpoch}-${marks.length}',
+        createdAt: createdAt.toUtc(),
+        createdOffsetMinutes: createdAt.timeZoneOffset.inMinutes,
+        chapterTitle: '第 ${page + 1} 页',
+        position: ReadingPosition(
+          chapter: page,
+          chapterId: 0,
+          offset: 0,
+          fraction: pageCount <= 1 ? 0 : page / (pageCount - 1),
+          fontSize: _fontSize,
+          width: 0,
+          updatedAt: createdAt.millisecondsSinceEpoch,
+          lineHeight: _lineHeight,
+        ),
+      );
+      final next = [mark, ...marks];
+      await _writeBookmarks(novel.id, next);
+      _bookmarks[novel.id] = next;
+      _updateUnderlineIndex(novel.id);
+      if (!_disposed) _bookmarkChanges.notifyListeners();
+      result = mark;
+    });
+    return result;
+  }
+
   Future<void> removeBookmark(int novelId, String id) {
     if (_restoreBarrier case final barrier?) {
       return barrier.future.then((_) => removeBookmark(novelId, id));
@@ -2951,7 +3058,7 @@ class LibraryState extends ChangeNotifier {
       );
     }
     final font = fontSize?.isFinite == true
-        ? fontSize!.clamp(15.0, 27.0)
+        ? fontSize!.clamp(readerFontSizeMin, readerFontSizeMax)
         : _fontSize;
     final spacing = lineHeight?.isFinite == true
         ? lineHeight!.clamp(1.3, 2.2)
@@ -3030,6 +3137,7 @@ class LibraryState extends ChangeNotifier {
     }
     if (!value.isFinite) return;
     final next = value.clamp(0.0, 24.0);
+    _markGlassAdvanced();
     if (_glassBlur != next) {
       _glassBlur = next;
       _glassChanges.notifyListeners();
@@ -3039,6 +3147,7 @@ class LibraryState extends ChangeNotifier {
     }
     if (persist) {
       await writeLibraryPreference(_prefs, 'glassBlur', next);
+      await _persistGlassAdvanced();
     }
   }
 
@@ -3050,6 +3159,7 @@ class LibraryState extends ChangeNotifier {
     }
     if (!value.isFinite) return;
     final next = value.clamp(0.0, 1.0);
+    _markGlassAdvanced();
     if (_glassOpacity != next) {
       _glassOpacity = next;
       _glassChanges.notifyListeners();
@@ -3059,8 +3169,178 @@ class LibraryState extends ChangeNotifier {
     }
     if (persist) {
       await writeLibraryPreference(_prefs, 'glassOpacity', next);
+      await _persistGlassAdvanced();
     }
   }
+
+  /// Moving an advanced slider means the user wants exactly that value, so the
+  /// sliders override the tier's blur/opacity until "恢复档位默认值".
+  void _markGlassAdvanced() {
+    if (_glassAdvanced) return;
+    _glassAdvanced = true;
+    _glassChanges.notifyListeners();
+    _settings.notifyListeners();
+  }
+
+  Future<void> _persistGlassAdvanced() async {
+    if (_prefs.get(UiPreferenceKeys.glassAdvanced) != _glassAdvanced) {
+      await writeLibraryPreference(
+        _prefs,
+        UiPreferenceKeys.glassAdvanced,
+        _glassAdvanced,
+      );
+    }
+  }
+
+  /// Reads every key added in the 2026-11 UI round. Missing or unreadable
+  /// values fall back to defaults without rewriting the stored record.
+  void _loadUiPreferences() {
+    final tier = _prefs.get(UiPreferenceKeys.glassTier);
+    _glassTier = tier == glassTierAuto ? null : GlassTier.fromRecord(tier);
+    final advanced = _prefs.get(UiPreferenceKeys.glassAdvanced);
+    // Upgraders who had moved the old sliders keep their look: treat a
+    // non-default stored value as an advanced override.
+    _glassAdvanced = advanced is bool
+        ? advanced
+        : (_prefs.get('glassBlur') is num && _glassBlur != 8) ||
+              (_prefs.get('glassOpacity') is num && _glassOpacity != .87);
+    _motionLevel = MotionLevel.fromRecord(
+      _prefs.get(UiPreferenceKeys.motionLevel),
+    );
+    _randomPickPace = RandomPickPace.fromRecord(
+      _prefs.get(UiPreferenceKeys.randomPickPace),
+    );
+    _pdfNightInvert = _prefs.get(UiPreferenceKeys.pdfNightInvert) != false;
+    _shelfLayout = ShelfLayout.fromRecord(
+      _prefs.get(UiPreferenceKeys.shelfLayout),
+    );
+    _tagMatchMode = TagMatchMode.fromRecord(
+      _prefs.get(UiPreferenceKeys.tagMatchMode),
+    );
+    _paletteVariant = OriginalPaletteVariant.fromRecord(
+      _prefs.get(UiPreferenceKeys.paletteVariant),
+    );
+    final reader = _prefs.get(UiPreferenceKeys.readerPreferences);
+    _readerPreferences = reader == null
+        ? const ReaderPreferences()
+        : ReaderPreferences.fromRecord(reader);
+  }
+
+  void setDeviceProfile(DeviceProfile profile) {
+    _deviceProfile = profile;
+    if (_disposed) return;
+    _application.notifyListeners();
+    _glassChanges.notifyListeners();
+    _appearance.notifyListeners();
+    _settings.notifyListeners();
+  }
+
+  Future<void> _writeUiPreference(
+    String key,
+    Object value,
+    void Function() apply, {
+    bool glass = false,
+    bool application = false,
+    bool reader = false,
+    bool shelf = false,
+  }) async {
+    if (_restoreBarrier case final barrier?) {
+      return barrier.future.then(
+        (_) => _writeUiPreference(
+          key,
+          value,
+          apply,
+          glass: glass,
+          application: application,
+          reader: reader,
+          shelf: shelf,
+        ),
+      );
+    }
+    apply();
+    if (!_disposed) {
+      if (glass) _glassChanges.notifyListeners();
+      if (application) _application.notifyListeners();
+      if (reader) {
+        _readerSettings.notifyListeners();
+        _readerBehaviorChanges.notifyListeners();
+      }
+      if (shelf) _shelfViewChanges.notifyListeners();
+      _appearance.notifyListeners();
+      _settings.notifyListeners();
+      notifyListeners();
+    }
+    await writeLibraryPreference(_prefs, key, value);
+  }
+
+  /// Null selects the automatic tier (stored as "auto", never removed, so a
+  /// backup can carry the explicit choice).
+  Future<void> setGlassTier(GlassTier? tier) => _writeUiPreference(
+    UiPreferenceKeys.glassTier,
+    tier?.name ?? glassTierAuto,
+    () => _glassTier = tier,
+    glass: true,
+    application: true,
+  );
+
+  /// Turning advanced off returns blur/opacity to the tier; slider values
+  /// stay stored and come back when advanced is enabled again.
+  Future<void> setGlassAdvanced(bool value) => _writeUiPreference(
+    UiPreferenceKeys.glassAdvanced,
+    value,
+    () => _glassAdvanced = value,
+    glass: true,
+  );
+
+  Future<void> setMotionLevel(MotionLevel value) => _writeUiPreference(
+    UiPreferenceKeys.motionLevel,
+    value.name,
+    () => _motionLevel = value,
+    application: true,
+  );
+
+  Future<void> setRandomPickPace(RandomPickPace value) => _writeUiPreference(
+    UiPreferenceKeys.randomPickPace,
+    value.name,
+    () => _randomPickPace = value,
+  );
+
+  Future<void> setPdfNightInvert(bool value) => _writeUiPreference(
+    UiPreferenceKeys.pdfNightInvert,
+    value,
+    () => _pdfNightInvert = value,
+    reader: true,
+  );
+
+  Future<void> setShelfLayout(ShelfLayout value) => _writeUiPreference(
+    UiPreferenceKeys.shelfLayout,
+    value.name,
+    () => _shelfLayout = value,
+    shelf: true,
+  );
+
+  Future<void> setPaletteVariant(OriginalPaletteVariant value) =>
+      _writeUiPreference(
+        UiPreferenceKeys.paletteVariant,
+        value.name,
+        () => _paletteVariant = value,
+        application: true,
+      );
+
+  Future<void> setTagMatchMode(TagMatchMode value) => _writeUiPreference(
+    UiPreferenceKeys.tagMatchMode,
+    value.name,
+    () => _tagMatchMode = value,
+    shelf: true,
+  );
+
+  Future<void> setReaderPreferences(ReaderPreferences value) =>
+      _writeUiPreference(
+        UiPreferenceKeys.readerPreferences,
+        jsonEncode(value.toJson()),
+        () => _readerPreferences = value,
+        reader: true,
+      );
 
   Map<String, Object> _backupRecords() {
     final tagStore = TagStore.maybeShared;
@@ -3082,6 +3362,17 @@ class LibraryState extends ChangeNotifier {
       ..._performance.toRecords(),
       'glassBlur': _glassBlur,
       'glassOpacity': _glassOpacity,
+      UiPreferenceKeys.glassTier: _glassTier?.name ?? glassTierAuto,
+      UiPreferenceKeys.glassAdvanced: _glassAdvanced,
+      UiPreferenceKeys.motionLevel: _motionLevel.name,
+      UiPreferenceKeys.randomPickPace: _randomPickPace.name,
+      UiPreferenceKeys.pdfNightInvert: _pdfNightInvert,
+      UiPreferenceKeys.shelfLayout: _shelfLayout.name,
+      UiPreferenceKeys.tagMatchMode: _tagMatchMode.name,
+      UiPreferenceKeys.paletteVariant: _paletteVariant.name,
+      UiPreferenceKeys.readerPreferences: jsonEncode(
+        _readerPreferences.toJson(),
+      ),
       'readerKeepScreenOn': _keepScreenOn,
       'shelfSort': _shelfSort,
       'shelfFilter': _shelfFilter,
@@ -3336,6 +3627,9 @@ class LibraryState extends ChangeNotifier {
           if (records['shelfFilter'] case final String value) {
             _shelfFilter = value;
           }
+          // New keys were committed above with the other allow-listed
+          // preferences; older backups lack them and keep current values.
+          _loadUiPreferences();
         }
         if (!_disposed) {
           _historyChanged();

@@ -8,6 +8,7 @@ import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/library_state.dart';
 import 'package:wenku8_flutter/pages.dart';
 import 'package:wenku8_flutter/reader_landing_highlight.dart';
+import 'package:wenku8_flutter/ui_preferences.dart' show readerFontSizeMax;
 
 import 'support/offline_fixture.dart';
 
@@ -215,7 +216,8 @@ void main({
         (await SharedPreferences.getInstance()).getDouble('readerFontSize'),
         20,
       );
-      await state.setFontSize(27);
+      // Range widened to 14–30 (design 2026-11 §1); the top step disables +.
+      await state.setFontSize(readerFontSizeMax);
       await tester.pumpAndSettle();
       expect(
         tester

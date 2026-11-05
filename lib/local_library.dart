@@ -3923,6 +3923,37 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return content.trim();
   }
 
+  final Map<String, List<int>> _epubChapterSizes = {};
+
+  /// Display-only progress weights for an EPUB (chapter XHTML sizes). Stored
+  /// book records and reading positions are not changed. Null on failure, in
+  /// which case the reader keeps equal chapter weights.
+  Future<List<int>?> epubChapterWeights(int novelId) async {
+    final book = bookFor(novelId);
+    if (book == null || book.kind != LocalBookKind.epub) return null;
+    final key = '${book.id}:${book.sourceFingerprint}:${book.chapters.length}';
+    if (_epubChapterSizes[key] case final cached?) return cached;
+    try {
+      final localPath = await _epubLocalPath(
+        id: book.id,
+        fileUri: book.fileUri,
+        size: book.size,
+        sourceKey: book.sourceKey,
+        sourceFingerprint: book.sourceFingerprint,
+      );
+      final package = await EpubPackage.open(localPath);
+      try {
+        final sizes = package.chapterSizes();
+        if (sizes.length != book.chapters.length) return null;
+        return _epubChapterSizes[key] = List.unmodifiable(sizes);
+      } finally {
+        await package.close();
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})> epubChapter(
     int novelId,
     int chapterIndex,

@@ -2,12 +2,17 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
+import 'package:flutter/material.dart' show Theme;
 import 'package:flutter/rendering.dart';
 
 import 'app_ui.dart';
 import 'app_window_insets.dart';
 import 'dock_layout.dart';
 import 'native_effects.dart' show NativeGlassGroup, NativeScrollEdgeGroup;
+import 'ui_preferences.dart' show GlassEdgeMode;
+
+/// Reader direction B: controls use at most σ4, never the library's tier.
+const readerChromeMaxSigma = 4.0;
 
 /// The reveal clip reserves the capsule's shadow without adding a second gutter.
 const readerDockPaintPadding = EdgeInsets.symmetric(
@@ -30,11 +35,18 @@ class ReaderEdgeBlur extends StatelessWidget {
     this.compact = false,
     this.blurBottom = true,
     this.headerExtent = FrostedHeader.toolbarHeight,
+    this.maxSigma = readerChromeMaxSigma,
   });
+
+  /// Bind this to the controls' animation. At 0 nothing below is mounted, so
+  /// scrolling text never samples a backdrop while the controls are hidden.
   final Animation<double> animation;
   final double topInset;
   final bool compact, blurBottom;
   final double headerExtent;
+
+  /// The reader never exceeds σ4 regardless of the library's glass tier.
+  final double maxSigma;
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +54,12 @@ class ReaderEdgeBlur extends StatelessWidget {
       MediaQuery.paddingOf(context).top,
       AppWindowInsets.viewPaddingOf(context).top,
     );
-    final blur = GlassAppearance.of(context).blur;
+    final appearance = GlassAppearance.of(context);
+    final blur = appearance.edgeMode == GlassEdgeMode.none
+        ? 0.0
+        : math.min(appearance.blur, maxSigma);
+    final showBottom =
+        blurBottom && appearance.edgeMode == GlassEdgeMode.full;
     final topHeight =
         top +
         topInset +
@@ -65,7 +82,7 @@ class ReaderEdgeBlur extends StatelessWidget {
             enabled: animation.value == 1,
             child: Stack(
               children: [
-                if (!highContrast)
+                if (!highContrast && blur > 0)
                   Positioned(
                     top: 0,
                     left: 0,
@@ -77,7 +94,21 @@ class ReaderEdgeBlur extends StatelessWidget {
                       shadeOpacity: DockLayout.topEdgeShadeOpacity * strength,
                     ),
                   ),
-                if (blurBottom)
+                if (!highContrast && blur == 0)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: top + topInset + headerExtent,
+                    child: Opacity(
+                      opacity: strength,
+                      child: ColoredBox(
+                        key: const ValueKey('reader-edge-solid'),
+                        color: Theme.of(context).colorScheme.surface,
+                      ),
+                    ),
+                  ),
+                if (showBottom)
                   const Positioned(
                     bottom: 0,
                     left: 0,
@@ -108,7 +139,13 @@ class ReaderChromeLayer extends StatelessWidget {
     this.clip = true,
     this.maintainSize = false,
     this.interactionThreshold = .95,
+    this.fadeOffset,
   }) : assert(interactionThreshold >= 0 && interactionThreshold <= 1);
+
+  /// Design 2026-11 §4: reader controls fade with a fixed pixel offset (12px)
+  /// and no hard clip. Safe because reader panels are solid (no live glass
+  /// under an opacity layer). Null keeps the v1.7.1 fractional slide + clip.
+  final Offset? fadeOffset;
   final Animation<double> animation;
   final Widget child;
   final Offset slide;
@@ -128,6 +165,25 @@ class ReaderChromeLayer extends StatelessWidget {
     builder: (context, child) {
       final inactive =
           animation.value == 0 || animation.value < interactionThreshold;
+      if (fadeOffset case final offset?) {
+        final t = curve.transform(animation.value.clamp(0.0, 1.0));
+        return Offstage(
+          offstage: animation.value == 0,
+          child: IgnorePointer(
+            ignoring: inactive,
+            child: ExcludeSemantics(
+              excluding: inactive,
+              child: Opacity(
+                opacity: t,
+                child: Transform.translate(
+                  offset: offset * (1 - t),
+                  child: Padding(padding: paintPadding, child: child),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
       final layer = IgnorePointer(
         ignoring: inactive,
         child: ExcludeSemantics(

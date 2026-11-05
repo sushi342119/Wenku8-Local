@@ -19,6 +19,7 @@ import 'reading_activity.dart';
 import 'local_library.dart';
 import 'reader_catalogue.dart';
 import 'reader_chrome.dart';
+import 'reader_skeleton.dart';
 import 'reader_tools.dart';
 
 class LocalEpubReaderPage extends StatefulWidget {
@@ -92,23 +93,61 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     return (_scroll.offset / max).clamp(0.0, 1.0);
   }
 
-  /// 全书进度：章权重一律按 1，(之前章节数 + 本章滚动比例) / 总章数。
+  /// Display-only chapter weights (XHTML sizes); null = equal weights.
+  /// Saved positions keep chapter + in-chapter fraction exactly as before.
+  List<int>? _weights;
+
+  double _weight(int i) =>
+      _weights == null ? 1 : _weights![i].toDouble();
+
+  double _before(int chapter) {
+    var sum = 0.0;
+    for (var i = 0; i < chapter; i++) {
+      sum += _weight(i);
+    }
+    return sum;
+  }
+
+  double get _weightTotal => _before(_total);
+
+  /// 全书进度：按章节字数（XHTML 大小）加权；权重未就绪时每章按 1。
   double _bookProgress() {
     if (_total <= 0) return 0;
-    return ((_chapter + _chapterRatio) / _total).clamp(0.0, 1.0);
+    final total = _weightTotal;
+    if (total <= 0) return 0;
+    return ((_before(_chapter) + _weight(_chapter) * _chapterRatio) / total)
+        .clamp(0.0, 1.0);
+  }
+
+  double _chapterStart(int chapter) {
+    final total = _weightTotal;
+    return total <= 0 ? 0 : _before(chapter) / total;
   }
 
   /// 把全书进度换算为目标章节和章内比例（边界归前一章末尾，与 TXT 一致）。
   ({int chapter, double ratio}) _progressToTarget(double progress) {
     if (_total <= 0) return (chapter: 0, ratio: 0);
-    var target = (progress * _total).clamp(0.0, _total.toDouble());
+    var target = progress.clamp(0.0, 1.0) * _weightTotal;
     for (var i = 0; i < _total; i++) {
-      if (target <= 1 || i == _total - 1) {
-        return (chapter: i, ratio: target.clamp(0.0, 1.0));
+      final w = _weight(i);
+      if (target <= w || i == _total - 1) {
+        return (chapter: i, ratio: (w <= 0 ? 0.0 : target / w).clamp(0.0, 1.0));
       }
-      target -= 1;
+      target -= w;
     }
     return (chapter: _total - 1, ratio: 1);
+  }
+
+  Future<void> _loadWeights() async {
+    List<int>? weights;
+    try {
+      weights = await widget.local.epubChapterWeights(_novel.id);
+    } catch (_) {
+      return; // Keep equal weights; display only.
+    }
+    if (!mounted || weights == null || weights.length != _total) return;
+    _weights = weights;
+    _updateProgress();
   }
 
   /// 进度条是否显示：多章，或单章可滚动时显示。
@@ -166,8 +205,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     WidgetsBinding.instance.addObserver(this);
     _chrome = AnimationController(
       vsync: this,
-      duration: NovelMotion.contact,
-      reverseDuration: NovelMotion.exit,
+      duration: NovelMotion.chromeShow,
+      reverseDuration: NovelMotion.chromeHide,
       value: 1,
     );
     if (_total <= 0) {
@@ -178,7 +217,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       _chapter = widget.state.chapterForNovel(_novel).clamp(0, _total - 1);
     }
     _scroll.addListener(_onScroll);
-    _progressValue.value = _total == 0 ? 0 : _chapter / _total;
+    _progressValue.value = _total == 0 ? 0 : _chapterStart(_chapter);
+    unawaited(_loadWeights());
     // 先读旧的章内位置；必须在恢复滚动之后才开始保存，否则旧位置被 0 覆盖。
     double? restoreRatio;
     final saved = widget.state.positionFor(_novel.id);
@@ -342,7 +382,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
       _chapter = chapter;
       _chapterVisit++;
     });
-    if (!_progressDragging) _progressValue.value = _chapter / _total;
+    if (!_progressDragging) _progressValue.value = _chapterStart(_chapter);
     _showChrome(true);
   }
 
@@ -521,7 +561,39 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   String _chapterTitle() => _total == 0 ? '' : _novel.chapters[_chapter].title;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => ReaderPaperScope(
+    state: widget.state,
+    child: Builder(builder: _readerScaffold),
+  );
+
+  List<ReaderAction> _readerActions() => [
+    ReaderAction(
+      key: const ValueKey('reader-catalogue-entry'),
+      icon: CupertinoIcons.list_bullet,
+      caption: '目录',
+      label: '目录',
+      onPressed: _total == 0 ? null : _catalogue,
+      unavailable: _total == 0 ? '本书没有目录' : null,
+    ),
+    // Zero chapters: truly disabled (onPressed null), as in v1.7.1.
+    ReaderAction(
+      icon: CupertinoIcons.textformat_size,
+      caption: '排版',
+      label: '阅读设置',
+      onPressed: _total == 0 ? null : _settings,
+    ),
+    ReaderAction(
+      key: const ValueKey('reader-appearance-entry'),
+      icon: CupertinoIcons.sun_max,
+      caption: '亮度',
+      label: '亮度与纸色',
+      onPressed: () =>
+          showReaderAppearanceSheet(context, state: widget.state),
+    ),
+    // No 听书 entry: EPUB listening is not wired, so it is not offered.
+  ];
+
+  Widget _readerScaffold(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: false,
       body: Atmosphere(
@@ -548,7 +620,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                 ),
               ),
             ),
-            const Positioned.fill(child: ReaderEdgeBlur()),
+            Positioned.fill(child: ReaderEdgeBlur(animation: _chrome)),
             Positioned(
               top: 0,
               left: 0,
@@ -559,6 +631,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                   key: const ValueKey('reader-chrome-header'),
                   animation: _chrome,
                   slide: const Offset(0, -8),
+                  fadeOffset: const Offset(0, -12),
                   child: Row(
                     children: [
                       GlassIconButton(
@@ -582,9 +655,13 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                       ),
                       const SizedBox(width: 4),
                       GlassIconButton(
-                        icon: CupertinoIcons.textformat_size,
-                        label: '阅读设置',
-                        onPressed: _total == 0 ? null : _settings,
+                        key: const ValueKey('reader-more-entry'),
+                        icon: CupertinoIcons.ellipsis,
+                        label: '更多',
+                        onPressed: () => showNovelFeedback(
+                          context,
+                          'EPUB 暂不支持章内查找；排版与书签见底部“排版”',
+                        ),
                       ),
                     ],
                   ),
@@ -604,7 +681,10 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                   key: const ValueKey('reader-chrome-dock'),
                   animation: _chrome,
                   slide: const Offset(0, 8),
-                  child: Column(
+                  fadeOffset: const Offset(0, 12),
+                  child: ReaderBottomPanel(
+                    actions: _readerActions(),
+                    navigation: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // 全书进度条：与 Dock 一起随控件显隐，可拖动跳转。
@@ -685,7 +765,20 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                         },
                       ),
                     ],
+                    ),
                   ),
+                ),
+              ),
+            ),
+            Positioned(
+              left: 24,
+              right: 24,
+              bottom: MediaQuery.paddingOf(context).bottom + 6,
+              child: ValueListenableBuilder<double>(
+                valueListenable: _progressValue,
+                builder: (context, progress, _) => ReaderStatusLine(
+                  chrome: _chrome,
+                  text: '${_chapterTitle()} · ${(progress * 100).round()}%',
                 ),
               ),
             ),

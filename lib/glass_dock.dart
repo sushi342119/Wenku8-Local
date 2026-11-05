@@ -383,7 +383,9 @@ class _GlassDockState extends State<GlassDock> with TickerProviderStateMixin {
                     child: LiquidGlass(
                       key: const ValueKey('dock-fluid-surface'),
                       radius: height / 2,
-                      thickness: 16 + pressure * 2,
+                      thickness:
+                          (16 + pressure * 2) *
+                          GlassAppearance.of(context).refractionScale,
                       activation: pressure,
                       touchPosition:
                           (_position.value.clamp(

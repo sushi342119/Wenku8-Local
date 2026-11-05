@@ -130,6 +130,85 @@ class SystemTonalColors {
   }
 }
 
+/// Design 2026-11 §3 colours: the blue second version of "原版".
+abstract final class VividPalette {
+  static const primary = Color(0xFF3B5BFD);
+  static const primaryDark = Color(0xFF7C93FF);
+  static const accent = Color(0xFF00B3A4);
+  static const accentDark = Color(0xFF2DD4BF);
+  static const danger = Color(0xFFE5484D);
+  static const dangerDark = Color(0xFFFF6369);
+  static const background = Color(0xFFF4F5F7);
+  static const backgroundDark = Color(0xFF111214);
+  static const surface = Color(0xFFFFFFFF);
+  static const surfaceDark = Color(0xFF1B1C1F);
+  static const raised = Color(0xFFF9FAFB);
+  static const raisedDark = Color(0xFF25272B);
+  static const ink = Color(0xFF16181D);
+  static const inkDark = Color(0xFFEDEEF0);
+  static const muted = Color(0xFF5E6470);
+  static const mutedDark = Color(0xFF9BA1AC);
+  static const divider = Color(0xFFE3E5E9);
+  static const dividerDark = Color(0xFF2E3035);
+
+  static ColorScheme scheme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final primary = dark ? primaryDark : VividPalette.primary;
+    final accent = dark ? accentDark : VividPalette.accent;
+    final surface = dark ? surfaceDark : VividPalette.surface;
+    final raised = dark ? raisedDark : VividPalette.raised;
+    final background = dark ? backgroundDark : VividPalette.background;
+    final ink = dark ? inkDark : VividPalette.ink;
+    final divider = dark ? dividerDark : VividPalette.divider;
+    return ColorScheme.fromSeed(
+      seedColor: VividPalette.primary,
+      brightness: brightness,
+    ).copyWith(
+      primary: primary,
+      onPrimary: dark ? backgroundDark : Colors.white,
+      primaryContainer: Color.lerp(surface, primary, dark ? .28 : .14),
+      onPrimaryContainer: ink,
+      secondary: accent,
+      onSecondary: dark ? backgroundDark : Colors.white,
+      secondaryContainer: Color.lerp(surface, accent, dark ? .26 : .14),
+      onSecondaryContainer: ink,
+      tertiary: accent,
+      onTertiary: dark ? backgroundDark : Colors.white,
+      error: dark ? dangerDark : danger,
+      onError: Colors.white,
+      surface: surface,
+      onSurface: ink,
+      onSurfaceVariant: dark ? mutedDark : muted,
+      surfaceDim: background,
+      surfaceBright: raised,
+      surfaceContainerLowest: dark ? background : surface,
+      surfaceContainerLow: dark ? surface : raised,
+      surfaceContainer: dark ? raised : background,
+      surfaceContainerHigh: Color.lerp(raised, ink, dark ? .06 : .04),
+      surfaceContainerHighest: Color.lerp(raised, ink, dark ? .10 : .07),
+      outline: dark ? mutedDark : muted,
+      outlineVariant: divider,
+      inverseSurface: dark ? inkDark : VividPalette.ink,
+      onInverseSurface: dark ? backgroundDark : VividPalette.surface,
+      inversePrimary: dark ? VividPalette.primary : primaryDark,
+      surfaceTint: Colors.transparent,
+    );
+  }
+}
+
+/// Page background wash. Only the blue "原版" sets it; without it the
+/// Atmosphere keeps its v1.7.1 colours for ink and custom palettes.
+@immutable
+class PageWash extends ThemeExtension<PageWash> {
+  const PageWash(this.color);
+  final Color color;
+  @override
+  PageWash copyWith({Color? color}) => PageWash(color ?? this.color);
+  @override
+  PageWash lerp(PageWash? other, double t) =>
+      other == null ? this : PageWash(Color.lerp(color, other.color, t)!);
+}
+
 /// A small, interpolated set of archive/glass colors. Classic values reproduce
 /// the old material exactly; no additional blur layer or idle animation.
 @immutable

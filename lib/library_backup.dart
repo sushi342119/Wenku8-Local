@@ -8,7 +8,9 @@ import 'book_text_encoding.dart';
 import 'catalog.dart';
 import 'haptic_preferences.dart';
 import 'performance_preferences.dart';
+import 'reader_preferences.dart';
 import 'recovery_archive.dart';
+import 'ui_preferences.dart';
 
 final backupPreferenceKeys = <String>{
   'theme',
@@ -28,6 +30,8 @@ final backupPreferenceKeys = <String>{
   HapticPreferences.preferenceKey,
   PerformancePreferences.modeKey,
   ...PerformanceEffect.values.map((effect) => effect.preferenceKey),
+  // 2026-11 UI round: additive keys only (glass tier, motion, reader paper…).
+  ...UiPreferenceKeys.all,
 };
 const _listKeys = {'shelf', 'reading_history_hidden', 'recentSearches', 'local_shelf_removed'};
 const _tagRecordKeys = {'tag_defs', 'tag_map'};
@@ -232,10 +236,18 @@ Map<String, Object> _validateRecordValues(Map<String, dynamic> input) {
         'checkAppUpdates' => value is bool,
         'appTypeface' => value == 'system' || value == 'sourceHanSerif',
         'appFontId' => value is String && value.isNotEmpty,
-        'readerFontSize' => _number(value, 15, 27),
+        // Widened from 15–27 to the reader's 14–30 range; old values fit.
+        'readerFontSize' => _number(
+          value,
+          readerFontSizeMin,
+          readerFontSizeMax,
+        ),
+        UiPreferenceKeys.readerPreferences => _validReaderPreferences(value),
         'readerLineHeight' => _number(value, 1.3, 2.2),
         'glassBlur' => _number(value, 0, 24),
         'glassOpacity' => _number(value, 0, 1),
+        _ when UiPreferenceKeys.all.contains(key) =>
+          UiPreferenceKeys.valid(key, value),
         _ =>
           (key == PerformancePreferences.modeKey ||
                   PerformanceEffect.values.any(
@@ -419,6 +431,18 @@ void _validatePosition(Object? record) {
       (record['paragraphFraction'] != null &&
           !_number(record['paragraphFraction'], 0, 1))) {
     throw const FormatException('阅读位置格式有误');
+  }
+}
+
+bool _validReaderPreferences(Object? value) {
+  if (value is! String || value.length > 16 * 1024) return false;
+  try {
+    final raw = jsonDecode(value);
+    if (raw is! Map) return false;
+    ReaderPreferences.fromJson(Map<String, dynamic>.from(raw));
+    return true;
+  } catch (_) {
+    return false;
   }
 }
 

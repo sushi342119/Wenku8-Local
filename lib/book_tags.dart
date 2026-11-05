@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'library_filter.dart';
 import 'filename_tags.dart';
 import 'recovery_archive.dart';
 
@@ -60,6 +61,9 @@ class TagStore extends ChangeNotifier {
   static void resetForTesting() {
     _shared?.dispose();
     _shared = null;
+    // Test-only cascade: this method is itself @visibleForTesting.
+    // ignore: invalid_use_of_visible_for_testing_member
+    LibraryFilter.shared.resetForTesting();
   }
 
   static Future<void> load() async {

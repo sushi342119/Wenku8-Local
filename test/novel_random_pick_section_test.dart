@@ -10,6 +10,7 @@ import 'package:wenku8_flutter/archive_random_pick_card.dart';
 import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/novel_random_pick_section.dart';
+import 'package:wenku8_flutter/ui_preferences.dart';
 
 const _countsKey = 'random_pick_draw_counts_v1';
 
@@ -22,7 +23,11 @@ Novel _book(int id) => Novel(
   colors: const [Colors.brown, Colors.amber],
 );
 
-Widget _app({List<Novel>? books, bool reduceMotion = true}) => MaterialApp(
+Widget _app({
+  List<Novel>? books,
+  bool reduceMotion = true,
+  RandomPickPace pace = RandomPickPace.quick,
+}) => MaterialApp(
   home: MediaQuery(
     data: MediaQueryData(disableAnimations: reduceMotion),
     child: Scaffold(
@@ -30,6 +35,7 @@ Widget _app({List<Novel>? books, bool reduceMotion = true}) => MaterialApp(
         child: NovelRandomPickSection(
           books: books ?? [_book(1), _book(2), _book(3)],
           onOpenDetail: (_) {},
+          pace: pace,
         ),
       ),
     ),
@@ -275,7 +281,10 @@ void main() {
       storage.readGate = gate;
       SharedPreferences.resetStatic();
       SharedPreferencesStorePlatform.instance = storage;
-      await tester.pumpWidget(_app(reduceMotion: false));
+      // Timings below follow the 2400ms 仪式 timeline (快速 900ms is default).
+      await tester.pumpWidget(
+        _app(reduceMotion: false, pace: RandomPickPace.ceremony),
+      );
       expect(
         tester
             .widget<AbsorbPointer>(
@@ -358,7 +367,10 @@ void main() {
   testWidgets('reset during a shuffle preserves its result and timing', (
     tester,
   ) async {
-    await tester.pumpWidget(_app(reduceMotion: false));
+    // Timings below follow the 2400ms 仪式 timeline (快速 900ms is default).
+    await tester.pumpWidget(
+      _app(reduceMotion: false, pace: RandomPickPace.ceremony),
+    );
     await tester.pumpAndSettle();
     await tester.tap(find.text('抽阅一本'));
     await tester.pump();

@@ -12,7 +12,7 @@ import 'library_reflow.dart';
 import 'local_library.dart';
 import 'local_platform.dart';
 import 'offline_repository.dart';
-import 'pages.dart' show ReaderPage;
+import 'pages.dart' show readerPageFor;
 import 'quote_card.dart';
 import 'reading_report_fonts.dart';
 import 'bookmark_categories.dart';
@@ -129,9 +129,9 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
 
   void _layoutChange(
     VoidCallback change, {
-    Duration duration = NovelMotion.enter,
+    Duration? duration,
   }) {
-    _reorder.duration = duration;
+    _reorder.duration = duration ?? NovelMotion.enter;
     if (!_reduced) _reflow.begin(_reorder);
     setState(change);
     if (!_reduced) _reorder.forward(from: 0);
@@ -212,12 +212,13 @@ class _BookmarkLibraryPageState extends State<BookmarkLibraryPage>
       if (!mounted) return;
       await pushNovelPage<void>(
         context,
-        ReaderPage(
+        // Was always ReaderPage (TXT) regardless of format.
+        readerPageFor(
           novel: novel,
           state: widget.state,
           repository: repository,
-          initialChapter: chapter,
-          initialBookmark: mark,
+          chapter: chapter,
+          bookmark: mark,
         ),
         reduceMotion: widget.state.reduceMotion,
       );

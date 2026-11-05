@@ -135,7 +135,7 @@ void main() {
       addTearDown(library.dispose);
       expect(library.bookmarksFor(71).single.id, 'valid');
       expect(library.positionFor(71)!.lineHeight, 1.72);
-      expect(library.fontSize, 27);
+      expect(library.fontSize, 30);
       expect(library.lineHeight, 1.72);
     },
   );

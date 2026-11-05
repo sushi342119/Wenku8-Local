@@ -9,6 +9,7 @@ import 'feature_pages.dart';
 import 'library_state.dart';
 import 'palette_image.dart';
 import 'personal_images.dart';
+import 'ui_preferences.dart';
 
 String paletteHex(Color color) =>
     '#${(color.toARGB32() & 0xffffff).toRadixString(16).padLeft(6, '0').toUpperCase()}';
@@ -181,6 +182,31 @@ class _PaletteSettingsPageState extends State<PaletteSettingsPage>
                         ),
                       ),
                   ],
+                ),
+                AnimatedOptionSection(
+                  expanded: prefs.source == AppPaletteSource.original,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final variant in OriginalPaletteVariant.values)
+                          GlassTextButton(
+                            key: ValueKey('palette-original-${variant.name}'),
+                            compact: true,
+                            selected: state.paletteVariant == variant,
+                            onPressed: _busy
+                                ? null
+                                : () => state.setPaletteVariant(variant),
+                            child: AppText(
+                              variant.label,
+                              style: const TextStyle(fontSize: 13),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
                 ),
                 if (state.paletteError != null)
                   GlassTextButton(

@@ -8,7 +8,9 @@ import 'app_ui.dart';
 import 'app_interactions.dart';
 import 'catalog.dart';
 import 'library_state.dart';
+import 'ui_preferences.dart' show readerFontSizeMin, readerFontSizeMax;
 import 'local_platform.dart';
+import 'reader_paging.dart' show ReaderPagingSettings;
 
 sealed class ReaderToolAction {
   const ReaderToolAction();
@@ -215,9 +217,9 @@ class _ReaderToolsState extends State<ReaderTools> {
               sliderKey: const ValueKey('reader-font-slider'),
               label: '字体大小',
               value: widget.state.fontSize,
-              min: 15,
-              max: 27,
-              divisions: 12,
+              min: readerFontSizeMin,
+              max: readerFontSizeMax,
+              divisions: 16,
               format: (value) => '${value.round()} pt',
               onCommitted: widget.onFontSize,
               onPreview: widget.onFontPreview,
@@ -354,6 +356,7 @@ class _ReaderToolsState extends State<ReaderTools> {
               ],
             ),
           ),
+          _adjustment(ReaderPagingSettings(state: widget.state)),
         ],
       ),
     ),

@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -397,6 +398,16 @@ class EpubPackage {
 
   void _ensureOpen() {
     if (_closed) throw StateError('EpubPackage 已关闭');
+  }
+
+  /// Uncompressed XHTML size of each spine chapter. Read from the ZIP
+  /// directory only (no extraction), used to weight displayed progress.
+  List<int> chapterSizes() {
+    _ensureOpen();
+    return [
+      for (final chapter in _chapters)
+        math.max(1, _entries[chapter.href]?.size ?? 1),
+    ];
   }
 
   Uint8List _readEntrySync(String entryPath) {
