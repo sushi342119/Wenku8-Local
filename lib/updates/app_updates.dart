@@ -14,18 +14,16 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.7.0',
+  defaultValue: '1.7.1',
 );
 const currentAppBuild = int.fromEnvironment(
   'APP_BUILD',
-  defaultValue: 45,
+  defaultValue: 46,
 );
 const currentReleaseNotes = '''
-1. 同步上游 0.5.6 全量功能矩阵：简繁转化（OpenCC）、触感反馈与 0.05x 听书调速。
-2. 新增离线词典（StarDict / Kindle MOBI）与阅读器选词查词面板。
-3. 新增云端书库同步（S3 兼容存储）与多端书籍文件导入导出。
-4. 新增阅读统计、年度报告、书签与五种划线标注样式（下划线/荧光笔/波浪线/点线/删除线）及 8 套主题配色。
-5. 新增思源黑体/霞鹜文楷按需下载、EPUB 竖排/双页/Ruby 注音与桌面阅读小组件。
+1. 更新液态玻璃界面，加入极光氛围背景、立体书脊和流畅底部导航动效。
+2. 将设置页整合为四个统一面板，优化工具网格与设置入口。
+3. 调整标签编辑及听书相关测试的等待逻辑，提升持续集成稳定性。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
