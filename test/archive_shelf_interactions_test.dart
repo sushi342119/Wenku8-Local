@@ -57,6 +57,142 @@ Future<void> _at(WidgetTester tester, double focus) async {
 }
 
 void main() {
+  for (final width in [260.0, 390.0]) {
+    for (final scale in [1.0, 1.6, 2.0]) {
+      testWidgets('caption geometry stays fixed at width $width scale $scale', (
+        tester,
+      ) async {
+        _view(tester, width: width);
+        final books = [
+          for (final title in ['武林启示录1', '这是一本很长的小说书名需要显示两行并且省略超出部分'])
+            Novel(
+              id: 950000 + title.length,
+              title: title,
+              author: '作者',
+              genre: '轻小说',
+              summary: '',
+              colors: const [Colors.black, Colors.grey],
+            ),
+        ];
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: novelTheme(Brightness.light),
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
+                    children: [
+                      ArchiveFileCarousel(books: books, onOpen: (_, _) {}),
+                      const SizedBox(
+                        key: ValueKey('below-shelf'),
+                        height: 1200,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        final caption = find.byKey(const ValueKey('archive-shelf-open'));
+        final footer = find.byKey(const ValueKey('archive-carousel-footer'));
+        final below = find.byKey(const ValueKey('below-shelf'));
+        final captionRect = tester.getRect(caption);
+        final footerRect = tester.getRect(footer);
+        final belowTop = tester.getTopLeft(below);
+        for (final lane in [1.0, 0.0, 1.0, 0.0]) {
+          await _at(tester, lane);
+          expect(tester.getRect(caption), captionRect);
+          expect(tester.getRect(footer), footerRect);
+          expect(tester.getTopLeft(below), belowTop);
+          final title = find.descendant(
+            of: caption,
+            matching: find.text(books[lane.toInt()].title),
+          );
+          final status = find.descendant(
+            of: caption,
+            matching: find.textContaining('作者 ·'),
+          );
+          expect(tester.getTopLeft(title).dy, captionRect.top + 6);
+          expect(
+            tester.getBottomLeft(title).dy,
+            lessThanOrEqualTo(tester.getTopLeft(status).dy),
+          );
+          expect(
+            tester.getBottomLeft(status).dy,
+            lessThanOrEqualTo(captionRect.bottom),
+          );
+          expect(tester.takeException(), isNull);
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      });
+    }
+  }
+
+  testWidgets(
+    'diagonal shelf swipes lock horizontally while vertical drags scroll',
+    (tester) async {
+      _view(tester);
+      final feed = ScrollController();
+      addTearDown(feed.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: novelTheme(Brightness.light),
+          home: Scaffold(
+            body: SingleChildScrollView(
+              controller: feed,
+              child: Column(
+                children: [
+                  const SizedBox(height: 160),
+                  ArchiveFileCarousel(books: _books(5), onOpen: (_, _) {}),
+                  const SizedBox(height: 1200),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      feed.jumpTo(100);
+      await tester.pumpAndSettle();
+      for (final direction in [-1.0, 1.0]) {
+        final before = _scene(tester).debugFocus;
+        final gesture = await tester.startGesture(tester.getCenter(_rail));
+        await gesture.moveBy(Offset(direction * 60, -12));
+        await tester.pump(const Duration(milliseconds: 80));
+        await gesture.moveBy(Offset(direction * 90, -30));
+        await tester.pump(const Duration(milliseconds: 80));
+        // Later vertical drift must stay locked to the horizontal rail.
+        await gesture.moveBy(const Offset(0, -70));
+        await tester.pump(const Duration(milliseconds: 80));
+        expect(feed.offset, 100);
+        expect((_scene(tester).debugFocus - before).abs(), greaterThan(.5));
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(feed.offset, 100);
+      }
+      final focus = _scene(tester).debugFocus;
+      await tester.timedDrag(
+        _rail,
+        const Offset(6, -100),
+        const Duration(milliseconds: 500),
+      );
+      await tester.pumpAndSettle();
+      expect(feed.offset, greaterThan(150));
+      expect(_scene(tester).debugFocus, closeTo(focus, .001));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   testWidgets(
     'the looping bank does not read or overwrite its parent feed PageStorage',
     (tester) async {
