@@ -57,11 +57,11 @@ android {
             applicationIdSuffix = ".profile_probe"
         }
         release {
-            // Local previews remain install-compatible. Public distributions
-            // use an owner's untracked key.properties, never an embedded key.
-            signingConfig = signingConfigs.getByName(
-                if (releaseKeyFile.isFile) "distribution" else "debug"
-            )
+            // Release tasks require the existing distribution key below.
+            // Preview builds use the separate debug variant.
+            if (releaseKeyFile.isFile) {
+                signingConfig = signingConfigs.getByName("distribution")
+            }
         }
     }
 

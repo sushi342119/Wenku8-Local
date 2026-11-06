@@ -14,14 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.2',
+  defaultValue: '1.8.3',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 49);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 50);
 const currentReleaseNotes = '''
-1. 收紧发现、书架和设置页顶部留白，发现页书名按实际行数显示，分页与重置抽取记录紧凑排布。
-2. 外观与性能面板默认收起，仅保留玻璃效果、动效和随机选书，并保留恢复自动选择。
-3. 移除减少动态效果、自定义及高级设置入口，升级和恢复备份时清理其旧覆盖配置，继续遵循系统减少动画设置。
-4. 阅读与排版工具箱移除离线词典入口，剩余三项改为单列完整显示；书架“任一 OR”保持原样。
+1. 清理正式构建的调试签名回退配置，继续要求现有固定发布密钥。
+2. 发布流程统一生成草稿，拒绝覆盖已有版本及附件，并串行处理发布任务。
+3. 补充备份范围和覆盖升级验收说明；沿用现有应用包名及更新附件命名。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

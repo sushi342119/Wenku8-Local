@@ -1,8 +1,14 @@
+import json
+import os
+import sys
+import contextlib
+import io
 import tempfile
 import re
 import subprocess
 import textwrap
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from prepare_release import metadata
@@ -110,3 +116,160 @@ class TestPipelineStatus(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, status, result.stderr)
                     self.assertIn('test-output', (Path(tmp) / 'build/flutter-tests.log').read_text())
+
+
+class ReleasePublicationTest(unittest.TestCase):
+    def run_release_step(self, *, existing=None, cli_failure=False, **event):
+        root = Path(__file__).resolve().parents[1]
+        workflow = (root / '.github/workflows/android-release.yml').read_text()
+        step = re.search(
+            r'      - name: Create draft release\n(.*?)(?=      - )',
+            workflow, re.S,
+        ).group(1)
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        with tempfile.TemporaryDirectory() as tmp:
+            temp = Path(tmp)
+            state_file = temp / 'state.json'
+            state_file.write_text(json.dumps({'release': existing, 'calls': []}))
+            fake = temp / 'gh'
+            fake.write_text(f'#!{sys.executable}\n' + textwrap.dedent('''\
+                import json
+                import os
+                from pathlib import Path
+                import sys
+
+                path = Path(os.environ['FAKE_GH_STATE'])
+                state = json.loads(path.read_text())
+                args = sys.argv[1:]
+                state['calls'].append(args)
+                path.write_text(json.dumps(state))
+                if os.environ['FAKE_GH_FAILURE'] == '1':
+                    sys.exit(7)
+                if args and args[0] == 'api':
+                    # Put the matching release on a later page to exercise pagination.
+                    print(json.dumps([[{'tag_name': 'v0.1.0'}],
+                                      [{'tag_name': state['release']['tag']}]
+                                      if state['release'] else []]))
+                    sys.exit(0)
+                if args[:2] != ['release', 'create']:
+                    sys.exit(90)
+                if state['release'] is not None:
+                    sys.exit(1)
+                state['release'] = {
+                    'tag': args[2],
+                    'draft': '--draft' in args,
+                    'latest': '--latest' in args,
+                    'target': args[args.index('--target') + 1],
+                    'assets': [arg for arg in args if arg.endswith(('.apk', '.zip'))],
+                }
+                path.write_text(json.dumps(state))
+                '''))
+            fake.chmod(0o700)
+            env = {
+                **os.environ,
+                'PATH': f'{temp}{os.pathsep}{os.environ["PATH"]}',
+                'FAKE_GH_STATE': str(state_file),
+                'FAKE_GH_FAILURE': '1' if cli_failure else '0',
+                'RELEASE_TAG': 'v1.8.2+49',
+                'GITHUB_SHA': 'candidate-commit',
+                'GITHUB_REPOSITORY': 'sushi342119/Shuyu',
+                **event,
+            }
+            result = subprocess.run(
+                ['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', script],
+                cwd=temp, env=env, capture_output=True, text=True,
+            )
+            return result, json.loads(state_file.read_text())
+
+    def test_all_triggers_create_only_a_draft(self):
+        for event in (
+            {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF_TYPE': 'tag',
+             'GITHUB_REF': 'refs/tags/v1.8.2+49'},
+            {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF_TYPE': 'branch',
+             'GITHUB_REF': 'refs/heads/main', 'PUBLISH_FROM_MAIN': 'true'},
+            {'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF_TYPE': 'branch',
+             'GITHUB_REF': 'refs/heads/main', 'PUBLISH_FROM_MAIN': 'true'},
+        ):
+            with self.subTest(event=event):
+                result, state = self.run_release_step(**event)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(state['release'], {
+                    'tag': 'v1.8.2+49', 'draft': True, 'latest': False,
+                    'target': 'candidate-commit',
+                    'assets': ['build/wenku8-local-v1.8.2+49-arm64-v8a.apk',
+                               'build/shuyu-source.zip'],
+                })
+                self.assertEqual(len(state['calls']), 2)
+                self.assertEqual(state['calls'][0], [
+                    'api', '--paginate', '--slurp',
+                    'repos/sushi342119/Shuyu/releases?per_page=100',
+                ])
+
+    def test_existing_draft_and_published_assets_are_unchanged(self):
+        for draft in (True, False):
+            existing = {
+                'tag': 'v1.8.2+49', 'draft': draft,
+                'assets': ['original.apk'], 'digest': 'original-digest',
+            }
+            with self.subTest(draft=draft):
+                result, state = self.run_release_step(existing=existing)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Release already exists (including drafts)', result.stderr)
+                self.assertEqual(state['release'], existing)
+                self.assertEqual(len(state['calls']), 1)
+
+    def test_cli_errors_stop_without_fallback_mutations(self):
+        result, state = self.run_release_step(cli_failure=True)
+        self.assertEqual(result.returncode, 7)
+        self.assertIsNone(state['release'])
+        self.assertEqual(len(state['calls']), 1)
+
+
+class UpdateIdentityValidationTest(unittest.TestCase):
+    def check_candidate(self, *, package='org.mewx.wenku8_flutter', build=50,
+                        version='1.8.3', certificate='aabb', invalid_signature=False):
+        workflow = (Path(__file__).resolve().parents[1] /
+                    '.github/workflows/android-release.yml').read_text()
+        step = re.search(
+            r'      - name: Verify update identity against published APK\n(.*?)(?=      - )',
+            workflow, re.S,
+        ).group(1)
+        script = textwrap.dedent(step.split('        run: |\n', 1)[1])
+        python = script.split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+
+        def inspect_command(command, *, text):
+            old = command[-1] == 'old.apk'
+            if 'badging' in command:
+                identity = ('org.mewx.wenku8_flutter', 49, '1.8.2') if old else (package, build, version)
+                return "package: name='%s' versionCode='%s' versionName='%s'\n" % identity
+            if invalid_signature and not old:
+                raise subprocess.CalledProcessError(1, command)
+            digest = 'aabb' if old else certificate
+            return f'Signer #1 certificate SHA-256 digest: {digest}\n' if digest else ''
+
+        with mock.patch.dict(os.environ, {'ANDROID_HOME': '/sdk', 'APP_BUILD': '50',
+                                         'APP_VERSION': '1.8.3'}), \
+                mock.patch.object(sys, 'argv', ['verify', 'old.apk']), \
+                mock.patch.object(Path, 'glob', return_value=iter([Path('/sdk/build-tools/36.0.0/apksigner')])), \
+                mock.patch.object(subprocess, 'check_output', side_effect=inspect_command), \
+                contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(python, 'workflow-update-identity', 'exec'), {})
+
+    def test_same_identity_and_increasing_version_are_accepted(self):
+        self.check_candidate()
+
+    def test_incompatible_packages_certificates_and_versions_are_rejected(self):
+        for candidate in (
+            {'package': 'com.github.sushi342119.wenku8local'},
+            {'certificate': 'ccdd'},
+            {'certificate': ''},
+            {'build': 49},
+            {'build': 51},
+            {'version': '1.8.2'},
+        ):
+            with self.subTest(candidate=candidate), self.assertRaises(SystemExit):
+                self.check_candidate(**candidate)
+
+    def test_invalid_signature_stops_release(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.check_candidate(invalid_signature=True)

@@ -8,8 +8,8 @@ on:
 permissions:
   contents: write
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -73,6 +73,45 @@ jobs:
             --dart-define=UPDATE_REPOSITORY=${{ github.repository }} \
             --dart-define=APP_VERSION=${{ env.APP_VERSION }} \
             --dart-define=APP_BUILD=${{ env.APP_BUILD }}
+      - name: Verify update identity against published APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          baseline="$(mktemp -d)"
+          trap 'rm -rf "$baseline"' EXIT
+          gh release download 'v1.8.2+49' --repo "$GITHUB_REPOSITORY" \
+            --pattern 'wenku8-local-v1.8.2+49-arm64-v8a.apk' --dir "$baseline"
+          python3 - "$baseline/wenku8-local-v1.8.2+49-arm64-v8a.apk" <<'PY'
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          signer = max(Path(os.environ["ANDROID_HOME"]).glob("build-tools/*/apksigner"),
+                       key=lambda path: tuple(map(int, re.findall(r"\d+", path.parent.name))))
+          aapt = signer.parent / "aapt"
+          def inspect(path):
+              badging = subprocess.check_output([str(aapt), "dump", "badging", path], text=True)
+              package = re.search(r"^package: name='([^']+)' versionCode='(\d+)' versionName='([^']+)'", badging)
+              if package is None:
+                  raise SystemExit("Cannot read APK package identity")
+              report = subprocess.check_output([str(signer), "verify", "--verbose", "--print-certs", path], text=True)
+              certificates = set(re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$", report, re.M))
+              if not certificates:
+                  raise SystemExit("Cannot read verified APK signing certificates")
+              return package[1], int(package[2]), package[3], certificates
+
+          old = inspect(sys.argv[1])
+          new = inspect("build/app/outputs/flutter-apk/app-release.apk")
+          if old[0] != "org.mewx.wenku8_flutter" or new[0] != old[0] or new[3] != old[3]:
+              raise SystemExit("APK application ID or signing certificate changed; refusing release")
+          if old[1:3] != (49, "1.8.2") or new[1] != int(os.environ["APP_BUILD"]) or new[1] <= old[1] or new[2] != os.environ["APP_VERSION"]:
+              raise SystemExit("APK version metadata is incompatible")
+          print(f"Verified same-package, same-certificate update: {old[2]}+{old[1]} -> {new[2]}+{new[1]}")
+          print("Signing certificate SHA-256:", ", ".join(sorted(new[3])))
+          PY
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
         with:
@@ -85,18 +124,26 @@ jobs:
           zip -qr "${GITHUB_WORKSPACE}/build/shuyu-source.zip" shuyu-source
       - name: Name compatible update asset
         run: cp build/app/outputs/flutter-apk/app-release.apk "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk"
-      - name: Publish release
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
-          PUBLISH_FROM_MAIN: "${{ github.event_name == 'workflow_dispatch' || startsWith(github.event.head_commit.message, 'release: ') }}"
         run: |
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release upload "$RELEASE_TAG" "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip --clobber
-          elif [[ "$GITHUB_REF_TYPE" == "tag" || ( "$GITHUB_REF" == "refs/heads/main" && "$PUBLISH_FROM_MAIN" == "true" ) ]]; then
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --latest --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
-          else
-            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
-          fi
+          set -euo pipefail
+          # Include drafts and every page; an API failure must stop creation.
+          releases="$(mktemp)"
+          trap 'rm -f "$releases"' EXIT
+          gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/releases?per_page=100" > "$releases"
+          python3 - "$releases" <<'PY'
+          import json
+          import os
+          import sys
+          with open(sys.argv[1], encoding="utf-8") as source:
+              pages = json.load(source)
+          if any(release["tag_name"] == os.environ["RELEASE_TAG"] for page in pages for release in page):
+              raise SystemExit("Release already exists (including drafts); use a new build number and tag")
+          PY
+          # Never replace existing assets or publish without manual review.
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
       - name: Remove signing material
         if: always()
         run: rm -f android/key.properties android/release.keystore
