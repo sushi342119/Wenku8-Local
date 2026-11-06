@@ -14,13 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.3',
+  defaultValue: '1.8.4',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 50);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 51);
 const currentReleaseNotes = '''
-1. 清理正式构建的调试签名回退配置，继续要求现有固定发布密钥。
-2. 发布流程统一生成草稿，拒绝覆盖已有版本及附件，并串行处理发布任务。
-3. 补充备份范围和覆盖升级验收说明；沿用现有应用包名及更新附件命名。
+1. 修复发现页左右滑动 3D 书架、切换长短书名时页面上下抖动的问题。
+2. 书名保留紧凑的两行固定高度、顶部对齐，并适配系统字体缩放。
+3. 验证横向斜滑不会带动外层页面，纵向滚动保持正常。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
