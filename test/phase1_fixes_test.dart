@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
@@ -97,6 +98,10 @@ void main() {
   late CompositeNovelRepository repository;
 
   setUp(() async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(LocalPlatform.channel, (call) async {
+          throw MissingPluginException();
+        });
     SharedPreferences.resetStatic();
     preferences = _Preferences();
     SharedPreferencesStorePlatform.instance = preferences;
@@ -429,7 +434,11 @@ void main() {
             TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
                 .setMockMethodCallHandler(
                   LocalPlatform.channel,
-                  (call) async => call.method == 'renderPdfPage' ? '' : null,
+                  (call) async {
+                    if (call.method == 'renderPdfPage') return '';
+                    if (call.method == 'clearPdfCache') return null;
+                    throw MissingPluginException();
+                  },
                 );
           }
           await mount(
