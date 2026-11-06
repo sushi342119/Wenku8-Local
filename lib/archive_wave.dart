@@ -269,6 +269,8 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
         )..addListener(_scrolled);
         final rowHeight = ArchiveShelfGeometry.rowHeight(cover, height);
         final dark = Theme.of(context).brightness == Brightness.dark;
+        final titleHeight = (MediaQuery.textScalerOf(context).scale(17) * 1.35 * 2)
+            .ceilToDouble();
         return SizedBox(
           width: width,
           child: Column(
@@ -346,14 +348,23 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                                 mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text(
-                                    book.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontSize: 17,
-                                      height: 1.35,
-                                      fontWeight: FontWeight.w700,
+                                  // Reserve two compact lines even for short titles.
+                                  // Scale each line with accessibility text settings,
+                                  // so changing books never moves the feed below.
+                                  SizedBox(
+                                    height: titleHeight,
+                                    child: Align(
+                                      alignment: Alignment.topLeft,
+                                      child: Text(
+                                        book.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: const TextStyle(
+                                          fontSize: 17,
+                                          height: 1.35,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
                                     ),
                                   ),
                                   Text(
