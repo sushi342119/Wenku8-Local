@@ -402,8 +402,10 @@ void main() {
       await tester.tapAt(const Offset(30, 400));
       await _settle(tester);
       expect(scroll.pixels, scroll.minScrollExtent);
-      scroll.jumpTo(scroll.maxScrollExtent - 10);
-      await _settle(tester);
+      for (var i = 0; i < 3; i++) {
+        scroll.jumpTo(scroll.maxScrollExtent - 10);
+        await _settle(tester);
+      }
       await tester.tapAt(const Offset(390, 400));
       await _settle(tester);
       expect(scroll.pixels, scroll.maxScrollExtent);
@@ -473,6 +475,10 @@ void main() {
               reloaded.bookmarksFor(book.id).single.id,
               state.bookmarksFor(book.id).single.id,
             );
+            ScaffoldMessenger.maybeOf(
+              tester.element(find.byType(Scaffold).first),
+            )?.clearSnackBars();
+            await _settle(tester);
             if (pdf) {
               await tester.tap(
                 find.byKey(const ValueKey('reader-catalogue-entry')),
@@ -484,10 +490,6 @@ void main() {
               );
               expect(find.widgetWithText(ListTile, '第 1 页'), findsOneWidget);
             } else {
-              ScaffoldMessenger.maybeOf(
-                tester.element(find.byType(Scaffold).first),
-              )?.clearSnackBars();
-              await _settle(tester);
               await tester.tap(_control('阅读设置'));
               await _settle(tester);
               await tester.tap(find.text('书签'));
