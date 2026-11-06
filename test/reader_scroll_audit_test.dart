@@ -15,7 +15,7 @@ void main({Future<void> Function(WidgetTester, GlobalKey, String)? capture}) {
   late OfflineFixtureRepository repository;
   late GlobalKey boundary;
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     repository = OfflineFixtureRepository();
     boundary = GlobalKey();

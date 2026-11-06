@@ -20,11 +20,13 @@ class ArchiveFileCarousel extends StatefulWidget {
     required this.onOpen,
     this.reduceMotion = false,
     this.animateEntrance = false,
+    this.footerAction,
   });
   final List<Novel> books;
   final void Function(Novel book, Object heroTag) onOpen;
   final bool reduceMotion;
   final bool animateEntrance;
+  final Widget? footerAction;
   @override
   State<ArchiveFileCarousel> createState() => _ArchiveFileCarouselState();
 }
@@ -235,7 +237,14 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
   Widget build(BuildContext context) {
     if (widget.books.isEmpty) return const SizedBox.shrink();
     if (!PerformanceScope.of(context).shelf3d) {
-      return _FlatArchiveCarousel(books: widget.books, onOpen: widget.onOpen);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _FlatArchiveCarousel(books: widget.books, onOpen: widget.onOpen),
+          if (widget.footerAction case final action?)
+            Align(alignment: Alignment.centerRight, child: action),
+        ],
+      );
     }
     _reduced = widget.reduceMotion || MediaQuery.disableAnimationsOf(context);
     return LayoutBuilder(
@@ -260,81 +269,81 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
         )..addListener(_scrolled);
         final rowHeight = ArchiveShelfGeometry.rowHeight(cover, height);
         final dark = Theme.of(context).brightness == Brightness.dark;
-        return SizedBox(width: width, child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              height: rowHeight,
-              child: NotificationListener<ScrollNotification>(
-                onNotification: (notification) {
-                  if (notification is ScrollStartNotification &&
-                      notification.dragDetails != null) {
-                    _finishEntrance();
-                    _targetIndex = null;
-                    _command++;
-                    _hapticGesture = true;
-                    _lastDetent = _pose.logicalFocus.round();
-                  } else if (notification is ScrollStartNotification &&
-                      _targetIndex != null) {
-                    _hapticGesture = true;
-                  } else if (notification is ScrollEndNotification) {
-                    _hapticGesture = false;
-                  }
-                  return false;
-                },
-                child: Scrollable(
-                  key: const ValueKey('archive-file-carousel'),
-                  controller: _scroll,
-                  axisDirection: AxisDirection.right,
-                  physics: widget.books.length == 1
-                      ? const NeverScrollableScrollPhysics()
-                      : _ArchiveSnapPhysics(pose: _pose),
-                  viewportBuilder: (context, offset) => _ShelfRow(
-                    offset: offset,
-                    pose: _pose,
-                    firstSlot: _firstSlot,
-                    spine: spine,
-                    cover: cover,
-                    height: height,
-                    dark: dark,
-                    children: [
-                      for (var slot = _firstSlot; slot < _endSlot; slot++)
-                        KeyedSubtree(
-                          key: ValueKey<int>(slot),
-                          child: _volume(
-                            context,
-                            widget.books[_pose.bookIndex(slot)],
-                            slot,
-                            spine,
-                            cover,
-                            height,
+        return SizedBox(
+          width: width,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                height: rowHeight,
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification is ScrollStartNotification &&
+                        notification.dragDetails != null) {
+                      _finishEntrance();
+                      _targetIndex = null;
+                      _command++;
+                      _hapticGesture = true;
+                      _lastDetent = _pose.logicalFocus.round();
+                    } else if (notification is ScrollStartNotification &&
+                        _targetIndex != null) {
+                      _hapticGesture = true;
+                    } else if (notification is ScrollEndNotification) {
+                      _hapticGesture = false;
+                    }
+                    return false;
+                  },
+                  child: Scrollable(
+                    key: const ValueKey('archive-file-carousel'),
+                    controller: _scroll,
+                    axisDirection: AxisDirection.right,
+                    physics: widget.books.length == 1
+                        ? const NeverScrollableScrollPhysics()
+                        : _ArchiveSnapPhysics(pose: _pose),
+                    viewportBuilder: (context, offset) => _ShelfRow(
+                      offset: offset,
+                      pose: _pose,
+                      firstSlot: _firstSlot,
+                      spine: spine,
+                      cover: cover,
+                      height: height,
+                      dark: dark,
+                      children: [
+                        for (var slot = _firstSlot; slot < _endSlot; slot++)
+                          KeyedSubtree(
+                            key: ValueKey<int>(slot),
+                            child: _volume(
+                              context,
+                              widget.books[_pose.bookIndex(slot)],
+                              slot,
+                              spine,
+                              cover,
+                              height,
+                            ),
                           ),
-                        ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            // Only labels change at index crossings. Never rebuild the bank for
-            // each scroll pixel, and never restart a separate extraction timer.
-            _entryLabel(
-              ValueListenableBuilder<int>(
-                valueListenable: _active,
-                builder: (context, index, _) {
-                  final book = widget.books[index % widget.books.length];
-                  final scale = MediaQuery.textScalerOf(context).scale(17) / 17;
-                  return SizedBox(
-                    height: 16 + 17 * 1.35 * 2 * scale + 12 * 1.4 * scale,
-                    child: JellyTapSurface(
+              // Only labels change at index crossings. Never rebuild the bank for
+              // each scroll pixel, and never restart a separate extraction timer.
+              _entryLabel(
+                ValueListenableBuilder<int>(
+                  valueListenable: _active,
+                  builder: (context, index, _) {
+                    final book = widget.books[index % widget.books.length];
+                    return JellyTapSurface(
                       key: const ValueKey('archive-shelf-open'),
                       onTap: () => _open(_pose.focus.round()),
                       child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        padding: const EdgeInsets.only(top: 6, bottom: 2),
                         child: Row(
                           children: [
                             Expanded(
                               child: Column(
+                                mainAxisSize: MainAxisSize.min,
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Text(
@@ -367,49 +376,61 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                           ],
                         ),
                       ),
-                    ),
-                  );
-                },
-              ),
-              .52,
-            ),
-            _entryLabel(
-              ValueListenableBuilder<int>(
-                valueListenable: _active,
-                builder: (context, index, _) => Row(
-                  children: [
-                    const Spacer(),
-                    if (widget.books.length > 1) ...[
-                      IconButton(
-                        tooltip: '上一份档案',
-                        onPressed: () => _step(-1),
-                        icon: const Icon(CupertinoIcons.chevron_left, size: 13),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      Semantics(
-                        label:
-                            '第 ${index % widget.books.length + 1} 本，共 ${widget.books.length} 本，循环浏览',
-                        child: ArchiveCode(
-                          '${(index % widget.books.length + 1).toString().padLeft(2, '0')} / ${widget.books.length.toString().padLeft(2, '0')}',
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: '下一份档案',
-                        onPressed: () => _step(1),
-                        icon: const Icon(
-                          CupertinoIcons.chevron_right,
-                          size: 13,
-                        ),
-                        visualDensity: VisualDensity.compact,
-                      ),
-                    ],
-                  ],
+                    );
+                  },
                 ),
+                .52,
               ),
-              .72,
-            ),
-          ],
-        ));
+              _entryLabel(
+                ValueListenableBuilder<int>(
+                  valueListenable: _active,
+                  builder: (context, index, _) => Wrap(
+                    key: const ValueKey('archive-carousel-footer'),
+                    alignment: WrapAlignment.spaceBetween,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      if (widget.books.length > 1)
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              tooltip: '上一份档案',
+                              onPressed: () => _step(-1),
+                              icon: const Icon(
+                                CupertinoIcons.chevron_left,
+                                size: 13,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            Semantics(
+                              label:
+                                  '第 ${index % widget.books.length + 1} 本，共 ${widget.books.length} 本，循环浏览',
+                              child: ArchiveCode(
+                                '${(index % widget.books.length + 1).toString().padLeft(2, '0')} / ${widget.books.length.toString().padLeft(2, '0')}',
+                              ),
+                            ),
+                            IconButton(
+                              tooltip: '下一份档案',
+                              onPressed: () => _step(1),
+                              icon: const Icon(
+                                CupertinoIcons.chevron_right,
+                                size: 13,
+                              ),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                          ],
+                        ),
+                      ?widget.footerAction,
+                    ],
+                  ),
+                ),
+                .72,
+              ),
+            ],
+          ),
+        );
       },
     );
   }

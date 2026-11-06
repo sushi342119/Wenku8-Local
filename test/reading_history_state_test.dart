@@ -119,7 +119,7 @@ void main() {
       expect(reloaded.shelf, {71});
       expect(reloaded.chapterFor(72), 2);
       expect(reloaded.fontSize, 25);
-      expect(reloaded.glassBlur, 12);
+      expect(reloaded.glassBlur, 8, reason: 'the retired slider migrates before clearing history');
       expect(reloaded.positionFor(71)!.offset, 600);
     },
   );

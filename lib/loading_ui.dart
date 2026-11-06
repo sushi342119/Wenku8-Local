@@ -197,7 +197,8 @@ class LibrarySkeleton extends StatelessWidget {
         child: Padding(
           padding: EdgeInsets.fromLTRB(
             24,
-            MediaQuery.paddingOf(context).top + 76,
+            // Match discovery's 56 px toolbar plus 8 px content inset.
+            MediaQuery.paddingOf(context).top + 64,
             24,
             0,
           ),
@@ -210,7 +211,7 @@ class LibrarySkeleton extends StatelessWidget {
                     height: 44,
                     child: LoadingSkeleton(layout: SkeletonLayout.actions),
                   ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 8),
               const ArchiveShelfSkeleton(),
               const SizedBox(height: 32),
               const SizedBox(
@@ -256,7 +257,7 @@ class ArchiveShelfSkeleton extends StatelessWidget {
                 ),
               ),
               SizedBox(
-                height: 16 + 17 * 1.35 * 2 * scale + 12 * 1.4 * scale,
+                height: 8 + 17 * 1.35 * scale + 12 * 1.4 * scale,
                 child: const LoadingSkeleton(layout: SkeletonLayout.actions),
               ),
               const SizedBox(

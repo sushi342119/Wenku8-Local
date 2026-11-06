@@ -93,7 +93,7 @@ void main({
   late _Reader repository;
   late GlobalKey boundary;
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     repository = _Reader();
     boundary = GlobalKey();

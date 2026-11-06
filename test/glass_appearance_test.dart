@@ -12,12 +12,15 @@ import 'package:wenku8_flutter/pages.dart';
 
 void main() {
   test(
-    'initial glass strength is lighter and saved choices are retained',
+    'initial glass strength and retired overrides use tier defaults',
     () async {
       SharedPreferences.setMockInitialValues({});
       expect((await LibraryState.load()).glassBlur, 8);
       SharedPreferences.setMockInitialValues({'glassBlur': 18.0});
-      expect((await LibraryState.load()).glassBlur, 18);
+      final migrated = await LibraryState.load();
+      addTearDown(migrated.dispose);
+      expect(migrated.glassBlur, 8);
+      expect(migrated.glassAdvanced, isFalse);
     },
   );
   testWidgets(
@@ -42,13 +45,14 @@ void main() {
   );
 
   test(
-    'glass preferences clamp, preview without I/O, then persist on release',
+    'legacy glass setters clamp and persist independently of startup migration',
     () async {
       SharedPreferences.setMockInitialValues({
         'glassBlur': 40.0,
         'glassOpacity': -1.0,
       });
-      final state = await LibraryState.load();
+      final state = LibraryState(await SharedPreferences.getInstance());
+      addTearDown(state.dispose);
       expect(state.glassBlur, 24);
       expect(state.glassOpacity, 0);
       await state.setGlassBlur(12, persist: false);
@@ -59,7 +63,8 @@ void main() {
       // End-of-drag must save even though preview already set the same value.
       await state.setGlassBlur(12);
       await state.setGlassOpacity(.35);
-      final restored = await LibraryState.load();
+      final restored = LibraryState(await SharedPreferences.getInstance());
+      addTearDown(restored.dispose);
       expect(restored.glassBlur, 12);
       expect(restored.glassOpacity, .35);
     },
@@ -295,23 +300,11 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('设置').last);
       await tester.pumpAndSettle();
-      // The v1.7.1 sliders now live under 外观与性能 → 高级.
-      final advanced = find.byKey(const ValueKey('glass-advanced-toggle'));
-      await tester.scrollUntilVisible(
-        advanced,
-        180,
-        scrollable: find.descendant(
-          of: find.byKey(const PageStorageKey('settings')),
-          matching: find.byType(Scrollable),
-        ),
+      final toggle = find.byKey(
+        const ValueKey('appearance-performance-toggle'),
       );
-      // ensureVisible's jump is laid out on the next frame; tap after it.
-      await tester.pumpAndSettle();
-      await tester.tap(advanced);
-      await tester.pumpAndSettle();
-      final blurFinder = find.byKey(const ValueKey('glass-blur-slider'));
       await tester.scrollUntilVisible(
-        blurFinder,
+        toggle,
         180,
         scrollable: find.descendant(
           of: find.byKey(const PageStorageKey('settings')),
@@ -319,30 +312,28 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      final slider = tester.widget<CupertinoSlider>(blurFinder);
-      slider.onChanged!(8);
-      slider.onChangeEnd!(8);
+      await tester.tap(toggle);
       await tester.pumpAndSettle();
-      final opacitySlider = tester.widget<CupertinoSlider>(
-        find.byKey(const ValueKey('glass-opacity-slider')),
+      await tester.ensureVisible(find.text('强'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('强'));
+      await tester.pumpAndSettle();
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 20)),
       );
-      opacitySlider.onChanged!(.42);
-      opacitySlider.onChangeEnd!(.42);
       await tester.pumpAndSettle();
-      expect(state.glassBlur, 8);
-      expect(state.glassOpacity, .42);
       final appearance = GlassAppearance.of(
         tester.element(find.byKey(const ValueKey('liquid-dock'))),
       );
-      expect(appearance.blur, 8);
-      expect(appearance.opacity, .42);
+      expect(appearance.blur, 14);
+      expect(appearance.opacity, .78);
       final underlay = tester.widget<ProgressiveBlur>(
         find.descendant(
           of: find.byType(DockUnderlay),
           matching: find.byType(ProgressiveBlur),
         ),
       );
-      expect(underlay.maxSigma, closeTo(1.28, .01));
+      expect(underlay.maxSigma, closeTo(2.24, .01));
       expect(underlay.fromBottom, isTrue);
       expect(
         find.byWidgetPredicate(

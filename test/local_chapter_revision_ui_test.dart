@@ -64,7 +64,7 @@ void main() {
     root = await Directory.systemTemp.createTemp('chapter-revision-ui-');
     SharedPreferences.setMockInitialValues({
       'local_library_folder': 'content://test/tree',
-      'reduceMotion': true,
+      'motionLevel': 'off',
     });
     messenger.setMockMethodCallHandler(paths, (_) async => root.path);
     messenger.setMockMethodCallHandler(LocalPlatform.channel, (call) async {

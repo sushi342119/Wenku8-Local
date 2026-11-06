@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_state.dart';
+import 'package:wenku8_flutter/ui_preferences.dart';
 import 'package:wenku8_flutter/main.dart';
 import 'package:wenku8_flutter/offline_cache.dart';
 import 'package:wenku8_flutter/offline_repository.dart';
@@ -125,7 +126,7 @@ void main({
   late GlobalKey imageKey;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     remote = _ReaderRepository();
     directory = await Directory.systemTemp.createTemp('novel8-reading-ui-');
@@ -215,7 +216,7 @@ void main({
     (tester) async {
       final novel = _directory(71, count: 1200);
       remote.books[71] = novel;
-      await state.setReduceMotion(false);
+      await state.setMotionLevel(MotionLevel.light);
       await reader(tester, novel: novel, chapter: 876);
       await openCatalogue(tester);
       expect(find.byType(ReaderCatalogue), findsOneWidget);

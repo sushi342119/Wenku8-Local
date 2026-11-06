@@ -20,6 +20,7 @@ class NovelRandomPickSection extends StatefulWidget {
     required this.onOpenDetail,
     this.matchMode = TagMatchMode.any,
     this.pace = RandomPickPace.quick,
+    this.carouselBuilder,
   });
 
   final List<Novel> books;
@@ -30,6 +31,10 @@ class NovelRandomPickSection extends StatefulWidget {
 
   /// 快速 900ms by default; 仪式 2400ms is optional.
   final RandomPickPace pace;
+
+  /// Places the history action beside the discovery carousel's pager while
+  /// keeping draw-count loading, writes and empty filters in this state.
+  final Widget Function(Widget resetButton)? carouselBuilder;
 
   @override
   State<NovelRandomPickSection> createState() => _NovelRandomPickSectionState();
@@ -171,24 +176,26 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
 
   Widget _buildFilterHeader(int candidateCount) {
     final tags = _tagStore.tags;
+    final resetButton = TextButton(
+      onPressed: _countsLoaded ? _resetDrawCounts : null,
+      style: TextButton.styleFrom(
+        foregroundColor: Theme.of(context).colorScheme.onSurfaceVariant,
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+        minimumSize: const Size(0, 32),
+      ),
+      child: const Text('重置抽取记录', style: TextStyle(fontSize: 12)),
+    );
 
     return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Align(
-          alignment: Alignment.centerRight,
-          child: TextButton(
-            onPressed: _countsLoaded ? _resetDrawCounts : null,
-            style: TextButton.styleFrom(
-              foregroundColor: _muted,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              minimumSize: const Size(0, 32),
-            ),
-            child: const Text('重置抽取记录', style: TextStyle(fontSize: 12)),
-          ),
-        ),
+        if (widget.carouselBuilder case final builder?)
+          builder(resetButton)
+        else
+          Align(alignment: Alignment.centerRight, child: resetButton),
         if (tags.isNotEmpty) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 4),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(

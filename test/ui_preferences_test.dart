@@ -31,8 +31,10 @@ void main() {
       expect(resolve().tier, GlassTier.standard);
       expect(resolve().automatic, isTrue);
       expect(resolve(lowEnd: true).tier, GlassTier.light);
-      expect(resolve(chosen: GlassTier.strong, lowEnd: true).tier,
-          GlassTier.strong);
+      expect(
+        resolve(chosen: GlassTier.strong, lowEnd: true).tier,
+        GlassTier.strong,
+      );
     });
 
     test('标准 equals the v1.7.1 defaults and allows every effect', () {
@@ -78,49 +80,76 @@ void main() {
     expect(const DeviceProfile(sdkInt: 29).lowEnd, isTrue);
     expect(const DeviceProfile(sdkInt: 30).lowEnd, isFalse);
     expect(
-      const DeviceProfile(sdkInt: 34, totalMemoryBytes: 3800 * 1024 * 1024)
-          .lowEnd,
+      const DeviceProfile(
+        sdkInt: 34,
+        totalMemoryBytes: 3800 * 1024 * 1024,
+      ).lowEnd,
       isTrue,
     );
     expect(
-      const DeviceProfile(sdkInt: 34, totalMemoryBytes: 5800 * 1024 * 1024)
-          .lowEnd,
+      const DeviceProfile(
+        sdkInt: 34,
+        totalMemoryBytes: 5800 * 1024 * 1024,
+      ).lowEnd,
       isFalse,
     );
     expect(const DeviceProfile().lowEnd, isFalse);
   });
 
   group('LibraryState new keys', () {
-    test('upgraders with moved sliders keep them as advanced', () async {
-      SharedPreferences.setMockInitialValues({
-        'glassBlur': 15.0,
-        'readerFontSize': 26.0,
-      });
-      final state = await LibraryState.load();
-      addTearDown(state.dispose);
-      expect(state.glassAdvanced, isTrue);
-      expect(state.resolvedGlass.blur, 15);
-      expect(state.fontSize, 26, reason: 'old records load unchanged');
-      expect(state.motionLevel, MotionLevel.light);
-      expect(state.randomPickPace, RandomPickPace.quick);
-      expect(state.pdfNightInvert, isTrue);
-    });
+    test(
+      'upgraders retire hidden overrides and keep visible preferences',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'glassBlur': 15.0,
+          'readerFontSize': 26.0,
+          'reduceMotion': true,
+          'lowPerformanceMode': true,
+          'glassAdvanced': true,
+          'glassTier': 'strong',
+          'motionLevel': 'standard',
+        });
+        final state = await LibraryState.load();
+        addTearDown(state.dispose);
+        expect(state.glassAdvanced, isFalse);
+        expect(state.resolvedGlass.blur, 14);
+        expect(state.reduceMotion, isFalse);
+        expect(state.performance.enabled, isFalse);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        expect(prefs.get('reduceMotion'), false);
+        expect(prefs.get('lowPerformanceMode'), false);
+        expect(prefs.get('glassAdvanced'), false);
+        expect(prefs.get('glassBlur'), 8.0);
+        final restarted = await LibraryState.load();
+        addTearDown(restarted.dispose);
+        expect(restarted.glassAdvanced, isFalse);
+        expect(restarted.resolvedGlass.blur, 14);
+        expect(restarted.motionLevel, MotionLevel.standard);
+        expect(state.fontSize, 26, reason: 'old records load unchanged');
+        expect(state.motionLevel, MotionLevel.standard);
+        expect(state.randomPickPace, RandomPickPace.quick);
+        expect(state.pdfNightInvert, isTrue);
+      },
+    );
 
-    test('fresh install follows the tier and old keys stay untouched',
-        () async {
-      SharedPreferences.setMockInitialValues({});
-      final state = await LibraryState.load();
-      addTearDown(state.dispose);
-      expect(state.glassAdvanced, isFalse);
-      await state.setGlassTier(GlassTier.light);
-      expect(state.resolvedGlass.blur, 4);
-      final prefs = await SharedPreferences.getInstance();
-      expect(prefs.get('glassTier'), 'light');
-      expect(prefs.get('glassBlur'), isNull);
-      await state.setGlassTier(null);
-      expect(prefs.get('glassTier'), glassTierAuto);
-      expect(state.glassTierChoice, isNull);
-    });
+    test(
+      'fresh install follows the tier and old keys stay untouched',
+      () async {
+        SharedPreferences.setMockInitialValues({});
+        final state = await LibraryState.load();
+        addTearDown(state.dispose);
+        expect(state.glassAdvanced, isFalse);
+        await state.setGlassTier(GlassTier.light);
+        expect(state.resolvedGlass.blur, 4);
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.get('glassTier'), 'light');
+        expect(prefs.get('glassBlur'), isNull);
+        await state.setGlassTier(null);
+        expect(prefs.get('glassTier'), glassTierAuto);
+        expect(state.glassTierChoice, isNull);
+      },
+    );
 
     test('backup round-trips every new key only with preferences', () async {
       SharedPreferences.setMockInitialValues({});

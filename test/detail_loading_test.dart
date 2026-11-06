@@ -322,7 +322,7 @@ void main({
       await tester.pumpAndSettle();
       SharedPreferences.setMockInitialValues({
         'chapter_83': 99999,
-        'reduceMotion': true,
+        'motionLevel': 'off',
       });
       final legacy = await LibraryState.load();
       addTearDown(legacy.dispose);

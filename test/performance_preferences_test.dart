@@ -55,7 +55,7 @@ void main() {
   );
 
   test(
-    'backup merges performance switches only when preferences are requested',
+    'backup normalizes retired performance switches when preferences are requested',
     () async {
       await TagStore.load();
       const preferences = PerformancePreferences(
@@ -69,13 +69,13 @@ void main() {
       await state.restoreBackup(parsed);
       expect(state.performance.enabled, false);
       await state.restoreBackup(parsed, importPreferences: true);
-      expect(state.performance, preferences);
-      // Older backups lack these keys and must not reset a newer device preset.
+      expect(state.performance, const PerformancePreferences());
+      // Older backups also cannot reactivate retired overrides.
       await state.restoreBackup(
         await LibraryBackup.fromRecords({'theme': 'light'}),
         importPreferences: true,
       );
-      expect(state.performance, preferences);
+      expect(state.performance, const PerformancePreferences());
       await expectLater(
         LibraryBackup.fromRecords({'performanceBlur': 'yes'}),
         throwsA(isA<FormatException>()),

@@ -10,6 +10,7 @@ import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/glass_dock.dart';
 import 'package:wenku8_flutter/library_state.dart';
+import 'package:wenku8_flutter/ui_preferences.dart';
 import 'package:wenku8_flutter/local_epub.dart';
 import 'package:wenku8_flutter/local_epub_reader.dart';
 import 'package:wenku8_flutter/local_epub_reader_tools.dart';
@@ -118,7 +119,7 @@ void main() {
   late _EpubStore local;
 
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     local = _EpubStore();
   });
@@ -350,7 +351,7 @@ void main() {
   }
 
   testWidgets('EPUB 文字块点按显隐不改章节', (tester) async {
-    await state.setReduceMotion(false);
+    await state.setMotionLevel(MotionLevel.light);
     await reader(tester, chapter: 1);
     final text = find.text((local.data(1).blocks.first).text!);
     expectChrome(tester, true);
@@ -427,7 +428,7 @@ void main() {
   );
 
   testWidgets('EPUB 全书进度条随控件显隐，单章不可滚动时不显示', (tester) async {
-    await state.setReduceMotion(false);
+    await state.setMotionLevel(MotionLevel.light);
     await reader(tester, chapter: 1);
     expect(progressBar().hitTestable(), findsOneWidget);
     await tester.tap(find.text(local.data(1).blocks.first.text!));

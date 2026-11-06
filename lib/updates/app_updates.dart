@@ -14,17 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.1',
+  defaultValue: '1.8.2',
 );
-const currentAppBuild = int.fromEnvironment(
-  'APP_BUILD',
-  defaultValue: 48,
-);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 49);
 const currentReleaseNotes = '''
-1. 优化全站深色模式，统一页面配色并移除装饰性英文小标题。
-2. 优化书籍编号显示，使用更简洁的短编号。
-3. 调整阅读页透明底栏与单章进度条。
-4. 增加章末底部留白，修复“继续下一章”按钮被底栏进度条遮挡的问题。
+1. 收紧发现、书架和设置页顶部留白，发现页书名按实际行数显示，分页与重置抽取记录紧凑排布。
+2. 外观与性能面板默认收起，仅保留玻璃效果、动效和随机选书，并保留恢复自动选择。
+3. 移除减少动态效果、自定义及高级设置入口，升级和恢复备份时清理其旧覆盖配置，继续遵循系统减少动画设置。
+4. 阅读与排版工具箱移除离线词典入口，剩余三项改为单列完整显示；书架“任一 OR”保持原样。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

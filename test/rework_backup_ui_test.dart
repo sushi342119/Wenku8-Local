@@ -22,7 +22,7 @@ void main() {
   testWidgets(
     'degraded tag startup explains refusal without writing clipboard',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
       TagStore.resetForTesting();
       expect(TagStore.maybeShared, isNull);
       final state = await LibraryState.load();
@@ -52,7 +52,7 @@ void main() {
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({
-      'reduceMotion': true,
+      'motionLevel': 'off',
       'shelf': ['71', 'broken'],
     });
     final state = await LibraryState.load();

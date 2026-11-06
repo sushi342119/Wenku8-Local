@@ -19,7 +19,7 @@ void main() {
   late LibraryState state;
   late OfflineFixtureRepository repository;
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     repository = OfflineFixtureRepository();
     final paragraphs = List.generate(

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/app_ui.dart';
 import 'package:wenku8_flutter/catalog.dart';
 import 'package:wenku8_flutter/library_state.dart';
+import 'package:wenku8_flutter/ui_preferences.dart';
 import 'package:wenku8_flutter/listening/controller.dart';
 import 'package:wenku8_flutter/listening/models.dart';
 import 'package:wenku8_flutter/listening/store.dart';
@@ -33,7 +34,7 @@ void main() {
   late LibraryState library;
   late FakeListeningOutput output;
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     library = await LibraryState.load();
     output = FakeListeningOutput();
     controller = ListeningController(
@@ -148,7 +149,7 @@ void main() {
     bool follow = true,
     bool longParagraph = false,
   }) async {
-    await tester.runAsync(() => library.setReduceMotion(false));
+    await tester.runAsync(() => library.setMotionLevel(MotionLevel.light));
     final book = demoNovels.first.withChapters([
       NovelChapter(
         '平滑跟读',

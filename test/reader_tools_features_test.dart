@@ -64,7 +64,7 @@ void main({
   late OfflineFixtureRepository remote;
   late GlobalKey boundary;
   setUp(() async {
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     state = await LibraryState.load();
     remote = OfflineFixtureRepository();
     boundary = GlobalKey();

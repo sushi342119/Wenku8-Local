@@ -794,7 +794,11 @@ class _DiscoverPageState extends State<DiscoverPage> {
   }
 
   /// 轮播区域：只在这里应用标签过滤。
-  Widget _buildCarouselArea(BuildContext context, List<Novel> carouselBooks) {
+  Widget _buildCarouselArea(
+    BuildContext context,
+    List<Novel> carouselBooks, {
+    Widget? footerAction,
+  }) {
     if (carouselBooks.isNotEmpty) {
       return ArchiveFileCarousel(
         // 同一标签下保持轮播 State（分页追加不重置焦点）；
@@ -803,6 +807,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
           'archive-files-${widget.feed?.sort.name ?? 'recent'}-${LibraryFilter.shared.hasTags ? (LibraryFilter.shared.tagIds.toList()..sort()).join(',') : 'all'}',
         ),
         books: carouselBooks,
+        footerAction: footerAction,
         reduceMotion: widget.state.reduceMotion,
         animateEntrance: true,
         onOpen: (book, tag) => openDetail(
@@ -818,17 +823,22 @@ class _DiscoverPageState extends State<DiscoverPage> {
       // 分页加载中：已加载部分暂无匹配不代表最终结果。
       final stillLoading = widget.feed?.loading == true;
       return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 72),
+        padding: const EdgeInsets.symmetric(vertical: 24),
         child: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(stillLoading ? '已加载书籍中暂无匹配，正在继续加载…' : '该标签下暂无书籍'),
+              Text(
+                stillLoading ? '已加载书籍中暂无匹配，正在继续加载…' : '该标签下暂无书籍',
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 12),
               CupertinoButton(
                 onPressed: _showAllTags,
                 child: const Text('查看全部'),
               ),
+              if (footerAction != null)
+                Align(alignment: Alignment.centerRight, child: footerAction),
             ],
           ),
         ),
@@ -904,7 +914,7 @@ class _DiscoverPageState extends State<DiscoverPage> {
                   24,
                   MediaQuery.paddingOf(context).top +
                       FrostedHeader.toolbarHeight +
-                      20,
+                      8,
                   24,
                   0,
                 ),
@@ -916,12 +926,17 @@ class _DiscoverPageState extends State<DiscoverPage> {
                         index: 0,
                         child: _categoryHeader(context),
                       ),
-                      const SizedBox(height: 14),
-                      _buildCarouselArea(context, carouselBooks),
+                      const SizedBox(height: 8),
+                      if (allBooks.isEmpty)
+                        _buildCarouselArea(context, carouselBooks),
                       if (allBooks.isNotEmpty) ...[
-                        const SizedBox(height: 16),
                         NovelRandomPickSection(
                           books: allBooks,
+                          carouselBuilder: (resetButton) => _buildCarouselArea(
+                            context,
+                            carouselBooks,
+                            footerAction: resetButton,
+                          ),
                           matchMode: widget.state.tagMatchMode,
                           pace: widget.state.randomPickPace,
                           onOpenDetail: (book) => openDetail(
@@ -1602,7 +1617,7 @@ class _ShelfPageState extends State<ShelfPage> {
             24,
             MediaQuery.paddingOf(context).top +
                 FrostedHeader.toolbarHeight +
-                20,
+                8,
             24,
             MediaQuery.paddingOf(context).bottom + 120,
           ),
@@ -2941,9 +2956,7 @@ class SettingsPage extends StatelessWidget {
           cacheExtent: 0,
           padding: EdgeInsets.fromLTRB(
             24,
-            MediaQuery.paddingOf(context).top +
-                FrostedHeader.toolbarHeight +
-                20,
+            MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight + 8,
             24,
             MediaQuery.paddingOf(context).bottom + 120,
           ),
@@ -2999,8 +3012,10 @@ class SettingsPage extends StatelessWidget {
                     max: readerFontSizeMax,
                     divisions: 16,
                     format: (value) => '${value.round()} pt',
-                    onCommitted: (value) =>
-                        _savePreference(context, () => state.setFontSize(value)),
+                    onCommitted: (value) => _savePreference(
+                      context,
+                      () => state.setFontSize(value),
+                    ),
                   ),
                   if (LocalPlatform.android) ...[
                     _settingsDivider(context),
@@ -3033,11 +3048,11 @@ class SettingsPage extends StatelessWidget {
                     state: state,
                   ),
                   _settingsSubgroupHeader(context, '阅读与排版工具箱'),
-                  _settingsBentoGrid(context, [
+                  _settingsToolList(context, [
                     _SettingsBentoItem(
                       key: const ValueKey('settings-palette-page'),
                       icon: CupertinoIcons.paintbrush,
-                      title: '主题调色盘',
+                      title: '主题调节',
                       subtitle: '极光与纸张色系',
                       onTap: () => pushNovelPage<void>(
                         context,
@@ -3048,7 +3063,7 @@ class SettingsPage extends StatelessWidget {
                     _SettingsBentoItem(
                       key: const ValueKey('settings-font-settings-page'),
                       icon: CupertinoIcons.textformat_alt,
-                      title: '字体管理与按需下载',
+                      title: '字体管理',
                       subtitle: '内置与导入字库',
                       onTap: () => pushNovelPage<void>(
                         context,
@@ -3057,19 +3072,9 @@ class SettingsPage extends StatelessWidget {
                       ),
                     ),
                     _SettingsBentoItem(
-                      key: const ValueKey('settings-dictionaries'),
-                      icon: CupertinoIcons.book,
-                      title: '离线词典',
-                      subtitle: '本地查词词库',
-                      onTap: () => showDictionaryManagementSheet(
-                        context: context,
-                        reduceMotion: state.reduceMotion,
-                      ),
-                    ),
-                    _SettingsBentoItem(
                       key: const ValueKey('settings-purification-rules'),
                       icon: CupertinoIcons.wand_stars,
-                      title: '正文替换与净化规则',
+                      title: '正文替换',
                       subtitle: '正则与文本纠错',
                       onTap: () => showReaderPurificationSheet(
                         context: context,
@@ -3245,64 +3250,16 @@ class SettingsPage extends StatelessWidget {
             ),
             const SizedBox(height: 24),
 
-            // ── 03 / 外观与性能：玻璃四档 + 动效档；旧滑杆在“高级”，
-            //        低性能五项在“自定义”，原有键全部保留。
-            sectionHeader(context, '外观与性能', '玻璃 · 动效'),
-            const SizedBox(height: 14),
             AppearancePerformancePanel(state: state),
             const SizedBox(height: 24),
 
-            // ── 04 / 系统与关于（动效、低性能模式、触感反馈与版本更新整合） ───────
-            sectionHeader(context, '系统与关于', '性能 · 触感 · 版本'),
+            // 系统与关于：触感反馈与版本更新。
+            sectionHeader(context, '系统与关于', '触感 · 版本'),
             const SizedBox(height: 14),
             ContentPanel(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 4),
-                    child: Row(
-                      children: [
-                        _settingsIconBadge(
-                          context,
-                          CupertinoIcons.circle_grid_3x3,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                '减少动态效果',
-                                style: TextStyle(fontWeight: FontWeight.w600),
-                              ),
-                              const SizedBox(height: 3),
-                              Text(
-                                '减弱界面弹簧形变与过渡动画',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        CupertinoSwitch(
-                          value: state.reduceMotion,
-                          activeTrackColor: Theme.of(
-                            context,
-                          ).colorScheme.primary,
-                          onChanged: (value) => _savePreference(
-                            context,
-                            () => state.setReduceMotion(value),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  _settingsDivider(context),
                   _settingsNavRow(
                     context,
                     rowKey: const ValueKey('settings-haptics'),
@@ -3384,6 +3341,26 @@ class SettingsPage extends StatelessWidget {
       ),
     );
   }
+
+  Widget _settingsToolList(
+    BuildContext context,
+    List<_SettingsBentoItem> items,
+  ) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      for (final (index, item) in items.indexed) ...[
+        if (index > 0) _settingsDivider(context),
+        _settingsNavRow(
+          context,
+          rowKey: item.key,
+          icon: item.icon,
+          title: item.title,
+          subtitle: item.subtitle,
+          onTap: item.onTap,
+        ),
+      ],
+    ],
+  );
 
   Widget _settingsBentoGrid(
     BuildContext context,

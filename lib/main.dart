@@ -347,7 +347,7 @@ class _NovelAppState extends State<NovelApp> with WidgetsBindingObserver {
             final content = PerformanceScope(
               preferences: state.effectivePerformance,
               explicitReduceMotion:
-                  media.disableAnimations || state.reduceMotion,
+                  media.disableAnimations || state.effectiveReduceMotion,
               child: MediaQuery(
                 data: media.copyWith(
                   disableAnimations:

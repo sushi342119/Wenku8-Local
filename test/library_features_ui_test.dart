@@ -271,7 +271,7 @@ void main() {
   testWidgets(
     'reader restores its real scroll position after closing and reloading preferences',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
       var state = await LibraryState.load();
       final repository = _Repository();
       await _reader(tester, state, repository);
@@ -302,7 +302,7 @@ void main() {
   testWidgets(
     'next chapter starts at zero and backgrounding persists progress',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
       final state = await LibraryState.load();
       await _reader(tester, state, _Repository());
       final scroll = _scroll(
@@ -329,7 +329,7 @@ void main() {
   testWidgets(
     'a failed chapter load never overwrites a saved reading position',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
       final state = await LibraryState.load();
       await pumpStorage(tester, () => state.savePosition(
         novel: _book(5000),
@@ -384,7 +384,7 @@ void main() {
   testWidgets(
     'continue reading resolves the saved chapter ID after a directory insertion',
     (tester) async {
-      SharedPreferences.setMockInitialValues({'reduceMotion': true});
+      SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
       final state = await LibraryState.load();
       final old = _book(5000);
       await pumpStorage(tester, () => state.savePosition(

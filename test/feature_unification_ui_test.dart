@@ -56,7 +56,7 @@ void main({
             .setMockMethodCallHandler(SystemChannels.platform, null),
       );
     }
-    SharedPreferences.setMockInitialValues({'reduceMotion': true});
+    SharedPreferences.setMockInitialValues({'motionLevel': 'off'});
     await TagStore.load();
     state = await LibraryState.load();
     repository = OfflineFixtureRepository();

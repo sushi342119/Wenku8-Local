@@ -34,6 +34,18 @@ import 'ui_preferences.dart';
 const _libraryWriteTimeout = Duration(seconds: 8);
 const _maxImportedFontBytes = 100 * 1024 * 1024;
 
+const _compactAppearanceMigrationKey = 'compactAppearanceMigrationV1';
+
+// Keep the old record names readable by older backups, but remove their
+// invisible overrides now that only glass tier / motion / pick pace are shown.
+final _retiredAppearanceDefaults = <String, Object>{
+  'reduceMotion': false,
+  ...const PerformancePreferences().toRecords(),
+  'glassBlur': 8.0,
+  'glassOpacity': .87,
+  UiPreferenceKeys.glassAdvanced: false,
+};
+
 class _StateNotifier extends ChangeNotifier {
   bool _closed = false;
 
@@ -728,8 +740,39 @@ class LibraryState extends ChangeNotifier {
 
   static Future<LibraryState> load() async {
     final prefs = await SharedPreferences.getInstance();
-    await recoverLibraryRestore(prefs);
-    return LibraryState(prefs);
+    final recovered = await recoverLibraryRestore(prefs);
+    final state = LibraryState(prefs);
+    if (prefs.get(_compactAppearanceMigrationKey) != true) {
+      // Never overwrite an unresolved restore journal. All writes are
+      // idempotent and the marker is committed last, so failed migrations retry.
+      if (recovered) {
+        try {
+          await state._commitLibraryRecords({
+            for (final entry in _retiredAppearanceDefaults.entries)
+              if (prefs.containsKey(entry.key)) entry.key: entry.value,
+          });
+          await writeLibraryPreference(
+            prefs,
+            _compactAppearanceMigrationKey,
+            true,
+          );
+        } catch (error) {
+          recordRecoveryFailure(_compactAppearanceMigrationKey, error);
+        }
+      }
+      // The removed controls cannot silently restrict rendering even if disk
+      // recovery must wait until the next launch.
+      state._resetRetiredAppearance();
+    }
+    return state;
+  }
+
+  void _resetRetiredAppearance() {
+    _reduceMotion = false;
+    _performance = const PerformancePreferences();
+    _glassBlur = 8;
+    _glassOpacity = .87;
+    _glassAdvanced = false;
   }
 
   Set<int> get shelf => Set.unmodifiable(_shelf);
@@ -798,7 +841,8 @@ class LibraryState extends ChangeNotifier {
   double get fontSize => _fontSize;
   double get lineHeight => _lineHeight;
   int get debugMetadataEncodeCount => _metadataEncodes;
-  bool get reduceMotion => _reduceMotion;
+  // Existing route/reader callers must follow the visible motion selector too.
+  bool get reduceMotion => _reduceMotion || _motionLevel == MotionLevel.off;
   HapticPreferences get haptics => _haptics;
 
   Future<void> setLanguage(AppLanguage value) async {
@@ -3540,6 +3584,14 @@ class LibraryState extends ChangeNotifier {
           for (final key in backupPreferenceKeys) {
             if (records[key] case final value?) changed[key] = value;
           }
+          // A backup may predate the migration marker. Normalize within the
+          // same journaled commit so a restart cannot revive hidden overrides.
+          for (final entry in _retiredAppearanceDefaults.entries) {
+            if (records.containsKey(entry.key) ||
+                _prefs.containsKey(entry.key)) {
+              changed[entry.key] = entry.value;
+            }
+          }
         }
         await _commitLibraryRecords(changed);
         // 标签是独立存储，合并语义与书架一致（只增不减）。
@@ -3630,6 +3682,7 @@ class LibraryState extends ChangeNotifier {
           // New keys were committed above with the other allow-listed
           // preferences; older backups lack them and keep current values.
           _loadUiPreferences();
+          _resetRetiredAppearance();
         }
         if (!_disposed) {
           _historyChanged();

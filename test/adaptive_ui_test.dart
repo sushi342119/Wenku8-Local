@@ -141,7 +141,7 @@ void main({AdaptiveCapture? capture, bool native = false}) {
       addTearDown(tester.view.resetViewPadding);
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       SharedPreferences.setMockInitialValues({
-        'reduceMotion': true,
+        'motionLevel': 'off',
         'appTypeface': AppTypeface.sourceHanSerif.name,
       });
       final library = await LibraryState.load();
