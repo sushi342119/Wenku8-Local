@@ -46,6 +46,7 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
     this.identityOf,
     this.weightOf,
     this.onPicked,
+    this.resultLabelOf,
     this.filterHeader,
     this.emptyState,
     this.totalDuration = const Duration(milliseconds: 900),
@@ -64,6 +65,9 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 
   /// 每次主动抽取确定结果时调用一次；单本候选的自动展示不计为抽取。
   final ValueChanged<T>? onPicked;
+
+  /// 抽样后、通知 onPicked 前捕获，仅在揭晓结果时展示。
+  final String? Function(T book)? resultLabelOf;
 
   final Widget? filterHeader;
   final Widget? emptyState;
@@ -132,6 +136,7 @@ class _ArchiveRandomPickCardState<T extends Object>
 
   _PickPhase _phase = _PickPhase.idle;
   T? _displayedBook;
+  String? _resultLabel;
   int? _displayedIndex;
 
   // 使用独立快照，支持父组件原地修改同一个 List 后触发重建。
@@ -210,6 +215,7 @@ class _ArchiveRandomPickCardState<T extends Object>
   }
 
   void _reset() {
+    _resultLabel = null;
     _controller.stop();
     _controller.reset();
 
@@ -258,6 +264,7 @@ class _ArchiveRandomPickCardState<T extends Object>
     setState(() {
       _displayedIndex = index;
       _displayedBook = widget.books[index];
+      _resultLabel = widget.resultLabelOf?.call(widget.books[index]);
       _phase = skipAnimation ? _PickPhase.result : _PickPhase.spinning;
     });
 
@@ -437,6 +444,10 @@ class _ArchiveRandomPickCardState<T extends Object>
           ),
           const SizedBox(height: 12),
           Divider(height: 1, thickness: 1, color: _border),
+          if (_resultLabel case final label?) ...[
+            const SizedBox(height: 8),
+            Text(label, style: TextStyle(color: _muted, fontSize: 12)),
+          ],
         ],
       ),
     );
