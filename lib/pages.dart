@@ -819,7 +819,8 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ),
       );
     }
-    if (LibraryFilter.shared.hasTags) {
+    final hasSourceBooks = (widget.feed?.items ?? widget.books).isNotEmpty;
+    if (LibraryFilter.shared.hasTags && hasSourceBooks) {
       // 分页加载中：已加载部分暂无匹配不代表最终结果。
       final stillLoading = widget.feed?.loading == true;
       return Padding(
@@ -844,9 +845,34 @@ class _DiscoverPageState extends State<DiscoverPage> {
         ),
       );
     }
-    return const Padding(
-      padding: EdgeInsets.symmetric(vertical: 90),
-      child: Center(child: Text('暂无书籍')),
+    final local = localLibraryOf(widget.repository);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 90),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('暂无书籍'),
+            if (local != null) ...[
+              const SizedBox(height: 14),
+              GlassTextButton(
+                key: const ValueKey('discover-import-local'),
+                onPressed: () => pushNovelPage<void>(
+                  context,
+                  LocalLibraryPage(
+                    state: widget.state,
+                    local: local,
+                    repository: widget.repository,
+                    pickFolderOnOpen: true,
+                  ),
+                  reduceMotion: widget.state.reduceMotion,
+                ),
+                child: const Text('导入本地书籍（TXT / EPUB / PDF）'),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
@@ -1521,6 +1547,20 @@ class _ShelfPageState extends State<ShelfPage> {
   final _scroll = ScrollController();
   bool get _selecting => _selection.isNotEmpty;
   final _filter = LibraryFilter.shared;
+  bool get _hasActiveFilters =>
+      _query.text.trim().isNotEmpty ||
+      state.shelfFilter != 'all' ||
+      !_filter.isEmpty;
+
+  Future<void> _clearFilters() async {
+    _queryDelay?.cancel();
+    _queryDelay = null;
+    final hadQuery = _query.text.isNotEmpty;
+    if (hadQuery) _query.clear();
+    await _filter.clear(state: state);
+    if (hadQuery && mounted) setState(() {});
+  }
+
   _ShelfSort get _sort => _ShelfSort.values.firstWhere(
     (sort) => sort.name == state.shelfSort,
     orElse: () => _ShelfSort.recentRead,
@@ -1643,8 +1683,8 @@ class _ShelfPageState extends State<ShelfPage> {
                       backgroundColor: Theme.of(context).colorScheme.surface,
                       placeholder: switch (_scope) {
                         SearchScope.tags => '在书架中查找标签',
-                        SearchScope.titleAuthor => '查找书名、作者或 ID',
-                        SearchScope.all => '查找书名、作者、ID 或标签',
+                        SearchScope.titleAuthor => '查找书名、作者',
+                        SearchScope.all => '查找书名、作者、编号或标签',
                       },
                       onChanged: (_) {
                         _queryDelay?.cancel();
@@ -1767,13 +1807,33 @@ class _ShelfPageState extends State<ShelfPage> {
                         ),
                       ),
                     ],
-                    if (!_filter.isEmpty) ...[
+                    if (_hasActiveFilters) ...[
                       const SizedBox(height: 8),
                       Wrap(
                         key: const ValueKey('shelf-active-filters'),
                         spacing: 6,
                         runSpacing: 6,
                         children: [
+                          if (_query.text.trim().isNotEmpty)
+                            InputChip(
+                              label: Text('关键词：${_query.text.trim()}'),
+                              onDeleted: () {
+                                _queryDelay?.cancel();
+                                _queryDelay = null;
+                                setState(_query.clear);
+                              },
+                            ),
+                          if (state.shelfFilter != 'all')
+                            InputChip(
+                              label: Text('阅读状态：${switch (state.shelfFilter) {
+                                'unread' => '未读',
+                                'reading' => '阅读中',
+                                'finished' => '已读完',
+                                _ => '全部',
+                              }}'),
+                              onDeleted: () =>
+                                  state.setShelfView(filter: 'all'),
+                            ),
                           for (final id in _filter.tagIds)
                             if (TagStore.shared.tagById(id) case final tag?)
                               InputChip(
@@ -1787,7 +1847,7 @@ class _ShelfPageState extends State<ShelfPage> {
                             ),
                           ActionChip(
                             label: const Text('清除全部'),
-                            onPressed: _filter.clear,
+                            onPressed: _clearFilters,
                           ),
                         ],
                       ),
@@ -1797,6 +1857,7 @@ class _ShelfPageState extends State<ShelfPage> {
               );
             }
             if (saved.isEmpty) {
+              final local = localLibraryOf(widget.repository);
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 90),
                 child: Column(
@@ -1816,13 +1877,39 @@ class _ShelfPageState extends State<ShelfPage> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      state.shelf.isEmpty ? '在发现页收藏喜欢的书' : '试试其他关键词或切回全部',
+                      state.shelf.isEmpty
+                          ? '导入本地书籍，或在发现页收藏喜欢的书'
+                          : '试试其他关键词或清除筛选',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
+                    if (state.shelf.isEmpty && local != null) ...[
+                      const SizedBox(height: 16),
+                      GlassTextButton(
+                        key: const ValueKey('shelf-import-local'),
+                        onPressed: () => pushNovelPage<void>(
+                          context,
+                          LocalLibraryPage(
+                            state: state,
+                            local: local,
+                            repository: widget.repository,
+                            pickFolderOnOpen: true,
+                          ),
+                          reduceMotion: state.reduceMotion,
+                        ),
+                        child: const Text('导入本地书籍（TXT / EPUB / PDF）'),
+                      ),
+                    ] else if (state.shelf.isNotEmpty && _hasActiveFilters) ...[
+                      const SizedBox(height: 16),
+                      GlassTextButton(
+                        key: const ValueKey('shelf-empty-clear-filters'),
+                        onPressed: _clearFilters,
+                        child: const Text('清除全部筛选'),
+                      ),
+                    ],
                   ],
                 ),
               );
@@ -3220,7 +3307,7 @@ class SettingsPage extends StatelessWidget {
                       rowKey: const ValueKey('settings-local-library'),
                       icon: CupertinoIcons.book,
                       title: '本地书库',
-                      subtitle: '选择文件夹，扫描导入 TXT / PDF',
+                      subtitle: '选择文件夹，扫描导入 TXT / EPUB / PDF',
                       onTap: () => pushNovelPage<void>(
                         context,
                         LocalLibraryPage(
@@ -5164,6 +5251,7 @@ class _ReaderPageState extends State<ReaderPage>
   bool _restoreQueued = false;
   bool _restoring = false;
   bool _ready = false;
+  bool _addingBookmark = false;
   int _paragraphCount = 0;
   bool _saveQueued = false;
   Timer? _idleSave;
@@ -5878,14 +5966,16 @@ class _ReaderPageState extends State<ReaderPage>
     }
     _suspendListeningFollow();
     final position = _scroll.position;
-    final target =
-        (position.pixels +
-                direction *
-                    (position.viewportDimension - _readingInset - 100).clamp(
-                      80.0,
-                      double.infinity,
-                    ))
-            .clamp(0.0, position.maxScrollExtent);
+    final readableViewport =
+        (position.viewportDimension -
+                _readingInset -
+                MediaQuery.paddingOf(context).bottom)
+            .clamp(0.0, double.infinity);
+    final distance = (readableViewport - 48).clamp(0.0, double.infinity);
+    final target = (position.pixels + direction * distance).clamp(
+      position.minScrollExtent,
+      position.maxScrollExtent,
+    );
     if (widget.state.reduceMotion || MediaQuery.disableAnimationsOf(context)) {
       _scroll.jumpTo(target);
     } else {
@@ -6301,6 +6391,30 @@ class _ReaderPageState extends State<ReaderPage>
     return widget.state.addBookmark(novel: _novel, position: position);
   }
 
+  Future<void> _quickAddBookmark() async {
+    if (_addingBookmark) return;
+    _addingBookmark = true;
+    final existing = widget.state
+        .bookmarksFor(_novel.id)
+        .map((mark) => mark.id)
+        .toSet();
+    try {
+      final mark = await _addBookmark();
+      if (!mounted) return;
+      if (mark == null) {
+        showNovelFeedback(context, '书签保存失败，请重试');
+      } else if (existing.contains(mark.id)) {
+        showNovelFeedback(context, '此位置已有书签');
+      } else {
+        showNovelFeedback(context, '已添加书签');
+      }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '书签保存失败，请重试');
+    } finally {
+      _addingBookmark = false;
+    }
+  }
+
   Future<void> _seekProgress(double fraction) async {
     _suspendListeningFollow();
     if (_paginated) {
@@ -6604,8 +6718,8 @@ class _ReaderPageState extends State<ReaderPage>
                       GlassIconButton(
                         key: const ValueKey('reader-bookmarks-entry'),
                         icon: CupertinoIcons.bookmark,
-                        label: '阅读书签',
-                        onPressed: () => _settings(bookmarks: true),
+                        label: '添加书签',
+                        onPressed: _quickAddBookmark,
                       ),
                       const SizedBox(width: 4),
                       GlassIconButton(

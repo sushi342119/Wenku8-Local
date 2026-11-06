@@ -52,6 +52,7 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
   int _chapterVisit = 0;
   bool _chromeTarget = true;
   bool _sheetOpen = false;
+  bool _addingBookmark = false;
   Future<({List<EpubBlock> blocks, Map<String, Uint8List> images})>? _future;
   int? _futureChapter;
 
@@ -408,6 +409,30 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     );
   }
 
+  Future<void> _quickAddBookmark() async {
+    if (_addingBookmark || _total == 0) return;
+    _addingBookmark = true;
+    final existing = widget.state
+        .bookmarksFor(_novel.id)
+        .map((mark) => mark.id)
+        .toSet();
+    try {
+      final mark = await _addBookmark();
+      if (!mounted) return;
+      if (mark == null) {
+        showNovelFeedback(context, '书签保存失败，请重试');
+      } else if (existing.contains(mark.id)) {
+        showNovelFeedback(context, '此位置已有书签（目前仅支持跳转到章首）');
+      } else {
+        showNovelFeedback(context, '已添加书签（目前仅支持跳转到章首）');
+      }
+    } catch (_) {
+      if (mounted) showNovelFeedback(context, '书签保存失败，请重试');
+    } finally {
+      _addingBookmark = false;
+    }
+  }
+
   Future<void> _settings({bool bookmarks = false}) async {
     if (_sheetOpen || _total == 0) return;
     _sheetOpen = true;
@@ -603,10 +628,8 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
                       GlassIconButton(
                         key: const ValueKey('reader-bookmarks-entry'),
                         icon: CupertinoIcons.bookmark,
-                        label: '阅读书签',
-                        onPressed: _total == 0
-                            ? null
-                            : () => _settings(bookmarks: true),
+                        label: '添加书签',
+                        onPressed: _total == 0 ? null : _quickAddBookmark,
                       ),
                       const SizedBox(width: 4),
                       GlassIconButton(

@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 
 import 'book_tags.dart';
 import 'catalog.dart';
+import 'library_state.dart';
 import 'local_library.dart';
 import 'ui_preferences.dart';
 
@@ -63,7 +64,10 @@ class LibraryFilter extends ChangeNotifier {
     notifyListeners();
   }
 
-  void clear() {
+  Future<void> clear({LibraryState? state}) async {
+    if (state != null) {
+      await state.setShelfView(filter: 'all');
+    }
     if (isEmpty) return;
     _tags.clear();
     _formats.clear();
@@ -109,15 +113,17 @@ bool matchesSearch(
 }) {
   final q = term.trim().toLowerCase();
   if (q.isEmpty) return true;
-  final text = '$id ${book?.title ?? ''} ${book?.author ?? ''}'.toLowerCase();
+  final title = (book?.title ?? '').toLowerCase();
+  final author = (book?.author ?? '').toLowerCase();
+  final titleOrAuthor = title.contains(q) || author.contains(q);
   final tags = (store ?? TagStore.shared)
       .tagsForBook(id)
       .map((tag) => tag.name.toLowerCase())
       .join(' ');
   return switch (scope) {
-    SearchScope.titleAuthor => text.contains(q),
+    SearchScope.titleAuthor => titleOrAuthor,
     SearchScope.tags => tags.contains(q),
-    SearchScope.all => text.contains(q) || tags.contains(q),
+    SearchScope.all => titleOrAuthor || '$id'.contains(q) || tags.contains(q),
   };
 }
 

@@ -6,6 +6,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:shuyu/app_ui.dart';
 import 'package:shuyu/catalog.dart';
 import 'package:shuyu/glass_dock.dart';
@@ -88,6 +89,16 @@ class _EpubStore extends Fake implements LocalLibraryStore {
   }
 }
 
+class _RejectingBookmarkStore extends InMemorySharedPreferencesStore {
+  _RejectingBookmarkStore() : super.empty();
+
+  @override
+  Future<bool> setValue(String type, String key, Object value) async {
+    if (key.contains('reader_bookmarks_')) return false;
+    return super.setValue(type, key, value);
+  }
+}
+
 Finder _control(String label) => find.descendant(
   of: find.byWidgetPredicate(
     (widget) => widget is GlassIconButton && widget.label == label,
@@ -145,8 +156,16 @@ void main() {
   }
 
   Future<void> openTools(WidgetTester tester, {bool bookmarks = false}) async {
-    await tester.tap(_control(bookmarks ? '阅读书签' : '阅读设置'));
+    ScaffoldMessenger.maybeOf(
+      tester.element(find.byType(Scaffold).first),
+    )?.clearSnackBars();
     await tester.pumpAndSettle();
+    await tester.tap(_control('阅读设置'));
+    await tester.pumpAndSettle();
+    if (bookmarks) {
+      await tester.tap(find.text('书签'));
+      await tester.pumpAndSettle();
+    }
   }
 
   Future<void> closeTools(WidgetTester tester) async {
@@ -180,7 +199,7 @@ void main() {
     expect(find.byType(ArchiveRouteTitle), findsOneWidget);
     expect(find.text(_novel.title), findsOneWidget);
     expect(_control('返回详情').hitTestable(), findsOneWidget);
-    expect(_control('阅读书签').hitTestable(), findsOneWidget);
+    expect(_control('添加书签').hitTestable(), findsOneWidget);
     expect(_control('阅读设置').hitTestable(), findsOneWidget);
     expect(find.byIcon(CupertinoIcons.headphones), findsNothing);
     expect(find.byType(AppBar), findsNothing);
@@ -393,7 +412,7 @@ void main() {
       false,
     ]);
     expect(_dock(tester).items[1].label, '0 / 0');
-    for (final label in ['阅读设置', '阅读书签']) {
+    for (final label in ['阅读设置', '添加书签']) {
       final button = tester.widget<GlassIconButton>(
         find.byWidgetPredicate(
           (widget) => widget is GlassIconButton && widget.label == label,
@@ -534,6 +553,44 @@ void main() {
     expect(find.text(local.data(1).blocks.first.text!), findsNothing);
     expect(find.text(local.data(2).blocks.first.text!), findsOneWidget);
     expect(state.chapterFor(_novel.id), 2);
+  });
+
+  testWidgets('EPUB 顶栏快速添加、重复反馈、章首限制和重载持久化', (tester) async {
+    await reader(tester);
+    await tester.tap(_control('添加书签'));
+    await _settle(tester);
+    expect(find.byType(LocalEpubReaderTools), findsNothing);
+    expect(find.text('已添加书签（目前仅支持跳转到章首）'), findsOneWidget);
+    expect(state.bookmarksFor(_novel.id), hasLength(1));
+    await tester.tap(_control('添加书签'));
+    await _settle(tester);
+    expect(find.text('此位置已有书签（目前仅支持跳转到章首）'), findsOneWidget);
+    expect(state.bookmarksFor(_novel.id), hasLength(1));
+    final reloaded = await LibraryState.load();
+    addTearDown(reloaded.dispose);
+    expect(
+      reloaded.bookmarksFor(_novel.id).single.id,
+      state.bookmarksFor(_novel.id).single.id,
+    );
+    await openTools(tester, bookmarks: true);
+    expect(
+      find.text('EPUB 书签目前仅支持跳转到章首，暂不支持章内精确定位。'),
+      findsOneWidget,
+    );
+    expect(find.text('本书 1 个书签'), findsOneWidget);
+  });
+
+  testWidgets('EPUB 顶栏书签存储失败不报告成功', (tester) async {
+    await reader(tester);
+    final previous = SharedPreferencesStorePlatform.instance;
+    addTearDown(() => SharedPreferencesStorePlatform.instance = previous);
+    SharedPreferencesStorePlatform.instance = _RejectingBookmarkStore();
+    await tester.tap(_control('添加书签'));
+    await _settle(tester);
+    expect(find.text('书签保存失败，请重试'), findsOneWidget);
+    expect(find.textContaining('已添加书签'), findsNothing);
+    expect(state.bookmarksFor(_novel.id), isEmpty);
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('EPUB 书签增删保存当前章与修订', (tester) async {

@@ -319,8 +319,7 @@ void main({
     'bookmark entry opens saved positions directly with an explicit guide',
     (tester) async {
       await reader(tester);
-      await tester.tap(_control('阅读书签'));
-      await tester.pumpAndSettle();
+      await settings(tester, bookmarks: true);
       expect(find.byKey(const ValueKey('reader-add-bookmark')), findsOneWidget);
       expect(find.text('先添加当前位置，再点按下方书签即可回到这里。'), findsOneWidget);
       await shot(tester, 'reader-bookmark-entry');

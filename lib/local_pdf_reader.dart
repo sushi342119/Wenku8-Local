@@ -46,6 +46,7 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   late int _page;
   bool _activityAttached = true;
   bool _activityForeground = true;
+  bool _addingBookmark = false;
   final Map<int, Future<String>> _pending = {};
 
   int get _pageCount {
@@ -128,14 +129,27 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
   }
 
   Future<void> _addBookmark() async {
+    if (_addingBookmark || _pageCount <= 0) return;
+    _addingBookmark = true;
+    final page = _page;
+    final existing = widget.state
+        .bookmarksFor(widget.novel.id)
+        .map((mark) => mark.id)
+        .toSet();
     try {
       final mark = await widget.state.addPageBookmark(
         novel: widget.novel,
-        page: _page,
+        page: page,
         pageCount: _pageCount,
       );
       if (mounted) {
-        showNovelFeedback(context, mark == null ? '书签未保存，请重试' : '已添加第 ${_page + 1} 页书签');
+        if (mark == null) {
+          showNovelFeedback(context, '书签保存失败，请重试');
+        } else if (existing.contains(mark.id)) {
+          showNovelFeedback(context, '此页已有书签');
+        } else {
+          showNovelFeedback(context, '已添加第 ${page + 1} 页书签');
+        }
       }
     } catch (error) {
       if (mounted) {
@@ -144,6 +158,8 @@ class _LocalPdfReaderPageState extends State<LocalPdfReaderPage>
           error is FormatException ? error.message : '书签保存失败，请重试',
         );
       }
+    } finally {
+      _addingBookmark = false;
     }
   }
 

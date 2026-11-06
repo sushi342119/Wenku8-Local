@@ -15,18 +15,20 @@ import 'local_library.dart';
 import 'local_scan_follow_up.dart';
 import 'wenku_errors.dart';
 
-/// 本地书库管理：选择文件夹、扫描导入 TXT / PDF、移除。
+/// 本地书库管理：选择文件夹、扫描导入 TXT / EPUB / PDF、移除。
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
     required this.state,
     required this.local,
     required this.repository,
+    this.pickFolderOnOpen = false,
   });
 
   final LibraryState state;
   final LocalLibraryStore local;
   final NovelRepository repository;
+  final bool pickFolderOnOpen;
 
   @override
   State<LocalLibraryPage> createState() => _LocalLibraryPageState();
@@ -43,6 +45,11 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     super.initState();
     widget.state.bindLocalChapters(widget.local);
     _folderUri = widget.local.folderUri;
+    if (widget.pickFolderOnOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _pickFolder(returnOnCancel: true);
+      });
+    }
   }
 
   @override
@@ -51,7 +58,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     super.dispose();
   }
 
-  Future<void> _pickFolder() async {
+  Future<void> _pickFolder({bool returnOnCancel = false}) async {
     if (_scanning || _picking) return;
     setState(() => _picking = true);
     try {
@@ -60,9 +67,8 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       if (uri != null && uri.isNotEmpty) {
         setState(() => _folderUri = uri);
         showNovelFeedback(context, '已选择文件夹，可开始扫描');
-      } else {
-        // 用户取消选择，显示提示以便确认按钮有响应
-        _showDebugDialog('未选择文件夹', '你取消了文件夹选择。如需导入小说，请重新点击并选择文件夹。');
+      } else if (returnOnCancel) {
+        Navigator.of(context).pop();
       }
     } on PlatformException catch (error) {
       if (mounted) {

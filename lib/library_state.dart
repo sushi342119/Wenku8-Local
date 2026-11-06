@@ -707,7 +707,7 @@ class LibraryState extends ChangeNotifier {
   String _shelfFilter = 'all';
   bool _keepScreenOn = false;
   int _metadataEncodes = 0;
-  Future<void> _positionWrites = Future.value();
+  Future<void>? _positionWrites;
   Completer<void>? _restoreBarrier;
   ThemeMode _theme = ThemeMode.system;
   double _fontSize = 19;
@@ -1200,15 +1200,24 @@ class LibraryState extends ChangeNotifier {
   }
 
   Future<void> _queuePositionWrite(Future<void> Function() write) {
-    _positionWrites = _positionWrites.catchError((Object _) {}).then((_) async {
+    Future<void> run() async {
       if (_prefs.get(restoreJournalKey) != null) {
         if (!await recoverLibraryRestore(_prefs)) {
           throw StateError('恢复记录尚未处理完成，已保留原记录，请恢复存储后重试');
         }
       }
       await write();
+    }
+
+    // An idle store must start in the caller's zone. Retaining a completed
+    // Future created at load time stalls widget-test callers in FakeAsync.
+    final pending = _positionWrites;
+    final next = pending == null ? run() : pending.then((_) => run());
+    final barrier = next.then<void>((_) {}, onError: (Object _) {});
+    _positionWrites = barrier;
+    return next.whenComplete(() {
+      if (identical(_positionWrites, barrier)) _positionWrites = null;
     });
-    return _positionWrites;
   }
 
   // Bound the caller's wait without replacing _positionWrites: the queued

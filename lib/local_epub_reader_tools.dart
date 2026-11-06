@@ -195,7 +195,7 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
         ),
       ),
       const SizedBox(height: 8),
-      const Text('EPUB 书签保存到章节开头，点按书签可跳到该章章首。'),
+      const Text('EPUB 书签目前仅支持跳转到章首，暂不支持章内精确定位。'),
       const SizedBox(height: 8),
       Text('本书 ${marks.length} 个书签'),
       if (marks.isEmpty)
