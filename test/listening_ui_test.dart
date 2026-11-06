@@ -707,17 +707,15 @@ void main() {
   testWidgets('single-chapter novel still displays reader progress bar', (
     tester,
   ) async {
-    final singleChapterBook = demoNovels.first.copyWith(
-      chapters: [
-        NovelChapter(
-          '正文',
-          List.generate(
-            40,
-            (i) => '这是单章小说的第 ${i + 1} 段正文，用于验证只有一章正文时依然会显示底部阅读进度条。',
-          ).join('\n\n'),
-        ),
-      ],
-    );
+    final singleChapterBook = demoNovels.first.withChapters([
+      NovelChapter(
+        '正文',
+        List.generate(
+          40,
+          (i) => '这是单章小说的第 ${i + 1} 段正文，用于验证只有一章正文时依然会显示底部阅读进度条。',
+        ).join('\n\n'),
+      ),
+    ]);
     await tester.pumpWidget(
       MaterialApp(
         theme: novelTheme(Brightness.light),
