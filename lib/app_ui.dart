@@ -454,7 +454,10 @@ class Atmosphere extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final dark = theme.brightness == Brightness.dark;
+    final tonal = theme.extension<AppTonalColors>();
     final content = headerBackground == null
         ? child
         : Stack(
@@ -472,7 +475,11 @@ class Atmosphere extends StatelessWidget {
         ? Stack(
             fit: StackFit.expand,
             children: [
-              const Positioned.fill(child: ArchiveBackdrop()),
+              Positioned.fill(
+                child: ArchiveBackdrop(
+                  filmColor: tonal?.milk ?? ArchiveDesign.milk,
+                ),
+              ),
               content,
             ],
           )
@@ -482,12 +489,25 @@ class Atmosphere extends StatelessWidget {
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: switch (Theme.of(context).extension<PageWash>()) {
-            final wash? when !dark => [wash.color, wash.color],
+          colors: switch (theme.extension<PageWash>()) {
+            final wash? when !dark => [
+              Color.lerp(wash.color, scheme.surface, .55)!,
+              wash.color,
+              Color.lerp(wash.color, scheme.primaryContainer, .20)!,
+            ],
             _ when dark => [
               ArchiveDesign.darkBackground,
               const Color(0xFF0E1525),
-              const Color(0xFF131C30),
+              Color.lerp(
+                const Color(0xFF131C30),
+                scheme.primaryContainer,
+                .22,
+              )!,
+            ],
+            _ when tonal != null => [
+              tonal.pageStart,
+              tonal.pageEnd,
+              Color.lerp(tonal.pageEnd, scheme.primaryContainer, .16)!,
             ],
             _ => [ArchiveDesign.surface, ArchiveDesign.background],
           },

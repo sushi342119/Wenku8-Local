@@ -14,13 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.5',
+  defaultValue: '1.8.6',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 52);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 53);
 const currentReleaseNotes = '''
-1. 优化随机抽阅：候选至少两本时避免连续抽中同一本，单本书库保持正常抽取。
-2. 从未抽中过的书籍获得额外权重，揭晓时显示首次抽到或再次遇见的提示。
-3. 保留已有抽取次数、标签筛选和动画速度，重启恢复上次结果，重置后开始新一轮。
+1. 重新设计全局界面背景：新增「书屿」等高线、中左岸线水波与右下浅滩纹路。
+2. 叠加纵向柔和衰减的经纬微网格、径向散点矩阵与罗盘准星刻度，消除纯色单调感。
+3. 背景渐变与暗纹色彩随当前主题及莫奈配色自动联动，阅读器正文保持纯净纸张。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

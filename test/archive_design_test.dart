@@ -95,15 +95,13 @@ void main() {
         expect(tester.binding.transientCallbackCount, 0);
         expect(find.byType(ArchiveBackdrop), findsOneWidget);
         expect(
-          tester
-              .getSize(
-                find.descendant(
-                  of: find.byType(ArchiveBackdrop),
-                  matching: find.byType(CustomPaint),
-                ),
-              )
-              .height,
-          lessThanOrEqualTo(240),
+          tester.getSize(
+            find.descendant(
+              of: find.byType(ArchiveBackdrop),
+              matching: find.byType(CustomPaint),
+            ),
+          ),
+          size,
         );
         expect(find.byTooltip('搜索'), findsOneWidget);
       }
