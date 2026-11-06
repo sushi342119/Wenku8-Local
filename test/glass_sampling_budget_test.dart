@@ -2,7 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/glass_sampling_budget.dart';
+import 'package:shuyu/glass_sampling_budget.dart';
 
 void main() {
   test(

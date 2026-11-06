@@ -6,7 +6,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/updates/app_updates.dart';
+import 'package:shuyu/updates/app_updates.dart';
 
 const _repo = 'example/reader';
 Map<String, dynamic> _json({

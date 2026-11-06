@@ -3,9 +3,9 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/native_effects.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/glass_optics.dart';
+import 'package:shuyu/native_effects.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/glass_optics.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

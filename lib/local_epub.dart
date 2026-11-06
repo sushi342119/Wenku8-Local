@@ -6,6 +6,9 @@ import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:xml/xml.dart';
 
+import 'reader_rich_content.dart'
+    show joinBrokenParagraph, shouldMergeBrokenParagraph;
+
 /// 块：文本或图片二选一
 class EpubBlock {
   const EpubBlock.text(this.text) : kind = EpubBlockKind.text, entryPath = null;
@@ -564,9 +567,22 @@ class _BlockCollector {
   void addText(String text) => _buf.write(text);
 
   void flush() {
-    final text = _buf.toString().replaceAll(_whitespace, ' ').trim();
+    final text = _buf
+        .toString()
+        .replaceAll(_cjkLineBreak, '')
+        .replaceAll(_whitespace, ' ')
+        .trim();
     _buf.clear();
-    if (text.isNotEmpty) blocks.add(EpubBlock.text(text));
+    if (text.isEmpty) return;
+    if (blocks.isNotEmpty &&
+        blocks.last.text != null &&
+        shouldMergeBrokenParagraph(blocks.last.text!, text)) {
+      blocks[blocks.length - 1] = EpubBlock.text(
+        joinBrokenParagraph(blocks.last.text!, text),
+      );
+    } else {
+      blocks.add(EpubBlock.text(text));
+    }
   }
 
   void addImage(String? entryPath) {
@@ -576,6 +592,9 @@ class _BlockCollector {
   }
 }
 
+final _cjkLineBreak = RegExp(
+  r'(?<=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])[ \t]*[\r\n]+[ \t]*(?=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])',
+);
 final _whitespace = RegExp(r'\s+');
 const _blockTags = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'};
 const _skipTags = {'head', 'script', 'style'};

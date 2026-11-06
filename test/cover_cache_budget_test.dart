@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/legacy_cover.dart';
+import 'package:shuyu/legacy_cover.dart';
 
 void main() {
   test(

@@ -4,13 +4,13 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/archive_carousel.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/main.dart';
-import 'package:wenku8_flutter/pages.dart';
-import 'package:wenku8_flutter/reader_chrome.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/archive_carousel.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/main.dart';
+import 'package:shuyu/pages.dart';
+import 'package:shuyu/reader_chrome.dart';
 
 double contrast(Color a, Color b) {
   final x = a.computeLuminance(), y = b.computeLuminance();

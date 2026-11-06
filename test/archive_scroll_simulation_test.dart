@@ -1,6 +1,6 @@
 import 'package:flutter/physics.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/archive_scroll_simulation.dart';
+import 'package:shuyu/archive_scroll_simulation.dart';
 
 ArchiveScrollSimulation _sim(
   double position,

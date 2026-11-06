@@ -1790,6 +1790,12 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
               _finishBoundary(boundary);
             }
             setState(() {
+              if (!_programmaticTurn &&
+                  spread != _swipeOrigin &&
+                  spread >= 0 &&
+                  spread < _spreadCount) {
+                _readingAnchor = _firstVisibleAnchor;
+              }
               _swipeOrigin = null;
               _programmaticTurn = false;
               _target = _page;

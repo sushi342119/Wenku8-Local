@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/reader_paging.dart';
-import 'package:wenku8_flutter/reader_preferences.dart';
+import 'package:shuyu/reader_paging.dart';
+import 'package:shuyu/reader_preferences.dart';
 
 void main() {
   const size = Size(400, 800);

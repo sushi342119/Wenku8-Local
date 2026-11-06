@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/local_platform.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/local_platform.dart';
 
 /// Executed only with tools/run_android_documents_qa.py on an owned emulator.
 /// The host selects the marked fixture document through observed system UI.

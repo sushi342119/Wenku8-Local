@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:wenku8_flutter/catalog.dart';
+import 'package:shuyu/catalog.dart';
 
 Novel coverFixtureBook(int id) => Novel(
   id: id,

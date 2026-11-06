@@ -3,9 +3,9 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/listening/edge_tts.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/store.dart';
+import 'package:shuyu/listening/edge_tts.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

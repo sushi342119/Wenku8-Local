@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/book_tags.dart';
+import 'package:shuyu/book_tags.dart';
 
 // Widget tests construct NovelApp directly, bypassing main()'s store preload.
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {

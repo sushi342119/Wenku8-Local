@@ -6,12 +6,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
-import 'package:wenku8_flutter/archive_random_pick_card.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_filter.dart';
-import 'package:wenku8_flutter/novel_random_pick_section.dart';
-import 'package:wenku8_flutter/ui_preferences.dart';
+import 'package:shuyu/archive_random_pick_card.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_filter.dart';
+import 'package:shuyu/novel_random_pick_section.dart';
+import 'package:shuyu/ui_preferences.dart';
 
 const _countsKey = 'random_pick_draw_counts_v1';
 const _lastKey = 'random_pick_last_id_v1';

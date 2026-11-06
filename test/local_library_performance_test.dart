@@ -11,17 +11,17 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:shared_preferences_platform_interface/types.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/chapter_splitter.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/novel_feed_controller.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/controller.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/chapter_splitter.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/novel_feed_controller.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/controller.dart';
 import 'support/listening_fixture.dart';
-import 'package:wenku8_flutter/listening/store.dart';
+import 'package:shuyu/listening/store.dart';
 
 const _queueKey = 'local_library_pending_chapter_remaps_v1';
 const _tree = 'content://test/tree/books';

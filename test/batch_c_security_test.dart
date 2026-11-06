@@ -6,19 +6,19 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_typography.dart';
-import 'package:wenku8_flutter/filename_tags.dart';
-import 'package:wenku8_flutter/legacy_cover.dart';
-import 'package:wenku8_flutter/legacy_transport.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/listening/edge_tts.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/local_scan_follow_up.dart';
-import 'package:wenku8_flutter/reader_content.dart';
-import 'package:wenku8_flutter/wenku_errors.dart';
+import 'package:shuyu/app_typography.dart';
+import 'package:shuyu/filename_tags.dart';
+import 'package:shuyu/legacy_cover.dart';
+import 'package:shuyu/legacy_transport.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/listening/edge_tts.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/local_scan_follow_up.dart';
+import 'package:shuyu/reader_content.dart';
+import 'package:shuyu/wenku_errors.dart';
 
 import 'support/offline_fixture.dart';
 

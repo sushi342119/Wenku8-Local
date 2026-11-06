@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/novel_feed_controller.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/novel_feed_controller.dart';
 
 List<Novel> _books(int page) => [
   for (var i = 0; i < 20; i++)

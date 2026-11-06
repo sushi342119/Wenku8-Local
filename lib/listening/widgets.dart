@@ -89,6 +89,13 @@ class _ListeningPanelState extends State<ListeningPanel> {
       builder: (context, state, _) {
         final own = state.novel?.id == widget.novel.id;
         final cursor = widget.controller.savedCursor(widget.novel.id);
+        final movedFromPaused =
+            own &&
+            state.active &&
+            !state.requestingPlayback &&
+            (widget.chapter != state.chapter ||
+                (state.current != null &&
+                    widget.paragraph != state.current!.paragraph));
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
@@ -123,7 +130,7 @@ class _ListeningPanelState extends State<ListeningPanel> {
             ),
             const SizedBox(height: 6),
             Text(
-              own && state.current != null
+              own && state.current != null && !movedFromPaused
                   ? '第 ${state.chapter + 1} 章 · ${state.chapterTitle}'
                   : '从第 ${widget.chapter + 1} 章当前段落开始',
               style: const TextStyle(fontSize: 13),
@@ -195,13 +202,17 @@ class _ListeningPanelState extends State<ListeningPanel> {
                   onPressed: () => own && state.requestingPlayback
                       ? _act(widget.controller.pause)
                       : _playUsingSource(
-                          () => own && state.active
+                          () => own && state.active && !movedFromPaused
                               ? widget.controller.resume()
                               : widget.controller.start(
                                   widget.novel,
                                   chapter: widget.chapter,
                                   paragraph: widget.paragraph,
-                                  resume: cursor != null,
+                                  resume:
+                                      !movedFromPaused &&
+                                      cursor != null &&
+                                      cursor.chapter == widget.chapter &&
+                                      cursor.paragraph == widget.paragraph,
                                 ),
                         ),
                 ),

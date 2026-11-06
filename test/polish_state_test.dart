@@ -4,14 +4,14 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/novel_feed_controller.dart';
-import 'package:wenku8_flutter/offline_cache.dart';
-import 'package:wenku8_flutter/offline_repository.dart';
-import 'package:wenku8_flutter/reader_content.dart';
-import 'package:wenku8_flutter/ui_notifiers.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/novel_feed_controller.dart';
+import 'package:shuyu/offline_cache.dart';
+import 'package:shuyu/offline_repository.dart';
+import 'package:shuyu/reader_content.dart';
+import 'package:shuyu/ui_notifiers.dart';
 
 import 'support/offline_fixture.dart';
 
@@ -416,4 +416,20 @@ void main() {
       },
     );
   }
+
+  test(
+    'hard-wrapped mid-sentence paragraphs are merged while distinct paragraphs stay separate',
+    () async {
+      final rawTxt =
+          '少女推开木门，微凉的夜风迎面吹来，\n吹散了屋里残留的茶香。\n\n'
+          '“你终于来了，我还以为你今天不会经过这座桥，\n\n结果还是让我等到了。”\n\n'
+          '少年只是轻轻点头，没有多说什么。';
+      final parsed = await ReaderContent.parse(rawTxt);
+      expect(parsed.paragraphs, [
+        '少女推开木门，微凉的夜风迎面吹来，吹散了屋里残留的茶香。',
+        '“你终于来了，我还以为你今天不会经过这座桥，结果还是让我等到了。”',
+        '少年只是轻轻点头，没有多说什么。',
+      ]);
+    },
+  );
 }

@@ -1,9 +1,9 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/chapter_splitter.dart';
-import 'package:wenku8_flutter/file_text_anchor.dart';
-import 'package:wenku8_flutter/text_anchor.dart';
+import 'package:shuyu/chapter_splitter.dart';
+import 'package:shuyu/file_text_anchor.dart';
+import 'package:shuyu/text_anchor.dart';
 
 void main() {
   late Directory root;

@@ -8,8 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/local_platform.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_platform.dart';
 
 class _Paths extends PathProviderPlatform {
   _Paths(this.path);

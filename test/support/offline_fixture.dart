@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:wenku8_flutter/catalog.dart';
+import 'package:shuyu/catalog.dart';
 
 Novel offlineFixtureBook(int id, {int chapters = 3}) => Novel(
   id: id,

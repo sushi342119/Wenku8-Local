@@ -3,10 +3,10 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/main.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/main.dart';
 
 void main() {
   testWidgets('detail headings remain readable after changing appearance', (

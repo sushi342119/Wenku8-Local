@@ -2,12 +2,12 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/performance_preferences.dart';
-import 'package:wenku8_flutter/reader_preferences.dart';
-import 'package:wenku8_flutter/ui_preferences.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/performance_preferences.dart';
+import 'package:shuyu/reader_preferences.dart';
+import 'package:shuyu/ui_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -204,7 +204,7 @@ void main() {
 
   test('native multi-key writer allows every new key', () {
     final kotlin = File(
-      'android/app/src/main/kotlin/org/mewx/wenku8_flutter/LocalTools.kt',
+      'android/app/src/main/kotlin/app/shuyu/reader/LocalTools.kt',
     ).readAsStringSync();
     for (final key in UiPreferenceKeys.all) {
       expect(kotlin.contains('"$key"'), isTrue, reason: key);

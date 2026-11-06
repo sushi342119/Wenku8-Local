@@ -4,16 +4,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter/cupertino.dart' show CupertinoSlider;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/ui_preferences.dart';
-import 'package:wenku8_flutter/listening/controller.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/store.dart';
-import 'package:wenku8_flutter/listening/widgets.dart';
-import 'package:wenku8_flutter/pages.dart';
-import 'package:wenku8_flutter/reader_chrome.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/ui_preferences.dart';
+import 'package:shuyu/listening/controller.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/store.dart';
+import 'package:shuyu/listening/widgets.dart';
+import 'package:shuyu/pages.dart';
+import 'package:shuyu/reader_chrome.dart';
 
 import 'support/listening_fixture.dart';
 import 'support/visual_review.dart';
@@ -665,4 +665,75 @@ void main() {
       await disposeFixture(tester);
     },
   );
+
+  testWidgets(
+    'flipping forward after first listening session starts from current chapter instead of jumping back',
+    (tester) async {
+      final book = demoNovels.first;
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: novelTheme(Brightness.light),
+          builder: (context, child) =>
+              ListeningScope(controller: controller, child: child!),
+          home: ReaderPage(
+            novel: book,
+            state: library,
+            repository: const DemoNovelRepository(),
+            initialChapter: 0,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final starting = controller.start(book, chapter: 0);
+      await io(tester);
+      await starting;
+      expect(controller.snapshot.value.chapter, 0);
+      await controller.pause();
+      await tester.pumpAndSettle();
+
+      // User flips forward to chapter 1 and opens the listening panel again.
+      await tester.tap(find.text('下一章'));
+      await tester.pumpAndSettle();
+      await tester.tap(control('reader-listening-entry'));
+      await tester.pumpAndSettle();
+      await tester.tap(control('listening-play-pause'));
+      await io(tester);
+      expect(controller.snapshot.value.chapter, 1);
+      await tester.pumpWidget(const SizedBox.shrink());
+      await disposeFixture(tester);
+    },
+  );
+
+  testWidgets('single-chapter novel still displays reader progress bar', (
+    tester,
+  ) async {
+    final singleChapterBook = demoNovels.first.copyWith(
+      chapters: [
+        NovelChapter(
+          '正文',
+          List.generate(
+            40,
+            (i) => '这是单章小说的第 ${i + 1} 段正文，用于验证只有一章正文时依然会显示底部阅读进度条。',
+          ).join('\n\n'),
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: novelTheme(Brightness.light),
+        builder: (context, child) =>
+            ListeningScope(controller: controller, child: child!),
+        home: ReaderPage(
+          novel: singleChapterBook,
+          state: library,
+          repository: const DemoNovelRepository(),
+          initialChapter: 0,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.bySemanticsLabel('阅读进度'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await disposeFixture(tester);
+  });
 }

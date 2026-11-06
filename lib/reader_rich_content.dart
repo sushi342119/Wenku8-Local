@@ -545,6 +545,163 @@ class ReaderRichParagraph {
 
 /// Optional local EPUB metadata. Body coordinates are always plain UTF-16 text;
 /// annotations never become copied text, speech, or an extra paragraph.
+final _paragraphHeadingPattern = RegExp(
+  r'^(?:第\s*[\d０-９零一二三四五六七八九十百千万〇两]+\s*[章节節回话話幕折卷部集篇段]'
+  r'|(?:序章|楔子|尾声|番外|后记|前言|目录)(?:\s|$|[：:])'
+  r'|(?:chapter|part|section)\s+[\divxlcdm]+\b'
+  r'|(?:段落|性能段落|下一章段落|正文\s*[\d\-]+)\s*\d*)',
+  caseSensitive: false,
+);
+final _midSentenceEndPattern = RegExp(r'[,，、―—\-“‘「『（(《〈【\[]$');
+final _terminalSentenceEndPattern = RegExp(
+  r'[。！？!?…⋯～~；;：:.。”’」』）)】\]》〉〕}"\x27]$',
+);
+final _cjkEndPattern = RegExp(r'[\u3400-\u9fff]$');
+final _cjkOrPunctStartPattern = RegExp(
+  r'^[\u3400-\u9fff，,。！？!?、；;：:”’」』）)】\]》〉〕]',
+);
+final _prosePunctPattern = RegExp(r'[，,。！？!?、；;：:“”‘’「」『』（）()]');
+final _indentStartPattern = RegExp(r'^(?:[　\t]| {2,})');
+final _openQuoteEndPattern = RegExp(r'[“‘「『（(《〈【\[]$');
+final _asciiWordEndPattern = RegExp(r'[A-Za-z0-9]$');
+final _asciiWordStartPattern = RegExp(r'^[A-Za-z0-9]');
+
+int _charCount(String text, int codeUnit) {
+  var count = 0;
+  for (var i = 0; i < text.length; i++) {
+    if (text.codeUnitAt(i) == codeUnit) count++;
+  }
+  return count;
+}
+
+bool _hasUnclosedQuote(String text) =>
+    _charCount(text, 0x201C) > _charCount(text, 0x201D) || // “ ”
+    _charCount(text, 0x300C) > _charCount(text, 0x300D) || // 「 」
+    _charCount(text, 0x300E) > _charCount(text, 0x300F) || // 『 』
+    _charCount(text, 0xFF08) > _charCount(text, 0xFF09); // （ ）
+
+/// Joins two fragments that belong to the same paragraph without introducing
+/// extra spaces between CJK characters.
+String joinBrokenParagraph(String prev, String next) {
+  final p = prev.trimRight();
+  final n = next.trimLeft();
+  if (p.isEmpty) return next;
+  if (n.isEmpty) return prev;
+  final needsSpace =
+      _asciiWordEndPattern.hasMatch(p) && _asciiWordStartPattern.hasMatch(n);
+  return needsSpace ? '$p $n' : '$p$n';
+}
+
+/// Returns true when [prev] was hard-wrapped mid-sentence and [next] continues
+/// the same paragraph.
+bool shouldMergeBrokenParagraph(String prev, String next) {
+  final p = prev.trimRight();
+  final n = next.trimLeft();
+  if (p.isEmpty || n.isEmpty) return false;
+  if (p == '[插图]' ||
+      n == '[插图]' ||
+      p.startsWith('<!--') ||
+      n.startsWith('<!--')) {
+    return false;
+  }
+  if (_paragraphHeadingPattern.hasMatch(p.trimLeft()) ||
+      _paragraphHeadingPattern.hasMatch(n)) {
+    return false;
+  }
+  if (_indentStartPattern.hasMatch(next) && !_openQuoteEndPattern.hasMatch(p)) {
+    return false;
+  }
+  if (_midSentenceEndPattern.hasMatch(p) &&
+      _cjkOrPunctStartPattern.hasMatch(n)) {
+    return true;
+  }
+  if (_hasUnclosedQuote(p) && !RegExp(r'[。！？!?…⋯]$').hasMatch(p)) {
+    return true;
+  }
+  if (_cjkEndPattern.hasMatch(p) &&
+      _cjkOrPunctStartPattern.hasMatch(n) &&
+      p.trimLeft().length >= 12 &&
+      (_prosePunctPattern.hasMatch(p) || _prosePunctPattern.hasMatch(n))) {
+    return true;
+  }
+  return false;
+}
+
+bool _shouldJoinSingleNewline(String prev, String nextRaw) {
+  final p = prev.trimRight();
+  final n = nextRaw.trimLeft();
+  if (p.isEmpty || n.isEmpty) return false;
+  if (p == '[插图]' ||
+      n == '[插图]' ||
+      p.startsWith('<!--') ||
+      n.startsWith('<!--')) {
+    return false;
+  }
+  if (_paragraphHeadingPattern.hasMatch(p.trimLeft()) ||
+      _paragraphHeadingPattern.hasMatch(n)) {
+    return false;
+  }
+  if (_indentStartPattern.hasMatch(nextRaw) &&
+      !_openQuoteEndPattern.hasMatch(p)) {
+    return false;
+  }
+  if (_midSentenceEndPattern.hasMatch(p)) return true;
+  if (_hasUnclosedQuote(p) && !RegExp(r'[。！？!?…⋯]$').hasMatch(p)) {
+    return true;
+  }
+  if (_terminalSentenceEndPattern.hasMatch(p)) return false;
+  if (p.trimLeft().length < 10 &&
+      !_prosePunctPattern.hasMatch(p) &&
+      !_prosePunctPattern.hasMatch(n)) {
+    return false;
+  }
+  return _cjkEndPattern.hasMatch(p) && _cjkOrPunctStartPattern.hasMatch(n);
+}
+
+/// Reflows plain-text novel paragraphs by repairing hard-wrapped single/double
+/// newlines inside a sentence while keeping genuine paragraphs separate.
+List<String> reflowReaderParagraphs(String source) {
+  final rawBlocks = source.split('\n\n');
+  final expanded = <String>[];
+  for (final block in rawBlocks) {
+    if (!block.contains('\n')) {
+      expanded.add(block);
+      continue;
+    }
+    final lines = block
+        .split('\n')
+        .map((line) => line.trimRight())
+        .where((line) => line.trim().isNotEmpty)
+        .toList();
+    if (lines.isEmpty) {
+      expanded.add(block);
+      continue;
+    }
+    var current = lines.first;
+    for (var i = 1; i < lines.length; i++) {
+      final next = lines[i];
+      if (_shouldJoinSingleNewline(current, next)) {
+        current = joinBrokenParagraph(current, next);
+      } else {
+        expanded.add(current);
+        current = next.replaceFirst(_indentStartPattern, '');
+      }
+    }
+    expanded.add(current);
+  }
+  if (expanded.length <= 1) return expanded;
+  final merged = <String>[expanded.first];
+  for (var i = 1; i < expanded.length; i++) {
+    final next = expanded[i];
+    if (shouldMergeBrokenParagraph(merged.last, next)) {
+      merged[merged.length - 1] = joinBrokenParagraph(merged.last, next);
+    } else {
+      merged.add(next);
+    }
+  }
+  return merged;
+}
+
 class ReaderRichBody {
   const ReaderRichBody(
     this.paragraphs, {
@@ -579,7 +736,9 @@ class ReaderRichBody {
   }
 
   static ReaderRichBody decode(String source) {
-    if (!source.contains(prefix)) return ReaderRichBody(source.split('\n\n'));
+    if (!source.contains(prefix)) {
+      return ReaderRichBody(reflowReaderParagraphs(source));
+    }
     final paragraphs = <String>[],
         formats = <int, ReaderRichParagraph>{},
         notes = <String, String>{};

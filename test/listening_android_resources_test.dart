@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/listening/audio_output.dart';
+import 'package:shuyu/listening/audio_output.dart';
 
 void main() {
   test('runtime notification icon has a matching release keep rule', () {

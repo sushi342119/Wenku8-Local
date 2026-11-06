@@ -9,14 +9,14 @@ import 'package:path_provider_platform_interface/path_provider_platform_interfac
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 import 'package:shared_preferences_platform_interface/types.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/local_record_removal.dart';
-import 'package:wenku8_flutter/recovery_archive.dart';
-import 'package:wenku8_flutter/wenku_errors.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/local_record_removal.dart';
+import 'package:shuyu/recovery_archive.dart';
+import 'package:shuyu/wenku_errors.dart';
 
 import 'support/offline_fixture.dart';
 

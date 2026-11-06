@@ -2,18 +2,18 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
-import 'package:wenku8_flutter/catalog.dart';
+import 'package:shuyu/catalog.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/pages.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/pages.dart';
 
 // The persistent isolate's callbacks can belong to the widget clock while a
 // subsequent scan starts in runAsync. Drive both clocks until that scan ends.

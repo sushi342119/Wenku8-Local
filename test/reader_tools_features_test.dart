@@ -4,11 +4,11 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/pages.dart';
-import 'package:wenku8_flutter/reader_landing_highlight.dart';
-import 'package:wenku8_flutter/ui_preferences.dart' show readerFontSizeMax;
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/pages.dart';
+import 'package:shuyu/reader_landing_highlight.dart';
+import 'package:shuyu/ui_preferences.dart' show readerFontSizeMax;
 
 import 'support/offline_fixture.dart';
 

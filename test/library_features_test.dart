@@ -4,10 +4,10 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/novel_feed_controller.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/novel_feed_controller.dart';
 
 Novel _book(int id, {List<NovelChapter> chapters = const []}) => Novel(
   id: id,

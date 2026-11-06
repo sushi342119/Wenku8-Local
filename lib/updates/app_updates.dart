@@ -14,13 +14,14 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.6',
+  defaultValue: '1.8.7',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 53);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 54);
 const currentReleaseNotes = '''
-1. 重新设计全局界面背景：新增「书屿」等高线、中左岸线水波与右下浅滩纹路。
-2. 叠加纵向柔和衰减的经纬微网格、径向散点矩阵与罗盘准星刻度，消除纯色单调感。
-3. 背景渐变与暗纹色彩随当前主题及莫奈配色自动联动，阅读器正文保持纯净纸张。
+1. 修复仅有一章正文的小说在首次排版完成后不显示底部阅读进度条的问题。
+2. 智能合并因源文本硬换行或断句异常拆开的段落，保持正常自然段与标题独立。
+3. 修复听书后向后翻页再打开听书面板点击开始会跳回首次听书章节的问题。
+4. 将应用包名更新为 app.shuyu.reader，Flutter 项目包名更新为 shuyu。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {

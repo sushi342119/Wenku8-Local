@@ -162,7 +162,7 @@ Future<void> _registerService(ListeningController controller) async {
     await AudioService.init(
       builder: () => handler,
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'org.mewx.wenku8_flutter.listening',
+        androidNotificationChannelId: 'app.shuyu.reader.listening',
         androidNotificationChannelName: '文库听书',
         androidNotificationChannelDescription: '听书播放、章节切换与续听',
         androidNotificationIcon: listeningAndroidNotificationIcon,

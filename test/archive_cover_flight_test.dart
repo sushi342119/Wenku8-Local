@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/archive_carousel.dart';
-import 'package:wenku8_flutter/legacy_cover.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/pages.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/archive_carousel.dart';
+import 'package:shuyu/legacy_cover.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/pages.dart';
 
 import 'support/cover_fixture.dart';
 import 'support/offline_fixture.dart';

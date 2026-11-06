@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:wenku8_flutter/listening/cache.dart';
-import 'package:wenku8_flutter/listening/controller.dart';
-import 'package:wenku8_flutter/listening/models.dart';
+import 'package:shuyu/listening/cache.dart';
+import 'package:shuyu/listening/controller.dart';
+import 'package:shuyu/listening/models.dart';
 
 class FakeListeningOutput implements ListeningAudioOutput {
   final positionEvents = StreamController<Duration>.broadcast(sync: true);

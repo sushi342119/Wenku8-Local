@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/filename_tags.dart';
-import 'package:wenku8_flutter/local_library.dart';
+import 'package:shuyu/filename_tags.dart';
+import 'package:shuyu/local_library.dart';
 
 void main() {
   test('parses only final consecutive tags and preserves extension case', () {

@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/listening/edge_protocol.dart';
+import 'package:shuyu/listening/edge_protocol.dart';
 
 void main() {
   test('v2 proof matches upstream protocol vectors', () {

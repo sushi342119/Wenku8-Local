@@ -2,7 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:wenku8_flutter/wenku_errors.dart';
+import 'package:shuyu/wenku_errors.dart';
 
 void main() {
   test('扫描失败详情只返回固定类别文案，不带路径或 URI', () {

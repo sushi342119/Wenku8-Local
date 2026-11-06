@@ -2,9 +2,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/archive_carousel.dart';
-import 'package:wenku8_flutter/catalog.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/archive_carousel.dart';
+import 'package:shuyu/catalog.dart';
 
 List<Novel> _books(int count) => [
   for (var i = 0; i < count; i++)

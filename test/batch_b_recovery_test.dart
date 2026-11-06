@@ -3,13 +3,13 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/store.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/store.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

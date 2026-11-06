@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/reader_content.dart';
-import 'package:wenku8_flutter/reader_follow_scroll.dart';
+import 'package:shuyu/reader_content.dart';
+import 'package:shuyu/reader_follow_scroll.dart';
 
 void main() {
   late ScrollController scroll;

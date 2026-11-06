@@ -1,7 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/reader_purification.dart';
-import 'package:wenku8_flutter/reading_activity.dart';
+import 'package:shuyu/reader_purification.dart';
+import 'package:shuyu/reading_activity.dart';
 
 void main() {
   test('ReaderPurificationRule applies literal and regex rules safely', () {

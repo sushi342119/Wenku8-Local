@@ -6,17 +6,17 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/listening/audio_output.dart';
-import 'package:wenku8_flutter/listening/cache.dart';
-import 'package:wenku8_flutter/listening/controller.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/store.dart';
-import 'package:wenku8_flutter/listening/widgets.dart';
-import 'package:wenku8_flutter/native_effects.dart';
-import 'package:wenku8_flutter/pages.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/listening/audio_output.dart';
+import 'package:shuyu/listening/cache.dart';
+import 'package:shuyu/listening/controller.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/store.dart';
+import 'package:shuyu/listening/widgets.dart';
+import 'package:shuyu/native_effects.dart';
+import 'package:shuyu/pages.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

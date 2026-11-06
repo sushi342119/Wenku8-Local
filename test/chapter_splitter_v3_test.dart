@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/chapter_splitter.dart';
+import 'package:shuyu/chapter_splitter.dart';
 
 void main() {
   String body(String text, LocalChapterIndex c) =>

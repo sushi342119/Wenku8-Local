@@ -1,8 +1,8 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/local_record_removal.dart';
-import 'package:wenku8_flutter/local_source_identity.dart';
+import 'package:shuyu/local_record_removal.dart';
+import 'package:shuyu/local_source_identity.dart';
 
 class _Store {
   String? intent;

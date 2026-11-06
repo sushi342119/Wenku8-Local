@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/local_platform.dart';
+import 'package:shuyu/local_platform.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();

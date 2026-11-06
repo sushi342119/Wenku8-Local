@@ -5,8 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/native_effects.dart';
-import 'package:wenku8_flutter/offline_cache.dart';
+import 'package:shuyu/native_effects.dart';
+import 'package:shuyu/offline_cache.dart';
 
 import '../test/offline_features_ui_test.dart' as features;
 import '../test/support/offline_fixture.dart';

@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-import 'package:wenku8_flutter/chapter_splitter.dart';
+import 'package:shuyu/chapter_splitter.dart';
 
 final legacy = RegExp(
   r'^[ \t　【\[（(]{0,32}(第[一二三四五六七八九十百千零〇两\d０-９ \t　]+[章节回集卷部篇话幕]|卷[一二三四五六七八九十百千零〇两\d０-９]+|Chapter[ \t]*\d+|序章|序曲|楔子|终章|终曲|番外(?:[ \t]*\d+)?|后记|前言|引子|尾声)[^\n]{0,40}$',

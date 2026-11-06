@@ -7,9 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/native_effects.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/reader_chrome.dart';
+import 'package:shuyu/native_effects.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/reader_chrome.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();

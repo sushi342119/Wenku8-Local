@@ -6,18 +6,18 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/glass_dock.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/ui_preferences.dart';
-import 'package:wenku8_flutter/local_epub.dart';
-import 'package:wenku8_flutter/local_epub_reader.dart';
-import 'package:wenku8_flutter/local_epub_reader_tools.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/reader_catalogue.dart';
-import 'package:wenku8_flutter/reader_chrome.dart';
-import 'package:wenku8_flutter/reader_tools.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/glass_dock.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/ui_preferences.dart';
+import 'package:shuyu/local_epub.dart';
+import 'package:shuyu/local_epub_reader.dart';
+import 'package:shuyu/local_epub_reader_tools.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/reader_catalogue.dart';
+import 'package:shuyu/reader_chrome.dart';
+import 'package:shuyu/reader_tools.dart';
 
 const _novel = Novel(
   id: localNovelIdBase + 21,

@@ -20,15 +20,15 @@ Prepare Release 在创建草稿前使用 Android SDK 验证候选 APK 与已发�
 
 ## 应用身份与签名
 
-包名 org.mewx.wenku8_flutter 是现有安装的兼容标识，不代表签名相同。为保留旧版数据与升级路径暂时沿用。改变它会创建独立应用，必须先实现并验证迁移。正式构建缺少签名配置时失败；调试使用独立后缀。新建证书无法覆盖旧证书的安装。当前与上游及历史 APK 的证书指纹尚未核对，不能声称签名已隔离。
+当前应用包名（`applicationId` / `namespace`）为 `app.shuyu.reader`，Flutter 项目包名为 `shuyu`（原历史兼容包名为 `org.mewx.wenku8_flutter`）。正式构建缺少签名配置时失败；调试使用独立后缀。新建证书无法覆盖旧证书的安装。
 
 更新源默认 sushi342119/Shuyu；工作流明确传入当前仓库。APK 安装前验证包名、版本和签名。
 
-发布附件暂时保留 `wenku8-local-<标签>-arm64-v8a.apk` 文件名：现有更新器只识别 `wenku8-` 前缀及对应 ABI 后缀。修改应用显示名称或图标不需要修改 applicationId；文件名更名需要另行实现旧版更新兼容。
+发布附件暂时保留 `wenku8-local-<标签>-arm64-v8a.apk` 文件名：现有更新器只识别 `wenku8-` 前缀及对应 ABI 后缀。
 
 ### 发布前兼容性验收
 
-1. 下载 v1.8.1+48 的正式 APK 和候选 APK，使用 Android SDK 的 `apkanalyzer manifest application-id`、`apkanalyzer manifest version-code` 读取包名与构建号，使用 `apksigner verify --verbose --print-certs` 验证签名并记录证书 SHA-256 指纹。候选包必须沿用 `org.mewx.wenku8_flutter` 和现有发布证书，构建号严格增加。不得用 APK 文件本身的 SHA-256 摘要代替证书指纹。
+1. 下载基准正式 APK 和候选 APK，使用 Android SDK 的 `apkanalyzer manifest application-id`、`apkanalyzer manifest version-code` 读取包名与构建号，使用 `apksigner verify --verbose --print-certs` 验证签名并记录证书 SHA-256 指纹。候选包必须使用 `app.shuyu.reader` 和现有发布证书，构建号严格增加。不得用 APK 文件本身的 SHA-256 摘要代替证书指纹。
 2. 历史书屿 APK 与上游 APK 的证书分别核对；固定使用同一套 Secrets 不等于已证明与上游签名隔离。不得为隔离上游直接新建或替换发布证书。历史临时签名安装需单独验证。
 3. 在测试设备安装正式旧版，导入 TXT、EPUB、PDF，建立书架、阅读进度、书签和标签并导出备份；随后直接覆盖安装候选包，不卸载、不清除数据。检查上述记录、小说正文、文件夹授权、重启后读取、备份导出与恢复以及应用内更新。
 4. 验收完成后才手动发布草稿；未完成的证书或真机检查应明确记录，不能仅凭构建和单元测试通过声称升级兼容。

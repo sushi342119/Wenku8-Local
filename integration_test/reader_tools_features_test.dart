@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/native_effects.dart';
+import 'package:shuyu/native_effects.dart';
 
 import '../test/reader_tools_features_test.dart' as features;
 

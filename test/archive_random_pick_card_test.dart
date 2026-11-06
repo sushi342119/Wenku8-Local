@@ -2,7 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/archive_random_pick_card.dart';
+import 'package:shuyu/archive_random_pick_card.dart';
 
 class _FixedRandom implements math.Random {
   _FixedRandom(this.value);

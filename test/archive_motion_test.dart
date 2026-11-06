@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/app_ui.dart';
+import 'package:shuyu/app_ui.dart';
 
 void main() {
   testWidgets(

@@ -5,17 +5,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_interactions.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/backup_page.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/library_backup.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/pages.dart';
-import 'package:wenku8_flutter/reader_find.dart';
-import 'package:wenku8_flutter/reader_content.dart';
+import 'package:shuyu/app_interactions.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/backup_page.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/library_backup.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/pages.dart';
+import 'package:shuyu/reader_find.dart';
+import 'package:shuyu/reader_content.dart';
 
 import 'support/offline_fixture.dart';
 

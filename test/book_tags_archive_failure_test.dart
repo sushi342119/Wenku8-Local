@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:shared_preferences_platform_interface/shared_preferences_platform_interface.dart';
 
-import 'package:wenku8_flutter/book_tags.dart';
+import 'package:shuyu/book_tags.dart';
 
 /// 写任何 *_quarantine_v1 键时模拟平台写入失败（setValue 返回 false），
 /// 其余读写走内存实现。脚手架复用仓库已有模式

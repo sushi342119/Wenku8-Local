@@ -3,10 +3,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/offline_cache.dart';
-import 'package:wenku8_flutter/offline_repository.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/offline_cache.dart';
+import 'package:shuyu/offline_repository.dart';
 
 class _Disconnected extends DemoNovelRepository {
   int bodyCalls = 0;

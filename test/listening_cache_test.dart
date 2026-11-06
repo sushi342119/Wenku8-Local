@@ -3,9 +3,9 @@ import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/listening/cache.dart';
-import 'package:wenku8_flutter/listening/edge_tts.dart';
-import 'package:wenku8_flutter/listening/models.dart';
+import 'package:shuyu/listening/cache.dart';
+import 'package:shuyu/listening/edge_tts.dart';
+import 'package:shuyu/listening/models.dart';
 
 class _EdgeFixture extends EdgeSpeechClient {
   int calls = 0;

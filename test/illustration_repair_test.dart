@@ -2,11 +2,11 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/offline_cache.dart';
-import 'package:wenku8_flutter/offline_repository.dart';
-import 'package:wenku8_flutter/reader_content.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/offline_cache.dart';
+import 'package:shuyu/offline_repository.dart';
+import 'package:shuyu/reader_content.dart';
 
 import 'support/offline_fixture.dart';
 

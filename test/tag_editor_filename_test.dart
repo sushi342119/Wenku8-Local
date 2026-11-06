@@ -6,10 +6,10 @@ import 'package:flutter_test/flutter_test.dart';
 // ignore: depend_on_referenced_packages
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/book_tags.dart';
-import 'package:wenku8_flutter/library_state.dart';
-import 'package:wenku8_flutter/local_library.dart';
-import 'package:wenku8_flutter/tag_pages.dart';
+import 'package:shuyu/book_tags.dart';
+import 'package:shuyu/library_state.dart';
+import 'package:shuyu/local_library.dart';
+import 'package:shuyu/tag_pages.dart';
 
 class _Paths extends PathProviderPlatform {
   _Paths(this.root);

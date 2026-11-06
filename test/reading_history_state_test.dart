@@ -2,7 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/library_state.dart';
+import 'package:shuyu/library_state.dart';
 
 import 'support/offline_fixture.dart';
 

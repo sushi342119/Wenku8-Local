@@ -3,11 +3,11 @@ import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audio_service/audio_service.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/listening/audio_output.dart';
-import 'package:wenku8_flutter/listening/controller.dart';
-import 'package:wenku8_flutter/listening/models.dart';
-import 'package:wenku8_flutter/listening/store.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/listening/audio_output.dart';
+import 'package:shuyu/listening/controller.dart';
+import 'package:shuyu/listening/models.dart';
+import 'package:shuyu/listening/store.dart';
 
 import 'support/listening_fixture.dart';
 

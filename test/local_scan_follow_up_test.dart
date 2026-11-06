@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/local_platform.dart';
-import 'package:wenku8_flutter/local_scan_follow_up.dart';
+import 'package:shuyu/local_platform.dart';
+import 'package:shuyu/local_scan_follow_up.dart';
 
 void main() {
   const readWrite = LocalTreePermission(

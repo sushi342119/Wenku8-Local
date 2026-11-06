@@ -2,9 +2,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/cover_arrival.dart';
-import 'package:wenku8_flutter/legacy_cover.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/cover_arrival.dart';
+import 'package:shuyu/legacy_cover.dart';
 
 import 'support/cover_fixture.dart';
 

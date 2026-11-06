@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/legacy_transport.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/reader_content.dart';
+import 'package:shuyu/legacy_transport.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/reader_content.dart';
 
 import '../test/feature_completion_state_test.dart' as state;
 import '../test/feature_completion_ui_test.dart' as features;

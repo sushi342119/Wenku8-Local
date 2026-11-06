@@ -70,7 +70,7 @@ class HapticGate {
 }
 
 abstract final class AppHaptics {
-  static const channel = MethodChannel('org.mewx.wenku8_flutter/haptics');
+  static const channel = MethodChannel('app.shuyu.reader/haptics');
   static final _clock = Stopwatch()..start();
   static Duration Function() _now = () => _clock.elapsed;
   static HapticGate _gate = HapticGate();

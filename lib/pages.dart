@@ -5154,6 +5154,7 @@ class _ReaderPageState extends State<ReaderPage>
   List<int> _chapterPrefix = const [0];
   int _totalWeight = 0;
   final _progressValue = ValueNotifier<double>(0);
+  late final _progressBarVisible = ValueNotifier<bool>(_showProgressBar);
   bool _progressDragging = false;
   double _dragValue = 0;
   // 拖拽 accepted 后底层指针取消可能走 onEnd 而非 onCancel，
@@ -5317,6 +5318,7 @@ class _ReaderPageState extends State<ReaderPage>
     _highlightTimer?.cancel();
     _findMatch.dispose();
     _progressValue.dispose();
+    _progressBarVisible.dispose();
     _bookmarkLandingTimer?.cancel();
     _bookmarkLanding.dispose();
     _listening?.snapshot.removeListener(_listeningChanged);
@@ -5603,10 +5605,18 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 滚动时更新进度条（拖动中不跟随，避免打架）。
   void _updateProgressFromScroll() {
+    _syncProgressBarVisibility();
     if (_progressDragging) return;
     final v = _bookProgress();
     if ((v - _progressValue.value).abs() > 0.0005) {
       _progressValue.value = v;
+    }
+  }
+
+  void _syncProgressBarVisibility() {
+    final visible = _showProgressBar;
+    if (_progressBarVisible.value != visible) {
+      _progressBarVisible.value = visible;
     }
   }
 
@@ -5628,6 +5638,7 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 拖动结束：跳转到当前章节目标位置。
   Future<void> _jumpToProgress(double progress) async {
+    _suspendListeningFollow();
     final target = _progressToTarget(progress);
     if (!mounted) return;
     if (_paginated) {
@@ -5689,7 +5700,10 @@ class _ReaderPageState extends State<ReaderPage>
     if (_scroll.hasClients) _scroll.jumpTo(0);
     // 章节切换后刷新进度条（新章节从头开始）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _progressValue.value = _bookProgress();
+      if (mounted) {
+        _syncProgressBarVisibility();
+        _progressValue.value = _bookProgress();
+      }
     });
   }
 
@@ -6288,6 +6302,7 @@ class _ReaderPageState extends State<ReaderPage>
   }
 
   Future<void> _seekProgress(double fraction) async {
+    _suspendListeningFollow();
     if (_paginated) {
       if (_ready) _paged.seek(fraction.clamp(0.0, 1.0));
       return;
@@ -6461,6 +6476,7 @@ class _ReaderPageState extends State<ReaderPage>
         if (ticket == _restoreTicket) {
           _restoring = false;
           if (!completed) _restoreQueued = false;
+          _updateProgressFromScroll();
           _syncReadingActivity();
         }
       }
@@ -6623,8 +6639,11 @@ class _ReaderPageState extends State<ReaderPage>
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       // 阅读进度条：显示全书进度，可拖动跳转。
-                      if (_showProgressBar)
-                        Padding(
+                      ValueListenableBuilder<bool>(
+                        valueListenable: _progressBarVisible,
+                        builder: (context, showProgressBar, child) =>
+                            showProgressBar ? child! : const SizedBox.shrink(),
+                        child: Padding(
                           padding: const EdgeInsets.only(
                             left: 56,
                             right: 56,
@@ -6671,6 +6690,7 @@ class _ReaderPageState extends State<ReaderPage>
                                 ),
                           ),
                         ),
+                      ),
                       GlassDock(
                         key: const ValueKey('reader-liquid-dock'),
                         selectedIndex: 1,
@@ -6881,214 +6901,225 @@ class _ReaderPageState extends State<ReaderPage>
             if (ready && _paginated) {
               return _pagedArticle(context, content, paragraphStyle);
             }
-            return NotificationListener<ScrollNotification>(
+            return NotificationListener<ScrollMetricsNotification>(
               onNotification: (notification) {
                 if (notification.depth == 0) {
-                  if (notification is ScrollStartNotification) {
-                    _idleSave?.cancel();
-                    if (notification.dragDetails != null) {
-                      _suspendListeningFollow(userDrag: true);
-                      _clearBookmarkLanding();
-                      _restoreTicket++;
-                      _restorePending = null;
-                      _restoring = false;
-                      _revealChapter();
-                    }
-                  } else if (notification is ScrollEndNotification) {
-                    // A new drag stops the old fling and emits scroll-end
-                    // inside its input callback. Do no anchor/storage work in
-                    // that callback; save only after genuine, stable idle.
-                    _saveWhenIdle();
-                  }
+                  _updateProgressFromScroll();
                 }
                 return false;
               },
-              child: CustomScrollView(
-                key: const ValueKey('reader-scroll'),
-                controller: _scroll,
-                cacheExtent: (MediaQuery.sizeOf(context).height * .75).clamp(
-                  250.0,
-                  900.0,
-                ),
-                slivers: [
-                  SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      26,
-                      MediaQuery.paddingOf(context).top +
-                          FrostedHeader.toolbarHeight +
-                          24,
-                      26,
-                      28,
-                    ),
-                    sliver: SliverToBoxAdapter(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Text(
-                                isLocalNovelId(_novel.id)
-                                    ? '目录项 ${_chapter + 1}'
-                                    : '第 ${_chapter + 1} 章',
-                                style: TextStyle(
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Align(
-                                  alignment: Alignment.centerRight,
-                                  child: ArchiveCode(
-                                    'CH.${(_chapter + 1).toString().padLeft(3, '0')} / TEXT',
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          Text(
-                            chapter.title,
-                            style: const TextStyle(
-                              fontSize: 23,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+              child: NotificationListener<ScrollNotification>(
+                onNotification: (notification) {
+                  if (notification.depth == 0) {
+                    if (notification is ScrollStartNotification) {
+                      _idleSave?.cancel();
+                      if (notification.dragDetails != null) {
+                        _suspendListeningFollow(userDrag: true);
+                        _clearBookmarkLanding();
+                        _restoreTicket++;
+                        _restorePending = null;
+                        _restoring = false;
+                        _revealChapter();
+                      }
+                    } else if (notification is ScrollEndNotification) {
+                      // A new drag stops the old fling and emits scroll-end
+                      // inside its input callback. Do no anchor/storage work in
+                      // that callback; save only after genuine, stable idle.
+                      _saveWhenIdle();
+                    }
+                  }
+                  return false;
+                },
+                child: CustomScrollView(
+                  key: const ValueKey('reader-scroll'),
+                  controller: _scroll,
+                  cacheExtent: (MediaQuery.sizeOf(context).height * .75).clamp(
+                    250.0,
+                    900.0,
                   ),
-                  if (failed)
-                    SliverToBoxAdapter(
-                      child: Column(
-                        children: [
-                          const Text('章节加载失败'),
-                          GlassTextButton(
-                            onPressed: () => setState(() {
-                              _content = _loadContent();
-                            }),
-                            child: const Text('重试'),
-                          ),
-                        ],
-                      ),
-                    )
-                  else if (!ready)
-                    const SliverPadding(
-                      padding: EdgeInsets.symmetric(horizontal: 26),
-                      sliver: SliverToBoxAdapter(child: ReaderSkeleton()),
-                    )
-                  else ...[
+                  slivers: [
                     SliverPadding(
-                      padding: const EdgeInsets.symmetric(horizontal: 26),
-                      sliver: SliverList.builder(
-                        addAutomaticKeepAlives: false,
-                        itemCount: paragraphs.length,
-                        itemBuilder: (context, index) => ReaderParagraph(
-                          key: ValueKey(
-                            'paragraph-anchor-$_contentGeneration-$index',
-                          ),
-                          registry: _paragraphRegistry,
-                          index: index,
-                          child: LoadedContentItem(
-                            key: ValueKey('reader-paragraph-reveal-$index'),
-                            index: index - _chapterRevealFirst,
-                            animation: _chapterReveal,
-                            child: Padding(
-                              padding: const EdgeInsets.only(bottom: 12),
-                              child: ValueListenableBuilder<int?>(
-                                valueListenable: _bookmarkLanding,
-                                child: _listening == null
-                                    ? _paragraphContent(
-                                        paragraphs,
-                                        index,
-                                        paragraphStyle,
-                                      )
-                                    : ListeningParagraphHighlight(
-                                        controller: _listening!,
-                                        novelId: _novel.id,
-                                        chapter: _chapter,
-                                        paragraph: index,
-                                        onDoubleTap: () =>
-                                            _doubleTapListeningParagraph(index),
-                                        interactive:
-                                            readerIllustrationUrl(
-                                                  paragraphs[index],
-                                                ) ==
-                                                null &&
-                                            paragraphs[index].trim() !=
-                                                '[插图]' &&
-                                            hasSpeechText(paragraphs[index]),
-                                        child: _paragraphContent(
-                                          paragraphs,
-                                          index,
-                                          paragraphStyle,
-                                        ),
-                                      ),
-                                builder: (context, selected, child) =>
-                                    selected == index
-                                    ? ReaderLandingHighlight(
-                                        key: ValueKey(
-                                          'bookmark-landing-$index',
-                                        ),
-                                        reduceMotion: widget.state.reduceMotion,
-                                        child: child!,
-                                      )
-                                    : child!,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    SliverPadding(
-                      padding: EdgeInsets.only(
-                        top: 48,
-                        bottom: MediaQuery.paddingOf(context).bottom + 216,
+                      padding: EdgeInsets.fromLTRB(
+                        26,
+                        MediaQuery.paddingOf(context).top +
+                            FrostedHeader.toolbarHeight +
+                            24,
+                        26,
+                        28,
                       ),
                       sliver: SliverToBoxAdapter(
                         child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            SizedBox(
-                              width: 30,
-                              child: Divider(
-                                color: Theme.of(context).dividerColor,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              '本章完',
-                              style: TextStyle(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.onSurfaceVariant,
-                              ),
+                            Row(
+                              children: [
+                                Text(
+                                  isLocalNovelId(_novel.id)
+                                      ? '目录项 ${_chapter + 1}'
+                                      : '第 ${_chapter + 1} 章',
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Align(
+                                    alignment: Alignment.centerRight,
+                                    child: ArchiveCode(
+                                      'CH.${(_chapter + 1).toString().padLeft(3, '0')} / TEXT',
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                             const SizedBox(height: 12),
-                            if (_chapter + 1 < _novel.chapters.length)
-                              GlassTextButton(
-                                key: const ValueKey('reader-end-next'),
-                                onPressed: () => _go(_chapter + 1),
-                                child: const Text('继续下一章'),
-                              )
-                            else
-                              Text(
-                                '已读至当前目录末章',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
+                            Text(
+                              chapter.title,
+                              style: const TextStyle(
+                                fontSize: 23,
+                                fontWeight: FontWeight.w700,
                               ),
+                            ),
                           ],
                         ),
                       ),
                     ),
+                    if (failed)
+                      SliverToBoxAdapter(
+                        child: Column(
+                          children: [
+                            const Text('章节加载失败'),
+                            GlassTextButton(
+                              onPressed: () => setState(() {
+                                _content = _loadContent();
+                              }),
+                              child: const Text('重试'),
+                            ),
+                          ],
+                        ),
+                      )
+                    else if (!ready)
+                      const SliverPadding(
+                        padding: EdgeInsets.symmetric(horizontal: 26),
+                        sliver: SliverToBoxAdapter(child: ReaderSkeleton()),
+                      )
+                    else ...[
+                      SliverPadding(
+                        padding: const EdgeInsets.symmetric(horizontal: 26),
+                        sliver: SliverList.builder(
+                          addAutomaticKeepAlives: false,
+                          itemCount: paragraphs.length,
+                          itemBuilder: (context, index) => ReaderParagraph(
+                            key: ValueKey(
+                              'paragraph-anchor-$_contentGeneration-$index',
+                            ),
+                            registry: _paragraphRegistry,
+                            index: index,
+                            child: LoadedContentItem(
+                              key: ValueKey('reader-paragraph-reveal-$index'),
+                              index: index - _chapterRevealFirst,
+                              animation: _chapterReveal,
+                              child: Padding(
+                                padding: const EdgeInsets.only(bottom: 12),
+                                child: ValueListenableBuilder<int?>(
+                                  valueListenable: _bookmarkLanding,
+                                  child: _listening == null
+                                      ? _paragraphContent(
+                                          paragraphs,
+                                          index,
+                                          paragraphStyle,
+                                        )
+                                      : ListeningParagraphHighlight(
+                                          controller: _listening!,
+                                          novelId: _novel.id,
+                                          chapter: _chapter,
+                                          paragraph: index,
+                                          onDoubleTap: () =>
+                                              _doubleTapListeningParagraph(
+                                                index,
+                                              ),
+                                          interactive:
+                                              readerIllustrationUrl(
+                                                    paragraphs[index],
+                                                  ) ==
+                                                  null &&
+                                              paragraphs[index].trim() !=
+                                                  '[插图]' &&
+                                              hasSpeechText(paragraphs[index]),
+                                          child: _paragraphContent(
+                                            paragraphs,
+                                            index,
+                                            paragraphStyle,
+                                          ),
+                                        ),
+                                  builder: (context, selected, child) =>
+                                      selected == index
+                                      ? ReaderLandingHighlight(
+                                          key: ValueKey(
+                                            'bookmark-landing-$index',
+                                          ),
+                                          reduceMotion:
+                                              widget.state.reduceMotion,
+                                          child: child!,
+                                        )
+                                      : child!,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      SliverPadding(
+                        padding: EdgeInsets.only(
+                          top: 48,
+                          bottom: MediaQuery.paddingOf(context).bottom + 216,
+                        ),
+                        sliver: SliverToBoxAdapter(
+                          child: Column(
+                            children: [
+                              SizedBox(
+                                width: 30,
+                                child: Divider(
+                                  color: Theme.of(context).dividerColor,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                '本章完',
+                                style: TextStyle(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              if (_chapter + 1 < _novel.chapters.length)
+                                GlassTextButton(
+                                  key: const ValueKey('reader-end-next'),
+                                  onPressed: () => _go(_chapter + 1),
+                                  child: const Text('继续下一章'),
+                                )
+                              else
+                                Text(
+                                  '已读至当前目录末章',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
-                ],
+                ),
               ),
             );
           },

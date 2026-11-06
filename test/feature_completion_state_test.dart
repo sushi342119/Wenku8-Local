@@ -3,12 +3,12 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/catalog.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/publication_catalog.dart';
-import 'package:wenku8_flutter/reader_content.dart';
-import 'package:wenku8_flutter/reader_find.dart';
-import 'package:wenku8_flutter/reader_illustrations.dart';
+import 'package:shuyu/catalog.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/publication_catalog.dart';
+import 'package:shuyu/reader_content.dart';
+import 'package:shuyu/reader_find.dart';
+import 'package:shuyu/reader_illustrations.dart';
 
 import 'support/offline_fixture.dart';
 

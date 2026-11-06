@@ -226,7 +226,7 @@ class ReleasePublicationTest(unittest.TestCase):
 
 
 class UpdateIdentityValidationTest(unittest.TestCase):
-    def check_candidate(self, *, package='org.mewx.wenku8_flutter', build=50,
+    def check_candidate(self, *, package='app.shuyu.reader', build=50,
                         version='1.8.3', certificate='ab' * 32, invalid_signature=False,
                         labels=('Signer #1', 'Signer #1'), extra_report=''):
         workflow = (Path(__file__).resolve().parents[1] /
@@ -262,6 +262,7 @@ class UpdateIdentityValidationTest(unittest.TestCase):
 
     def test_incompatible_packages_certificates_and_versions_are_rejected(self):
         for candidate in (
+            {'package': 'org.mewx.wenku8_flutter'},
             {'package': 'com.github.sushi342119.wenku8local'},
             {'certificate': 'cd' * 32},
             {'certificate': 'ab'},

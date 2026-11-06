@@ -3,9 +3,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/legacy_transport.dart';
-import 'package:wenku8_flutter/legacy_wenku_repository.dart';
-import 'package:wenku8_flutter/reader_content.dart';
+import 'package:shuyu/legacy_transport.dart';
+import 'package:shuyu/legacy_wenku_repository.dart';
+import 'package:shuyu/reader_content.dart';
 
 /// Explicit QA-device integration: public book content only, no account call.
 void main() {

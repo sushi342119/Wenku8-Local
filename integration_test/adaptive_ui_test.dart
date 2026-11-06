@@ -4,8 +4,8 @@ import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:wenku8_flutter/native_effects.dart';
-import 'package:wenku8_flutter/updates/app_updates.dart';
+import 'package:shuyu/native_effects.dart';
+import 'package:shuyu/updates/app_updates.dart';
 
 import '../test/adaptive_ui_test.dart' as adaptive;
 

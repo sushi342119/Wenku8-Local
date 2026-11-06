@@ -4,8 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:wenku8_flutter/app_ui.dart';
-import 'package:wenku8_flutter/reader_illustrations.dart';
+import 'package:shuyu/app_ui.dart';
+import 'package:shuyu/reader_illustrations.dart';
 
 import 'support/cover_fixture.dart';
 

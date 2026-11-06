@@ -13,7 +13,7 @@ val releaseKeys = Properties().apply {
 }
 
 android {
-    namespace = "org.mewx.wenku8_flutter"
+    namespace = "app.shuyu.reader"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
     // The separately authorized API runtime must remain byte-for-byte intact.
@@ -30,12 +30,12 @@ android {
     }
 
     defaultConfig {
-        applicationId = "org.mewx.wenku8_flutter"
+        applicationId = "app.shuyu.reader"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        testInstrumentationRunner = "org.mewx.wenku8_flutter.SessionFixtureInstrumentation"
+        testInstrumentationRunner = "app.shuyu.reader.SessionFixtureInstrumentation"
     }
 
     if (releaseKeyFile.isFile) {
