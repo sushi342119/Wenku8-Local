@@ -49,6 +49,10 @@
 
 从 [GitHub Releases](https://github.com/sushi342119/Shuyu/releases) 下载 APK。当前版本提供 **arm64-v8a** 架构的 APK。
 
+正式 APK 的规范名称为 `shuyu-v<版本号>+<构建号>-<ABI>.apk`，例如 `shuyu-v1.8.2+49-arm64-v8a.apk`（仅为命名示例）。
+
+迁移后的 Release 同时保留 `wenku8-local-…apk`，用于兼容旧版应用内更新。同一版本、同一 ABI 的两种名称对应完全相同的安装包，手动下载优先选择 `shuyu-…apk`。
+
 安装后，可在 **设置 → 关于书屿** 查看版本信息、更新说明并检查更新。
 
 ## 构建

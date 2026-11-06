@@ -8,6 +8,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:wenku8_flutter/updates/app_updates.dart';
 
+import 'fixtures/legacy_app_updates_v1_8_1_48.dart' as legacy;
+
 const _repo = 'example/reader';
 Map<String, dynamic> _json({
   String tag = 'v0.3.0',
@@ -29,6 +31,27 @@ Map<String, dynamic> _json({
           },
       ],
 };
+
+// Example future version for migration tests; this does not bump the app.
+const _migrationTag = 'v1.8.2+49';
+Map<String, dynamic> _namedAsset(
+  String name, {
+  bool encodeTag = true,
+  String? url,
+}) => {
+  'name': name,
+  'size': 16,
+  'browser_download_url':
+      url ??
+      'https://github.com/$_repo/releases/download/'
+          '${encodeTag ? _migrationTag.replaceAll('+', '%2B') : _migrationTag}/'
+          '${Uri.encodeComponent(name)}',
+};
+String _apk(String prefix, [String abi = 'arm64-v8a']) =>
+    '$prefix-$_migrationTag-$abi.apk';
+AppRelease _migrationRelease(List<Map<String, dynamic>> assets) =>
+    AppRelease.fromGithub(_json(tag: _migrationTag, assets: assets), _repo)!;
+
 const _installed = InstalledApp(
   version: '0.2.0',
   build: 2,
@@ -215,6 +238,154 @@ void main() {
     },
   );
 
+  group('APK filename migration', () {
+    test('both brands retain every supported ABI suffix', () {
+      for (final prefix in ['shuyu', 'wenku8-local']) {
+        for (final abi in ['arm64-v8a', 'armeabi-v7a', 'x86_64']) {
+          final name = _apk(prefix, abi);
+          final release = _migrationRelease([_namedAsset(name)]);
+          expect(release.assetFor([abi])?.name, name);
+          expect(release.assetFor(['riscv64']), isNull);
+        }
+      }
+    });
+
+    test('both brands accept raw and percent-encoded build tags', () {
+      for (final prefix in ['shuyu', 'wenku8-local']) {
+        for (final encodeTag in [false, true]) {
+          final name = _apk(prefix);
+          final asset = _migrationRelease([
+            _namedAsset(name, encodeTag: encodeTag),
+          ]).assetFor(['arm64-v8a']);
+          expect(asset?.name, name);
+          expect(asset?.url.pathSegments.last, name);
+        }
+      }
+    });
+
+    test('same ABI prefers shuyu independently of GitHub asset ordering', () {
+      final names = [_apk('wenku8-local'), _apk('shuyu')];
+      for (final order in [names, names.reversed.toList()]) {
+        final release = _migrationRelease([
+          for (final name in order) _namedAsset(name),
+        ]);
+        expect(release.assets, hasLength(2));
+        expect(release.assetFor(['arm64-v8a'])?.name, _apk('shuyu'));
+      }
+    });
+
+    test('device ABI order outranks branding, universal is last', () {
+      final release = _migrationRelease([
+        _namedAsset(_apk('shuyu', 'armeabi-v7a')),
+        _namedAsset(_apk('shuyu', 'universal')),
+        _namedAsset(_apk('wenku8-local')),
+      ]);
+      expect(
+        release.assetFor(['arm64-v8a', 'armeabi-v7a'])?.name,
+        _apk('wenku8-local'),
+      );
+      expect(
+        release.assetFor(['armeabi-v7a', 'arm64-v8a'])?.name,
+        _apk('shuyu', 'armeabi-v7a'),
+      );
+      expect(release.assetFor(['riscv64'])?.name, _apk('shuyu', 'universal'));
+      expect(
+        _migrationRelease([_namedAsset(_apk('shuyu'))]).assetFor(['riscv64']),
+        isNull,
+      );
+      expect(
+        _migrationRelease([
+          _namedAsset(_apk('wenku8-local', 'universal')),
+        ]).assetFor(['riscv64'])?.name,
+        _apk('wenku8-local', 'universal'),
+      );
+    });
+
+    test('new prefix preserves repository, tag, name and size checks', () {
+      for (final prefix in ['shuyu', 'wenku8-local']) {
+        final name = _apk(prefix);
+        for (final url in [
+          'https://evil.example/$name',
+          'http://github.com/$_repo/releases/download/$_migrationTag/$name',
+          'https://github.com/other/repo/releases/download/$_migrationTag/$name',
+          'https://github.com/$_repo/releases/download/v9.0.0/$name',
+          'https://github.com/$_repo/releases/download/$_migrationTag/other.apk',
+          'https://user@github.com/$_repo/releases/download/$_migrationTag/$name',
+          'https://github.com:444/$_repo/releases/download/$_migrationTag/$name',
+        ]) {
+          expect(
+            _migrationRelease([_namedAsset(name, url: url)]).assets,
+            isEmpty,
+          );
+        }
+        for (final size in [0, -1, 300 * 1024 * 1024 + 1, '16']) {
+          expect(
+            _migrationRelease([_namedAsset(name)..['size'] = size]).assets,
+            isEmpty,
+          );
+        }
+        for (final field in ['draft', 'prerelease']) {
+          expect(
+            AppRelease.fromGithub(
+              _json(tag: _migrationTag, assets: [_namedAsset(name)])
+                ..[field] = true,
+              _repo,
+            ),
+            isNull,
+          );
+        }
+      }
+      for (final name in [
+        _apk('other'),
+        'shuyu-source.zip',
+        '${_apk('shuyu')}.sha256',
+      ]) {
+        expect(_migrationRelease([_namedAsset(name)]).assets, isEmpty);
+      }
+    });
+
+    test(
+      'frozen v1.8.1+48 skips bridge releases and finds the legacy alias',
+      () {
+        for (final encodeTag in [false, true]) {
+          final assets = [
+            _namedAsset(_apk('shuyu'), encodeTag: encodeTag),
+            _namedAsset(_apk('wenku8-local'), encodeTag: encodeTag),
+          ];
+          for (final order in [assets, assets.reversed.toList()]) {
+            final json = _json(tag: _migrationTag, assets: order);
+            final oldRelease = legacy.AppRelease.fromGithub(json, _repo)!;
+            expect(oldRelease.assets, hasLength(1));
+            expect(
+              oldRelease.assetFor(['arm64-v8a'])?.name,
+              _apk('wenku8-local'),
+            );
+            expect(
+              oldRelease.isNewerThan(
+                const legacy.InstalledApp(
+                  version: '1.8.1',
+                  build: 48,
+                  abis: ['arm64-v8a'],
+                ),
+              ),
+              isTrue,
+            );
+            expect(
+              AppRelease.fromGithub(json, _repo)!.assetFor(['arm64-v8a'])?.name,
+              _apk('shuyu'),
+            );
+          }
+        }
+        // Negative control: a shuyu-only latest release strands old clients.
+        final onlyNew = legacy.AppRelease.fromGithub(
+          _json(tag: _migrationTag, assets: [_namedAsset(_apk('shuyu'))]),
+          _repo,
+        )!;
+        expect(onlyNew.assetFor(['arm64-v8a']), isNull);
+      },
+    );
+  });
+
   late Directory temp;
   late _Source source;
   late _Platform platform;
@@ -387,17 +558,76 @@ void main() {
       );
     },
   );
-  test('missing digest retains the existing size-checked download behavior', () async {
-    final data = utf8.encode('synthetic package fixture');
-    final asset = UpdateAsset(
-      name: 'wenku8-fixture.apk',
-      url: Uri.parse('https://github.com/$_repo/releases/download/v0.3.0/fixture.apk'),
-      size: data.length,
-    );
-    final file = File('${temp.path}/fixture.apk');
-    final client = _Client([_Reply(200, [data])]);
-    await GithubUpdateSource(clientFactory: () => client)
-        .download(asset, file, UpdateDownload(), (_) {});
-    expect(await file.readAsBytes(), data);
-  });
+
+  test(
+    'both APK names pass through parsing, transfer and install handoff',
+    () async {
+      final data = utf8.encode('APK transport fixture');
+      for (final prefix in ['shuyu', 'wenku8-local']) {
+        final name = _apk(prefix);
+        final raw = _namedAsset(name)
+          ..['size'] = data.length
+          ..['digest'] = 'sha256:${sha256.convert(data)}';
+        final client = _Client([
+          _Reply(200, [
+            utf8.encode(jsonEncode(_json(tag: _migrationTag, assets: [raw]))),
+          ]),
+          _Reply(
+            302,
+            [],
+            'https://release-assets.githubusercontent.com/fixture',
+          ),
+          _Reply(200, [data]),
+        ]);
+        final service = AppUpdates(
+          preferences: await SharedPreferences.getInstance(),
+          source: GithubUpdateSource(
+            repository: _repo,
+            clientFactory: () => client,
+          ),
+          platform: platform,
+          directory: () async => temp,
+        );
+        try {
+          await service.check();
+          expect(service.available, isTrue);
+          expect(service.asset?.name, name);
+          await service.download();
+          expect(service.error, isNull);
+          expect(await service.downloaded!.readAsBytes(), data);
+          expect(service.downloaded!.path, '${temp.path}/updates/update.apk');
+          expect(client.urls[1].pathSegments.last, name);
+          expect(client.urls.last.host, 'release-assets.githubusercontent.com');
+          final installs = platform.installs;
+          await service.install();
+          expect(service.error, isNull);
+          expect(platform.installs, installs + 1);
+        } finally {
+          service.dispose();
+        }
+      }
+    },
+  );
+
+  test(
+    'missing digest retains the existing size-checked download behavior',
+    () async {
+      final data = utf8.encode('synthetic package fixture');
+      final asset = UpdateAsset(
+        name: 'wenku8-fixture.apk',
+        url: Uri.parse(
+          'https://github.com/$_repo/releases/download/v0.3.0/fixture.apk',
+        ),
+        size: data.length,
+      );
+      final file = File('${temp.path}/fixture.apk');
+      final client = _Client([
+        _Reply(200, [data]),
+      ]);
+      await GithubUpdateSource(
+        clientFactory: () => client,
+      ).download(asset, file, UpdateDownload(), (_) {});
+      expect(await file.readAsBytes(), data);
+    },
+  );
 }

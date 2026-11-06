@@ -118,7 +118,7 @@ class AppRelease {
               true;
       final size = raw['size'];
       if (name is! String ||
-          !name.startsWith('wenku8-') ||
+          !(name.startsWith('shuyu-') || name.startsWith('wenku8-')) ||
           !name.endsWith('.apk') ||
           url == null ||
           url.scheme != 'https' ||
@@ -166,13 +166,17 @@ class AppRelease {
   }
 
   UpdateAsset? assetFor(List<String> abis) {
-    for (final abi in abis) {
-      for (final asset in assets) {
-        if (asset.name.endsWith('-$abi.apk')) return asset;
+    // Device ABI order takes priority over the asset's brand prefix.
+    // Keep wenku8-* support for historical release names.
+    for (final abi in [...abis, 'universal']) {
+      for (final prefix in const ['shuyu-', 'wenku8-']) {
+        for (final asset in assets) {
+          if (asset.name.startsWith(prefix) &&
+              asset.name.endsWith('-$abi.apk')) {
+            return asset;
+          }
+        }
       }
-    }
-    for (final asset in assets) {
-      if (asset.name.endsWith('-universal.apk')) return asset;
     }
     return null;
   }
