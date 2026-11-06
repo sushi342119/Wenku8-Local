@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -9,10 +8,11 @@ import 'archive_random_pick_card.dart';
 import 'book_tags.dart';
 import 'catalog.dart';
 import 'library_filter.dart';
+import 'random_pick_weights.dart';
 import 'ui_preferences.dart';
 
 /// 首页随机抽阅的标签筛选包装组件。
-/// 管理标签筛选及按书籍 ID 持久化的抽取次数。
+/// 管理标签筛选，以及按书籍 ID 持久化的次数和上次抽取结果。
 class NovelRandomPickSection extends StatefulWidget {
   const NovelRandomPickSection({
     super.key,
@@ -42,6 +42,7 @@ class NovelRandomPickSection extends StatefulWidget {
 
 class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   static const _drawCountsKey = 'random_pick_draw_counts_v1';
+  static const _lastPickedKey = 'random_pick_last_id_v1';
 
   static const _muted = Color(0xFF81786B);
   static const _border = Color(0xFFDCD4C6);
@@ -54,6 +55,8 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   SharedPreferences? _preferences;
   bool _countsLoaded = false;
   bool _countsWritable = true;
+  bool _lastIdWritable = true;
+  int? _lastPickedId;
   Future<void> _pendingWrite = Future<void>.value();
 
   @override
@@ -80,6 +83,13 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
     try {
       final preferences = await SharedPreferences.getInstance();
       _preferences = preferences;
+      final last = preferences.get(_lastPickedKey);
+      if (last == null || last is int) {
+        _lastPickedId = last as int?;
+      } else {
+        // 上次 ID 损坏不影响恢复次数，也不静默覆盖原始值。
+        _lastIdWritable = false;
+      }
       final raw = preferences.get(_drawCountsKey);
       final decoded = raw is String ? jsonDecode(raw) : null;
       if (raw != null && decoded is! Map<String, dynamic>) {
@@ -107,23 +117,23 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
     });
   }
 
-  double _weightOf(Novel book) {
-    final count = _drawCounts[book.id] ?? 0;
-    // 极大的次数也保留正权重，避免浮点下溢造成硬排除。
-    return math.max(math.pow(0.25, count).toDouble(), double.minPositive);
-  }
-
   Future<bool> _persistDrawCounts() {
     if (!_countsWritable) return Future.value(false);
     // 保存快照并串行写入，防止较早的抽取覆盖后来的重置。
     final encoded = jsonEncode(
       _drawCounts.map((id, count) => MapEntry('$id', count)),
     );
+    final lastPickedId = _lastPickedId;
     final write = _pendingWrite.then((_) async {
       try {
         final preferences = _preferences ??=
             await SharedPreferences.getInstance();
-        return await preferences.setString(_drawCountsKey, encoded);
+        if (!await preferences.setString(_drawCountsKey, encoded)) return false;
+        if (!_lastIdWritable) return false;
+        // 两个键按同一快照串行保存；部分失败不丢弃已保存的次数。
+        return lastPickedId == null
+            ? await preferences.remove(_lastPickedKey)
+            : await preferences.setInt(_lastPickedKey, lastPickedId);
       } catch (_) {
         return false;
       }
@@ -135,12 +145,16 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   void _recordPick(Novel book) {
     setState(() {
       _drawCounts[book.id] = (_drawCounts[book.id] ?? 0) + 1;
+      _lastPickedId = book.id;
     });
     unawaited(_persistDrawCounts());
   }
 
   Future<void> _resetDrawCounts() async {
-    setState(_drawCounts.clear);
+    setState(() {
+      _drawCounts.clear();
+      _lastPickedId = null;
+    });
     final saved = await _persistDrawCounts();
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -162,15 +176,17 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   void _clearFilter() => LibraryFilter.shared.setSingleTag(null);
 
   List<Novel> _filterBooks() {
-    if (_selectedTagIds.isEmpty) return widget.books;
+    final seen = <int>{};
     return widget.books
-        .where(
-          (book) => LibraryFilter.shared.matchesTags(
-            book.id,
-            widget.matchMode,
-            store: _tagStore,
-          ),
-        )
+        .where((book) {
+          return seen.add(book.id) &&
+              (_selectedTagIds.isEmpty ||
+                  LibraryFilter.shared.matchesTags(
+                    book.id,
+                    widget.matchMode,
+                    store: _tagStore,
+                  ));
+        })
         .toList(growable: false);
   }
 
@@ -245,7 +261,9 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
             children: [
               Expanded(
                 child: Text(
-                  '符合任一所选标签 · 共 $candidateCount 本',
+                  widget.matchMode == TagMatchMode.all
+                      ? '符合全部所选标签 · 共 $candidateCount 本'
+                      : '符合任一所选标签 · 共 $candidateCount 本',
                   style: const TextStyle(fontSize: 12, color: _muted),
                 ),
               ),
@@ -288,6 +306,11 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   @override
   Widget build(BuildContext context) {
     final candidates = _filterBooks();
+    final weights = buildRandomPickWeights(
+      candidates.map((book) => book.id).toList(growable: false),
+      _drawCounts,
+      lastPickedId: _lastPickedId,
+    );
     final hasFilter = _selectedTagIds.isNotEmpty;
 
     Widget? emptyState;
@@ -309,7 +332,9 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
         titleOf: (book) => book.title,
         authorOf: (book) => book.author,
         identityOf: (book) => book.id,
-        weightOf: _weightOf,
+        weightOf: (book) => weights[book.id] ?? 0,
+        resultLabelOf: (book) =>
+            (_drawCounts[book.id] ?? 0) == 0 ? '第一次抽到' : '又遇见这本书',
         onPicked: _recordPick,
         onOpenDetail: widget.onOpenDetail,
         totalDuration: widget.pace.duration,

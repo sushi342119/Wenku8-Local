@@ -9,10 +9,12 @@ import 'package:shared_preferences_platform_interface/shared_preferences_platfor
 import 'package:wenku8_flutter/archive_random_pick_card.dart';
 import 'package:wenku8_flutter/book_tags.dart';
 import 'package:wenku8_flutter/catalog.dart';
+import 'package:wenku8_flutter/library_filter.dart';
 import 'package:wenku8_flutter/novel_random_pick_section.dart';
 import 'package:wenku8_flutter/ui_preferences.dart';
 
 const _countsKey = 'random_pick_draw_counts_v1';
+const _lastKey = 'random_pick_last_id_v1';
 
 Novel _book(int id) => Novel(
   id: id,
@@ -27,6 +29,7 @@ Widget _app({
   List<Novel>? books,
   bool reduceMotion = true,
   RandomPickPace pace = RandomPickPace.quick,
+  TagMatchMode matchMode = TagMatchMode.any,
 }) => MaterialApp(
   home: MediaQuery(
     data: MediaQueryData(disableAnimations: reduceMotion),
@@ -36,6 +39,7 @@ Widget _app({
           books: books ?? [_book(1), _book(2), _book(3)],
           onOpenDetail: (_) {},
           pace: pace,
+          matchMode: matchMode,
         ),
       ),
     ),
@@ -60,18 +64,31 @@ Future<Map<String, dynamic>> _storedCounts() async {
       as Map<String, dynamic>;
 }
 
+Future<int?> _storedLast() async {
+  final prefs = await SharedPreferences.getInstance();
+  await prefs.reload();
+  return prefs.getInt(_lastKey);
+}
+
 class _DelayedPreferences extends InMemorySharedPreferencesStore {
   _DelayedPreferences() : super.empty();
 
   Completer<void>? readGate;
   Completer<void>? writeGate;
   bool failWrite = false;
+  bool failLastWrite = false;
   int writes = 0;
 
   @override
   Future<Map<String, Object>> getAll() async {
     await readGate?.future;
     return super.getAll();
+  }
+
+  @override
+  Future<bool> remove(String key) async {
+    if (key == 'flutter.$_lastKey' && failLastWrite) return false;
+    return super.remove(key);
   }
 
   @override
@@ -83,6 +100,7 @@ class _DelayedPreferences extends InMemorySharedPreferencesStore {
       await gate?.future;
       if (failWrite) return false;
     }
+    if (key == 'flutter.$_lastKey' && failLastWrite) return false;
     return super.setValue(type, key, value);
   }
 }
@@ -90,6 +108,7 @@ class _DelayedPreferences extends InMemorySharedPreferencesStore {
 void main() {
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
+    LibraryFilter.shared.resetForTesting();
     await TagStore.load();
   });
 
@@ -105,7 +124,7 @@ void main() {
       expect(counts, hasLength(1));
       final drawnId = int.parse(counts.keys.single);
       expect(counts['$drawnId'], 1);
-      expect(_card(tester).weightOf!(_book(drawnId)), 0.25);
+      expect(_card(tester).weightOf!(_book(drawnId)), 0);
       await tester.tap(find.text('查看详情'));
       await tester.pumpAndSettle();
       expect(await _storedCounts(), counts);
@@ -115,28 +134,32 @@ void main() {
       await TagStore.load();
       await tester.pumpWidget(_app(books: [_book(3), _book(2), _book(1)]));
       await tester.pumpAndSettle();
-      expect(_card(tester).weightOf!(_book(drawnId)), 0.25);
-      expect(_card(tester).weightOf!(_book(100)), 1);
+      expect(_card(tester).weightOf!(_book(drawnId)), 0);
+      expect(_card(tester).weightOf!(_book(100)), 0);
+      expect(await _storedLast(), drawnId);
       expect(await _storedCounts(), counts);
     },
   );
 
-  testWidgets('single candidate draws repeatedly decay by a factor of four', (
-    tester,
-  ) async {
-    await tester.pumpWidget(_app(books: [_book(1)], reduceMotion: false));
-    await tester.pumpAndSettle();
-    expect(find.text('书籍 1'), findsOneWidget);
-    expect(find.text('查看详情'), findsOneWidget);
-    expect(await _storedCounts(), isEmpty);
-    for (var count = 1; count <= 3; count++) {
-      await tester.tap(find.text('再抽一本'));
-      await tester.pump();
-      expect(find.text('抽阅中…'), findsNothing);
-      expect(_weights(tester), [math.pow(0.25, count).toDouble()]);
-      expect(await _storedCounts(), {'1': count});
-    }
-  });
+  testWidgets(
+    'single candidate remains drawable and counts every active pick',
+    (tester) async {
+      await tester.pumpWidget(_app(books: [_book(1)], reduceMotion: false));
+      await tester.pumpAndSettle();
+      expect(find.text('书籍 1'), findsOneWidget);
+      expect(find.text('查看详情'), findsOneWidget);
+      expect(await _storedCounts(), isEmpty);
+      for (var count = 1; count <= 3; count++) {
+        await tester.tap(find.text('再抽一本'));
+        await tester.pump();
+        expect(find.text('抽阅中…'), findsNothing);
+        expect(_weights(tester).single, greaterThan(0));
+        expect(await _storedLast(), 1);
+        expect(find.text(count == 1 ? '第一次抽到' : '又遇见这本书'), findsOneWidget);
+        expect(await _storedCounts(), {'1': count});
+      }
+    },
+  );
 
   testWidgets('restored weights have the expected sampling distribution', (
     tester,
@@ -146,15 +169,15 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
     final weights = _weights(tester);
-    expect(weights, [1, 0.25, 0.0625]);
+    expect(weights, [1, 0.125, 0.03125]);
     final random = math.Random(42);
     final counts = [0, 0, 0];
     for (var i = 0; i < 30000; i++) {
       counts[sampleArchiveRandomPickIndex(weights, random)]++;
     }
-    expect(counts[0] / 30000, closeTo(16 / 21, 0.01));
-    expect(counts[1] / 30000, closeTo(4 / 21, 0.01));
-    expect(counts[2] / 30000, closeTo(1 / 21, 0.01));
+    expect(counts[0] / 30000, closeTo(32 / 37, 0.01));
+    expect(counts[1] / 30000, closeTo(4 / 37, 0.01));
+    expect(counts[2] / 30000, closeTo(1 / 37, 0.01));
   });
 
   testWidgets('filter changes and replacement models keep weights by book id', (
@@ -172,23 +195,23 @@ void main() {
     await tester.tap(find.text('科幻'));
     await tester.pumpAndSettle();
     expect(_card(tester).books.map((book) => book.id), [1]);
-    expect(_weights(tester), [0.0625]);
+    expect(_weights(tester), [0.5]);
     expect(find.text('书籍 1'), findsOneWidget);
     await tester.ensureVisible(find.text('再抽一本'));
     await tester.tap(find.text('再抽一本'));
     await tester.pumpAndSettle();
-    expect(_weights(tester), [0.015625]);
+    expect(_weights(tester), [0.5]);
     await tester.ensureVisible(find.text('全部'));
     await tester.tap(find.text('全部'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('奇幻'));
     await tester.pumpAndSettle();
-    expect(_weights(tester), [0.25]);
+    expect(_weights(tester), [0.5]);
     await tester.tap(find.text('全部'));
     await tester.pumpAndSettle();
     await tester.pumpWidget(_app(books: [_book(3), _book(1), _book(2)]));
     await tester.pumpAndSettle();
-    expect(_weights(tester), [1, 0.015625, 0.25]);
+    expect(_weights(tester), [1, 0, 0.125]);
     expect(await _storedCounts(), {'1': 3, '2': 1});
   });
 
@@ -197,6 +220,7 @@ void main() {
   ) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_countsKey, jsonEncode({'1': 2, '2': 1, '99': 6}));
+    await prefs.setInt(_lastKey, 2);
     final tag = await TagStore.shared.createTag('筛选');
     await TagStore.shared.setTagsForBook(1, [tag]);
     await tester.pumpWidget(_app());
@@ -207,6 +231,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('已重置抽取记录'), findsOneWidget);
     expect(await _storedCounts(), isEmpty);
+    expect(await _storedLast(), isNull);
     await tester.tap(find.text('全部'));
     await tester.pumpAndSettle();
     expect(_weights(tester), [1, 1, 1]);
@@ -236,14 +261,14 @@ void main() {
       await tester.pumpAndSettle();
       await tester.pumpWidget(_app(books: [_book(2), _book(3)]));
       await tester.pumpAndSettle();
-      expect(_weights(tester), [0.25, 1]);
+      expect(_weights(tester), [0.125, 1]);
       await tester.pumpWidget(_app(books: []));
       await tester.pumpAndSettle();
       expect(find.text('书库暂无书籍'), findsOneWidget);
       expect(find.text('重置抽取记录'), findsOneWidget);
       await tester.pumpWidget(_app(books: [_book(2), _book(3)]));
       await tester.pumpAndSettle();
-      expect(_weights(tester), [0.25, 1]);
+      expect(_weights(tester), [0.125, 1]);
       expect(tester.takeException(), isNull);
     },
   );
@@ -259,17 +284,20 @@ void main() {
   });
 
   for (final raw in <Object>['{broken', 7, '[]', '{"1":-3,"2":"4","3":1.5}']) {
-    testWidgets('invalid stored counts are retained without overwriting: $raw', (tester) async {
-      SharedPreferences.setMockInitialValues({_countsKey: raw});
-      await TagStore.load();
-      await tester.pumpWidget(_app());
-      await tester.pumpAndSettle();
-      expect(_weights(tester), [1, 1, 1]);
-      await tester.tap(find.text('抽阅一本'));
-      await tester.pumpAndSettle();
-      expect((await SharedPreferences.getInstance()).get(_countsKey), raw);
-      expect(tester.takeException(), isNull);
-    });
+    testWidgets(
+      'invalid stored counts are retained without overwriting: $raw',
+      (tester) async {
+        SharedPreferences.setMockInitialValues({_countsKey: raw});
+        await TagStore.load();
+        await tester.pumpWidget(_app());
+        await tester.pumpAndSettle();
+        expect(_weights(tester), [1, 1, 1]);
+        await tester.tap(find.text('抽阅一本'));
+        await tester.pumpAndSettle();
+        expect((await SharedPreferences.getInstance()).get(_countsKey), raw);
+        expect(tester.takeException(), isNull);
+      },
+    );
   }
 
   testWidgets(
@@ -303,7 +331,7 @@ void main() {
       expect(find.text('抽阅中…'), findsNothing);
       gate.complete();
       await tester.pumpAndSettle();
-      expect(_weights(tester), [0.0625, 1, 1]);
+      expect(_weights(tester), [0.03125, 1, 1]);
       expect(
         tester
             .widget<AbsorbPointer>(
@@ -355,11 +383,12 @@ void main() {
       expect(storage.writes, 1);
       await tester.tap(find.text('再抽一本'));
       await tester.pump();
-      expect(_weights(tester), [0.25]);
+      expect(_weights(tester), [0.5]);
       gate.complete();
       await tester.pumpAndSettle();
       expect(storage.writes, 4);
       expect(await _storedCounts(), {'1': 1});
+      expect(await _storedLast(), 1);
       expect(tester.takeException(), isNull);
     },
   );
@@ -408,4 +437,143 @@ void main() {
     expect(await _storedCounts(), {'1': 2});
     expect(tester.takeException(), isNull);
   });
+  testWidgets(
+    'two candidates alternate across repeated draws and model replacements',
+    (tester) async {
+      await tester.pumpWidget(_app(books: [_book(1), _book(2)]));
+      await tester.pumpAndSettle();
+      int? previous;
+      for (var i = 0; i < 12; i++) {
+        await tester.tap(find.byType(ElevatedButton));
+        await tester.pumpAndSettle();
+        final picked = await _storedLast();
+        expect(picked, isNot(previous));
+        previous = picked;
+        await tester.pumpWidget(_app(books: [_book(2), _book(1)]));
+        await tester.pumpAndSettle();
+      }
+      expect(await _storedCounts(), {'1': 6, '2': 6});
+    },
+  );
+
+  testWidgets(
+    'duplicate ids are one candidate and automatic display is not a draw',
+    (tester) async {
+      await tester.pumpWidget(_app(books: [_book(1), _book(1)]));
+      await tester.pumpAndSettle();
+      expect(_card(tester).books, hasLength(1));
+      expect(await _storedCounts(), isEmpty);
+      expect(await _storedLast(), isNull);
+      expect(find.text('第一次抽到'), findsNothing);
+      await tester.tap(find.text('再抽一本'));
+      await tester.pumpAndSettle();
+      expect(await _storedCounts(), {'1': 1});
+    },
+  );
+
+  testWidgets(
+    'OR and AND filters keep the last pick across singleton and empty pools',
+    (tester) async {
+      final tags = TagStore.shared;
+      final a = await tags.createTag('甲');
+      final b = await tags.createTag('乙');
+      await tags.setTagsForBook(1, [a]);
+      await tags.setTagsForBook(2, [a, b]);
+      LibraryFilter.shared.toggleTag(a);
+      LibraryFilter.shared.toggleTag(b);
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+      expect(_card(tester).books.map((book) => book.id), [1, 2]);
+      await tester.pumpWidget(_app(matchMode: TagMatchMode.all));
+      await tester.pumpAndSettle();
+      expect(_card(tester).books.map((book) => book.id), [2]);
+      expect(await _storedLast(), isNull);
+      await tester.tap(find.text('再抽一本'));
+      await tester.pumpAndSettle();
+      expect(await _storedLast(), 2);
+      await tester.pumpWidget(_app(books: [], matchMode: TagMatchMode.all));
+      await tester.pumpAndSettle();
+      expect(await _storedLast(), 2);
+      LibraryFilter.shared.clear();
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+      expect(_card(tester).weightOf!(_book(2)), 0);
+      expect(await _storedCounts(), {'2': 1});
+    },
+  );
+
+  testWidgets(
+    'invalid last id leaves counts usable and does not overwrite the bad value',
+    (tester) async {
+      SharedPreferences.setMockInitialValues({
+        _countsKey: '{"1":2}',
+        _lastKey: 'bad',
+      });
+      await TagStore.load();
+      await tester.pumpWidget(_app(books: [_book(1)]));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('再抽一本'));
+      await tester.pumpAndSettle();
+      expect(await _storedCounts(), {'1': 3});
+      expect((await SharedPreferences.getInstance()).get(_lastKey), 'bad');
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'failed last id save keeps counts and in-memory repeat protection',
+    (tester) async {
+      final storage = _DelayedPreferences()..failLastWrite = true;
+      SharedPreferences.resetStatic();
+      SharedPreferencesStorePlatform.instance = storage;
+      await TagStore.load();
+      await tester.pumpWidget(_app(books: [_book(1), _book(2)]));
+      await tester.pumpAndSettle();
+      for (var i = 0; i < 2; i++) {
+        await tester.tap(find.byType(ElevatedButton));
+        await tester.pumpAndSettle();
+      }
+      expect(await _storedCounts(), {'1': 1, '2': 1});
+      expect(await _storedLast(), isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('result label stays tied to the draw while a ceremony is reset', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(reduceMotion: false, pace: RandomPickPace.ceremony),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('抽阅一本'));
+    await tester.pump();
+    expect(find.text('第一次抽到'), findsNothing);
+    await tester.tap(find.text('重置抽取记录'));
+    await tester.pumpAndSettle();
+    expect(find.text('第一次抽到'), findsOneWidget);
+    expect(await _storedCounts(), isEmpty);
+    expect(await _storedLast(), isNull);
+  });
+  testWidgets(
+    'partial reset failure reports failure while retaining saved counts',
+    (tester) async {
+      final storage = _DelayedPreferences();
+      await storage.setValue('String', 'flutter.$_countsKey', '{"1":2}');
+      await storage.setValue('int', 'flutter.$_lastKey', 1);
+      SharedPreferences.resetStatic();
+      SharedPreferencesStorePlatform.instance = storage;
+      await TagStore.load();
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+      expect(_card(tester).weightOf!(_book(1)), 0);
+      storage.failLastWrite = true;
+      await tester.tap(find.text('重置抽取记录'));
+      await tester.pumpAndSettle();
+      expect(find.text('已重置抽取记录，但保存失败'), findsOneWidget);
+      expect(await _storedCounts(), isEmpty);
+      expect(await _storedLast(), 1);
+      expect(_weights(tester), [1, 1, 1]);
+    },
+  );
 }

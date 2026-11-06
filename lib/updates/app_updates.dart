@@ -14,13 +14,13 @@ const updateRepository = String.fromEnvironment(
 );
 const currentAppVersion = String.fromEnvironment(
   'APP_VERSION',
-  defaultValue: '1.8.4',
+  defaultValue: '1.8.5',
 );
-const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 51);
+const currentAppBuild = int.fromEnvironment('APP_BUILD', defaultValue: 52);
 const currentReleaseNotes = '''
-1. 修复发现页左右滑动 3D 书架、切换长短书名时页面上下抖动的问题。
-2. 书名保留紧凑的两行固定高度、顶部对齐，并适配系统字体缩放。
-3. 验证横向斜滑不会带动外层页面，纵向滚动保持正常。
+1. 优化随机抽阅：候选至少两本时避免连续抽中同一本，单本书库保持正常抽取。
+2. 从未抽中过的书籍获得额外权重，揭晓时显示首次抽到或再次遇见的提示。
+3. 保留已有抽取次数、标签筛选和动画速度，重启恢复上次结果，重置后开始新一轮。
 ''';
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
