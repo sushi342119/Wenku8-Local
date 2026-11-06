@@ -227,7 +227,8 @@ class ReleasePublicationTest(unittest.TestCase):
 
 class UpdateIdentityValidationTest(unittest.TestCase):
     def check_candidate(self, *, package='org.mewx.wenku8_flutter', build=50,
-                        version='1.8.3', certificate='aabb', invalid_signature=False):
+                        version='1.8.3', certificate='ab' * 32, invalid_signature=False,
+                        labels=('Signer #1', 'Signer #1'), extra_report=''):
         workflow = (Path(__file__).resolve().parents[1] /
                     '.github/workflows/android-release.yml').read_text()
         step = re.search(
@@ -244,8 +245,9 @@ class UpdateIdentityValidationTest(unittest.TestCase):
                 return "package: name='%s' versionCode='%s' versionName='%s'\n" % identity
             if invalid_signature and not old:
                 raise subprocess.CalledProcessError(1, command)
-            digest = 'aabb' if old else certificate
-            return f'Signer #1 certificate SHA-256 digest: {digest}\n' if digest else ''
+            digest = 'ab' * 32 if old else certificate
+            label = labels[0] if old else labels[1]
+            return (f'{label} certificate SHA-256 digest: {digest}\n' if digest else '') + extra_report
 
         with mock.patch.dict(os.environ, {'ANDROID_HOME': '/sdk', 'APP_BUILD': '50',
                                          'APP_VERSION': '1.8.3'}), \
@@ -261,7 +263,8 @@ class UpdateIdentityValidationTest(unittest.TestCase):
     def test_incompatible_packages_certificates_and_versions_are_rejected(self):
         for candidate in (
             {'package': 'com.github.sushi342119.wenku8local'},
-            {'certificate': 'ccdd'},
+            {'certificate': 'cd' * 32},
+            {'certificate': 'ab'},
             {'certificate': ''},
             {'build': 49},
             {'build': 51},
@@ -273,3 +276,19 @@ class UpdateIdentityValidationTest(unittest.TestCase):
     def test_invalid_signature_stops_release(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.check_candidate(invalid_signature=True)
+
+    def test_build_tools_37_scheme_labels_and_older_labels_are_accepted(self):
+        # Actual Build Tools 37 output from the published v1.8.2+49 APK.
+        for label in ('V2 Signer:', 'V3.0 Signer:',
+                      'Signer (minSdkVersion=33, maxSdkVersion=2147483647)'):
+            with self.subTest(label=label):
+                self.check_candidate(labels=('Signer #1', label), certificate='AB' * 32)
+
+    def test_source_stamp_and_public_key_hashes_do_not_change_app_identity(self):
+        self.check_candidate(extra_report=(
+            'Source Stamp Signer certificate SHA-256 digest: ' + 'cd' * 32 + '\n'
+            'V2 Signer: public key SHA-256 digest: ' + 'ef' * 32 + '\n'))
+
+    def test_source_stamp_alone_cannot_authorize_an_update(self):
+        with self.assertRaises(SystemExit):
+            self.check_candidate(labels=('Signer #1', 'Source Stamp Signer'))

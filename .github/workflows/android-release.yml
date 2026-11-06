@@ -98,7 +98,11 @@ jobs:
               if package is None:
                   raise SystemExit("Cannot read APK package identity")
               report = subprocess.check_output([str(signer), "verify", "--verbose", "--print-certs", path], text=True)
-              certificates = set(re.findall(r"^Signer #\d+ certificate SHA-256 digest: ([0-9a-fA-F]+)$", report, re.M))
+              # Build Tools 37 labels scheme signers as "V2 Signer:"; older
+              # versions use "Signer #1". Exclude source stamps and key hashes.
+              label = r"(?:Signer #\d+|Signer \(minSdkVersion=[^\r\n]+\)|V[1-4](?:\.\d+)? Signer(?: #\d+)?(?: \(minSdkVersion=[^\r\n]+\))?)"
+              certificates = {digest.lower() for digest in re.findall(
+                  rf"^{label}:? certificate SHA-256 digest: ([0-9a-fA-F]{{64}})[ \t]*$", report, re.M)}
               if not certificates:
                   raise SystemExit("Cannot read verified APK signing certificates")
               return package[1], int(package[2]), package[3], certificates
