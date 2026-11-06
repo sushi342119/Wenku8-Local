@@ -730,7 +730,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.bySemanticsLabel('阅读进度'), findsOneWidget);
+    expect(find.text('第 1 章 · 0%'), findsOneWidget);
     await tester.pumpWidget(const SizedBox.shrink());
     await disposeFixture(tester);
   });
