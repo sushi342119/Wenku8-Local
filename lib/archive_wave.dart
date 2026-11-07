@@ -6,6 +6,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
+import 'app_palette.dart';
 import 'app_ui.dart';
 import 'archive_scroll_simulation.dart';
 import 'archive_shelf_geometry.dart';
@@ -268,7 +269,12 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
           keepScrollOffset: false,
         )..addListener(_scrolled);
         final rowHeight = ArchiveShelfGeometry.rowHeight(cover, height);
-        final dark = Theme.of(context).brightness == Brightness.dark;
+        final theme = Theme.of(context);
+        final scheme = theme.colorScheme;
+        final dark = theme.brightness == Brightness.dark;
+        final shadowColor = dark
+            ? ArchiveDesign.milk
+            : Color.lerp(scheme.primary, scheme.onSurface, .55)!;
         final titleHeight = (MediaQuery.textScalerOf(context).scale(17) * 1.35 * 2)
             .ceilToDouble();
         return SizedBox(
@@ -311,6 +317,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                       cover: cover,
                       height: height,
                       dark: dark,
+                      shadowColor: shadowColor,
                       children: [
                         for (var slot = _firstSlot; slot < _endSlot; slot++)
                           KeyedSubtree(
@@ -454,7 +461,37 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
     double cover,
     double height,
   ) {
-    final dark = Theme.of(context).brightness == Brightness.dark;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final tonal = theme.extension<AppTonalColors>();
+    final dark = theme.brightness == Brightness.dark;
+    final coverFaceColor = dark
+        ? Color.lerp(const Color(0xFF151D2F), scheme.surfaceContainerHigh, .35)!
+        : Color.lerp(
+            scheme.surface,
+            tonal?.milk ?? scheme.surfaceContainerLowest,
+            .35,
+          )!;
+    final spineFaceColor = dark
+        ? Color.lerp(const Color(0xFF1A2338), scheme.primaryContainer, .24)!
+        : Color.lerp(
+            coverFaceColor,
+            Color.lerp(
+              scheme.surfaceContainerHighest,
+              scheme.primaryContainer,
+              .42,
+            )!,
+            .52,
+          )!;
+    final topStartColor = dark
+        ? const Color(0xFF25324E)
+        : Color.lerp(spineFaceColor, scheme.outlineVariant, .48)!;
+    final topEndColor = dark ? const Color(0xFF1A2338) : coverFaceColor;
+    final topStrokeColor =
+        (dark
+                ? ArchiveDesign.darkMilk
+                : Color.lerp(scheme.outline, scheme.primary, .25)!)
+            .withValues(alpha: .22);
     final number = _pose.bookIndex(index) + 1;
     void tap() => _tap(index);
     final glyphs = book.title.characters.toList();
@@ -467,6 +504,9 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
       cover: cover,
       height: height,
       dark: dark,
+      topStartColor: topStartColor,
+      topEndColor: topEndColor,
+      topStrokeColor: topStrokeColor,
       label: book.title,
       direction: Directionality.of(context),
       onTap: tap,
@@ -479,9 +519,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               padding: const EdgeInsets.symmetric(horizontal: 1, vertical: 9),
               // Solid physical faces occlude other files; milk comes from shading,
               // not alpha that lets readable rear text bleed through the surface.
-              backgroundColor: dark
-                  ? const Color(0xFF1A2338)
-                  : const Color(0xFFF2F0E9),
+              backgroundColor: spineFaceColor,
               onTap: tap,
               child: MediaQuery.withNoTextScaling(
                 child: Column(
@@ -508,7 +546,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
                     Icon(
                       CupertinoIcons.circle,
                       size: 6,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: scheme.onSurfaceVariant,
                     ),
                   ],
                 ),
@@ -522,9 +560,7 @@ class _ArchiveFileCarouselState extends State<ArchiveFileCarousel>
               key: ValueKey('archive-cover-$index'),
               radius: 0,
               padding: const EdgeInsets.fromLTRB(10, 9, 10, 8),
-              backgroundColor: dark
-                  ? const Color(0xFF151D2F)
-                  : ArchiveDesign.milk,
+              backgroundColor: coverFaceColor,
               onTap: tap,
               child: Column(
                 children: [
@@ -916,6 +952,7 @@ class _ShelfRow extends MultiChildRenderObjectWidget {
     required this.cover,
     required this.height,
     required this.dark,
+    required this.shadowColor,
     required super.children,
   });
 
@@ -926,6 +963,7 @@ class _ShelfRow extends MultiChildRenderObjectWidget {
   final double cover;
   final double height;
   final bool dark;
+  final Color shadowColor;
 
   @override
   RenderObject createRenderObject(BuildContext context) =>
@@ -937,6 +975,7 @@ class _ShelfRow extends MultiChildRenderObjectWidget {
         cover,
         height,
         dark,
+        shadowColor,
       );
 
   @override
@@ -952,6 +991,7 @@ class _ShelfRow extends MultiChildRenderObjectWidget {
       cover,
       height,
       dark,
+      shadowColor,
     );
   }
 }
@@ -971,6 +1011,7 @@ class ArchiveShelfSceneRender extends RenderBox
     this._cover,
     this._height,
     this._dark,
+    this._shadowColor,
   );
 
   ViewportOffset _scrollOffset;
@@ -979,6 +1020,7 @@ class ArchiveShelfSceneRender extends RenderBox
 
   double _spine, _cover, _height;
   bool _dark;
+  Color _shadowColor;
 
   int _slotForChild(int childIndex) => _firstSlot + childIndex;
   final _boxes = <RenderBox>[];
@@ -1066,6 +1108,7 @@ class ArchiveShelfSceneRender extends RenderBox
     double cover,
     double height,
     bool dark,
+    Color shadowColor,
   ) {
     _scrollOffset = offset;
 
@@ -1080,6 +1123,7 @@ class ArchiveShelfSceneRender extends RenderBox
     _cover = cover;
     _height = height;
     _dark = dark;
+    _shadowColor = shadowColor;
 
     markNeedsLayout();
     markNeedsSemanticsUpdate();
@@ -1144,7 +1188,7 @@ class ArchiveShelfSceneRender extends RenderBox
   }
 
   void _floor(Canvas canvas, Offset offset, List<int> visible) {
-    final ink = _dark ? ArchiveDesign.milk : const Color(0xFF8A806B);
+    final ink = _dark ? ArchiveDesign.milk : _shadowColor;
     final depth = Offset(_cover * _WavePose.depthX, _cover * _WavePose.depthY);
     for (final i in visible) {
       final origin =
@@ -1231,6 +1275,9 @@ class _BookVolume extends MultiChildRenderObjectWidget {
     required this.cover,
     required this.height,
     required this.dark,
+    required this.topStartColor,
+    required this.topEndColor,
+    required this.topStrokeColor,
     required this.label,
     required this.direction,
     required this.onTap,
@@ -1240,6 +1287,9 @@ class _BookVolume extends MultiChildRenderObjectWidget {
   final int index;
   final double spine, cover, height;
   final bool dark;
+  final Color topStartColor;
+  final Color topEndColor;
+  final Color topStrokeColor;
   final String label;
   final TextDirection direction;
   final VoidCallback onTap;
@@ -1252,6 +1302,9 @@ class _BookVolume extends MultiChildRenderObjectWidget {
         cover,
         height,
         dark,
+        topStartColor,
+        topEndColor,
+        topStrokeColor,
         label,
         direction,
         onTap,
@@ -1267,6 +1320,9 @@ class _BookVolume extends MultiChildRenderObjectWidget {
     cover,
     height,
     dark,
+    topStartColor,
+    topEndColor,
+    topStrokeColor,
     label,
     direction,
     onTap,
@@ -1287,6 +1343,9 @@ class ArchiveBoxDepthRender extends RenderBox
     this._cover,
     this._height,
     this._dark,
+    this._topStartColor,
+    this._topEndColor,
+    this._topStrokeColor,
     this._label,
     this._direction,
     this._onTap,
@@ -1301,6 +1360,9 @@ class ArchiveBoxDepthRender extends RenderBox
   int _index;
   double _spine, _cover, _height;
   bool _dark;
+  Color _topStartColor;
+  Color _topEndColor;
+  Color _topStrokeColor;
   String _label;
   TextDirection _direction;
   VoidCallback _onTap;
@@ -1378,6 +1440,9 @@ class ArchiveBoxDepthRender extends RenderBox
     double cover,
     double height,
     bool dark,
+    Color topStartColor,
+    Color topEndColor,
+    Color topStrokeColor,
     String label,
     TextDirection direction,
     VoidCallback onTap,
@@ -1395,6 +1460,9 @@ class ArchiveBoxDepthRender extends RenderBox
     }
     _index = index;
     _dark = dark;
+    _topStartColor = topStartColor;
+    _topEndColor = topEndColor;
+    _topStrokeColor = topStrokeColor;
     _label = label;
     _direction = direction;
     _onTap = onTap;
@@ -1442,9 +1510,7 @@ class ArchiveBoxDepthRender extends RenderBox
       top,
       Paint()
         ..shader = LinearGradient(
-          colors: _dark
-              ? [const Color(0xFF25324E), const Color(0xFF1A2338)]
-              : [const Color(0xFFE3DFD3), ArchiveDesign.milk],
+          colors: [_topStartColor, _topEndColor],
         ).createShader(top.getBounds()),
     );
     context.canvas.drawPath(
@@ -1452,8 +1518,7 @@ class ArchiveBoxDepthRender extends RenderBox
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = .4
-        ..color = (_dark ? ArchiveDesign.darkMilk : const Color(0xFF9A927F))
-            .withValues(alpha: .24),
+        ..color = _topStrokeColor,
     );
     _spineLayer.layer = context.pushTransform(
       needsCompositing,

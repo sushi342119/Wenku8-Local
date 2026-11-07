@@ -44,9 +44,13 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
   static const _drawCountsKey = 'random_pick_draw_counts_v1';
   static const _lastPickedKey = 'random_pick_last_id_v1';
 
-  static const _muted = Color(0xFF81786B);
-  static const _border = Color(0xFFDCD4C6);
-  static const _accent = Color(0xFF715B42);
+  ColorScheme get _scheme => Theme.of(context).colorScheme;
+  bool get _dark => Theme.of(context).brightness == Brightness.dark;
+  Color get _muted => _scheme.onSurfaceVariant;
+  Color get _border => _dark
+      ? _scheme.outlineVariant
+      : Color.lerp(_scheme.outlineVariant, _scheme.primary, .14)!;
+  Color get _accent => _scheme.primary;
 
   /// Same selection as the shelf and the carousel (LibraryFilter.shared).
   Set<String> get _selectedTagIds => LibraryFilter.shared.tagIds;
@@ -220,12 +224,32 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
                   label: const Text('全部'),
                   selected: _selectedTagIds.isEmpty,
                   onSelected: (_) => _clearFilter(),
-                  selectedColor: _accent.withAlpha((0.15 * 255).round()),
+                  backgroundColor: _dark
+                      ? Color.lerp(
+                          _scheme.surface,
+                          _scheme.surfaceContainerHigh,
+                          .65,
+                        )!
+                      : _scheme.surface,
+                  selectedColor: Color.lerp(
+                    _scheme.surface,
+                    _accent,
+                    _dark ? .24 : .12,
+                  )!,
+                  checkmarkColor: _accent,
+                  surfaceTintColor: Colors.transparent,
                   labelStyle: TextStyle(
                     color: _selectedTagIds.isEmpty ? _accent : _muted,
                     fontSize: 13,
+                    fontWeight: _selectedTagIds.isEmpty
+                        ? FontWeight.w600
+                        : FontWeight.w500,
                   ),
-                  side: const BorderSide(color: _border),
+                  side: BorderSide(
+                    color: _selectedTagIds.isEmpty
+                        ? _accent.withValues(alpha: _dark ? .50 : .34)
+                        : _border,
+                  ),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -238,14 +262,34 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
                       label: Text(tag.name),
                       selected: _selectedTagIds.contains(tag.id),
                       onSelected: (selected) => _toggleTag(tag.id, selected),
-                      selectedColor: _accent.withAlpha((0.15 * 255).round()),
+                      backgroundColor: _dark
+                          ? Color.lerp(
+                              _scheme.surface,
+                              _scheme.surfaceContainerHigh,
+                              .65,
+                            )!
+                          : _scheme.surface,
+                      selectedColor: Color.lerp(
+                        _scheme.surface,
+                        _accent,
+                        _dark ? .24 : .12,
+                      )!,
+                      checkmarkColor: _accent,
+                      surfaceTintColor: Colors.transparent,
                       labelStyle: TextStyle(
                         color: _selectedTagIds.contains(tag.id)
                             ? _accent
                             : _muted,
                         fontSize: 13,
+                        fontWeight: _selectedTagIds.contains(tag.id)
+                            ? FontWeight.w600
+                            : FontWeight.w500,
                       ),
-                      side: const BorderSide(color: _border),
+                      side: BorderSide(
+                        color: _selectedTagIds.contains(tag.id)
+                            ? _accent.withValues(alpha: _dark ? .50 : .34)
+                            : _border,
+                      ),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(16),
                       ),
@@ -264,7 +308,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
                   widget.matchMode == TagMatchMode.all
                       ? '符合全部所选标签 · 共 $candidateCount 本'
                       : '符合任一所选标签 · 共 $candidateCount 本',
-                  style: const TextStyle(fontSize: 12, color: _muted),
+                  style: TextStyle(fontSize: 12, color: _muted),
                 ),
               ),
               TextButton(
@@ -288,7 +332,7 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
       padding: const EdgeInsets.symmetric(vertical: 24),
       child: Column(
         children: [
-          const Text(
+          Text(
             '没有符合所选标签的书籍',
             style: TextStyle(fontSize: 15, color: _muted),
           ),
@@ -318,8 +362,8 @@ class _NovelRandomPickSectionState extends State<NovelRandomPickSection> {
       emptyState = _buildEmptyState();
     } else if (widget.books.isEmpty) {
       // 书库为空时显示明确提示
-      emptyState = const Padding(
-        padding: EdgeInsets.symmetric(vertical: 24),
+      emptyState = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
         child: Text('书库暂无书籍', style: TextStyle(fontSize: 15, color: _muted)),
       );
     }

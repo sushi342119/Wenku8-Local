@@ -1730,10 +1730,41 @@ class NovelCover extends StatelessWidget {
     );
   }
 
+  static const _coastalShelfPalette = [
+    [Color(0xFF2B4C7E), Color(0xFF4A74AD)],
+    [Color(0xFF1E5B6E), Color(0xFF398599)],
+    [Color(0xFF38437A), Color(0xFF5E6BA8)],
+    [Color(0xFF2C4259), Color(0xFF516E8C)],
+    [Color(0xFF25567B), Color(0xFF4782AC)],
+    [Color(0xFF434A75), Color(0xFF6A73A3)],
+  ];
+
+  static const _legacyShelfFirstColors = <int>{
+    0xFF5C4A3A,
+    0xFF3E5C50,
+    0xFF4A5468,
+    0xFF6B4A5A,
+    0xFF5A5A3E,
+    0xFF3A5C5C,
+  };
+
+  List<Color> _resolveCoverPalette() {
+    final isLocal = novel.id >= 0x40000000 && novel.id <= 0x7fffffff;
+    if (novel.colors.length >= 2) {
+      if (isLocal &&
+          _legacyShelfFirstColors.contains(novel.colors.first.toARGB32())) {
+        return _coastalShelfPalette[novel.id % _coastalShelfPalette.length];
+      }
+      return [novel.colors.first, novel.colors.last];
+    }
+    if (isLocal) {
+      return _coastalShelfPalette[novel.id % _coastalShelfPalette.length];
+    }
+    return const [Color(0xFF2C3444), accent];
+  }
+
   Widget _visual({bool clip = true, bool recordArrival = true}) {
-    final palette = novel.colors.length >= 2
-        ? [novel.colors.first, novel.colors.last]
-        : const [Color(0xFF2C3444), accent];
+    final palette = _resolveCoverPalette();
     final fallback = DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(

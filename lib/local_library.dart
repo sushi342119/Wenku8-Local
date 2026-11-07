@@ -564,12 +564,12 @@ const _chapterSplitVersion = 4;
 const _localOperationTimeout = Duration(seconds: 12);
 
 const _shelfPalette = [
-  [Color(0xFF5C4A3A), Color(0xFF8A6F55)],
-  [Color(0xFF3E5C50), Color(0xFF7A9B8A)],
-  [Color(0xFF4A5468), Color(0xFF7B8AA5)],
-  [Color(0xFF6B4A5A), Color(0xFF9B7A8A)],
-  [Color(0xFF5A5A3E), Color(0xFF8F8F6B)],
-  [Color(0xFF3A5C5C), Color(0xFF6E9B9B)],
+  [Color(0xFF2B4C7E), Color(0xFF4A74AD)],
+  [Color(0xFF1E5B6E), Color(0xFF398599)],
+  [Color(0xFF38437A), Color(0xFF5E6BA8)],
+  [Color(0xFF2C4259), Color(0xFF516E8C)],
+  [Color(0xFF25567B), Color(0xFF4782AC)],
+  [Color(0xFF434A75), Color(0xFF6A73A3)],
 ];
 
 String formatLocalSize(int bytes) {

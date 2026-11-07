@@ -83,18 +83,23 @@ class ArchiveRandomPickCard<T extends Object> extends StatefulWidget {
 class _ArchiveRandomPickCardState<T extends Object>
     extends State<ArchiveRandomPickCard<T>>
     with SingleTickerProviderStateMixin {
+  ColorScheme get _scheme => Theme.of(context).colorScheme;
   bool get _dark => Theme.of(context).brightness == Brightness.dark;
-  Color get _paper =>
-      _dark ? const Color(0xFF121826) : const Color(0xFFFAF7F0);
-  Color get _ink => _dark ? const Color(0xFFF3F6FC) : const Color(0xFF39352F);
-  Color get _muted =>
-      _dark ? const Color(0xFF9BA8C2) : const Color(0xFF6E665A);
-  Color get _border =>
-      _dark ? const Color(0xFF28344E) : const Color(0xFFDCD4C6);
-  Color get _accent =>
-      _dark ? const Color(0xFF818CF8) : const Color(0xFF715B42);
-  Color get _shadow =>
-      _dark ? const Color(0x52000000) : const Color(0x1439352F);
+  Color get _containerPaper => _dark
+      ? Color.lerp(_scheme.surface, _scheme.surfaceContainerHigh, .45)!
+      : Color.lerp(_scheme.surface, _scheme.primaryContainer, .20)!;
+  Color get _paper => _dark
+      ? Color.lerp(_scheme.surfaceContainerHigh, _scheme.primaryContainer, .22)!
+      : _scheme.surface;
+  Color get _ink => _scheme.onSurface;
+  Color get _muted => _scheme.onSurfaceVariant;
+  Color get _border => _dark
+      ? _scheme.outlineVariant
+      : Color.lerp(_scheme.outlineVariant, _scheme.primary, .16)!;
+  Color get _accent => _scheme.primary;
+  Color get _shadow => _dark
+      ? const Color(0x52000000)
+      : _scheme.primary.withValues(alpha: .08);
 
   // 仪式 (2400ms) 时间轴：
   //    0–280ms  第一次洗牌
@@ -719,14 +724,14 @@ class _ArchiveRandomPickCardState<T extends Object>
 
     final buttonStyle = ElevatedButton.styleFrom(
       backgroundColor: _accent,
-      foregroundColor: _dark ? const Color(0xFF1E211F) : Colors.white,
+      foregroundColor: _scheme.onPrimary,
       disabledBackgroundColor: _border,
       disabledForegroundColor: _muted,
       elevation: 0,
       minimumSize: const Size(120, 44),
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(10),
       ),
     );
 
@@ -740,8 +745,8 @@ class _ArchiveRandomPickCardState<T extends Object>
         Container(
           width: double.infinity,
           decoration: BoxDecoration(
-            color: _paper,
-            borderRadius: BorderRadius.circular(12),
+            color: _containerPaper,
+            borderRadius: BorderRadius.circular(14),
             border: Border.all(color: _border),
           ),
           child: Padding(
@@ -772,14 +777,18 @@ class _ArchiveRandomPickCardState<T extends Object>
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        border: Border.all(color: _border),
-                        borderRadius: BorderRadius.circular(4),
+                        color: _accent.withValues(alpha: _dark ? .16 : .08),
+                        border: Border.all(
+                          color: _accent.withValues(alpha: _dark ? .34 : .22),
+                        ),
+                        borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
                         status,
                         style: TextStyle(
-                          color: _muted,
+                          color: _accent,
                           fontSize: 12,
+                          fontWeight: FontWeight.w500,
                           height: 1.4,
                         ),
                       ),
