@@ -2,9 +2,8 @@ name: Prepare Release
 on:
   workflow_dispatch:
   push:
-    tags: ['v*']
     branches: [main]
-    paths: ['.github/workflows/android-release.yml', 'pubspec.yaml']
+    paths: ['pubspec.yaml']
 permissions:
   contents: write
 concurrency:
