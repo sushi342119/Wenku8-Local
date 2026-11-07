@@ -585,7 +585,8 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                         break
                     }
                     val lower = doc.name.lowercase()
-                    if (lower.endsWith(".txt") || lower.endsWith(".pdf") || lower.endsWith(".epub")) {
+                    if (lower.endsWith(".txt") || lower.endsWith(".pdf") || lower.endsWith(".epub") ||
+                        lower.endsWith(".mobi") || lower.endsWith(".azw3") || lower.endsWith(".azw") || lower.endsWith(".prc")) {
                         output.add(
                             mapOf(
                                 "uri" to DocumentsContract.buildDocumentUriUsingTree(tree, doc.id).toString(),

@@ -174,6 +174,12 @@ class _LocalEpubReaderToolsState extends State<LocalEpubReaderTools> {
     ),
     const SizedBox(height: 8),
     GlassTextButton(
+      key: const ValueKey('epub-open-purification'),
+      onPressed: () => Navigator.pop(context, const ReaderOpenPurification()),
+      child: const Text('正文净化与纠错'),
+    ),
+    const SizedBox(height: 8),
+    GlassTextButton(
       onPressed: () => Navigator.pop(context, const ReaderEnterFocus()),
       child: const Text('专注阅读 · 隐藏控件'),
     ),

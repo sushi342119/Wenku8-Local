@@ -15,6 +15,8 @@ import 'chapter_splitter.dart';
 export 'chapter_splitter.dart' show LocalChapterIndex;
 import 'local_platform.dart';
 import 'local_epub.dart';
+import 'local_mobi.dart';
+export 'local_mobi.dart' show isMobiFileName, extractMobiBook, MobiBookData;
 import 'book_tags.dart';
 import 'filename_tags.dart';
 import 'local_record_removal.dart';
@@ -1289,6 +1291,38 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       return book;
     }
   }
+
+  /// Re-splits a local TXT book using a custom regex pattern or oversized
+  /// chapter subdivision, persists the updated chapter index, and returns the
+  /// updated [Novel].
+  Future<Novel?> resplitTxtChapters(
+    int id, {
+    String? customPattern,
+    int maxChapterChars = 0,
+  }) => _synchronized(() async {
+    final index = _indexForBook(id);
+    if (index < 0) return null;
+    final book = _books[index];
+    if (book.kind != LocalBookKind.txt) return toNovel(book);
+    final text = await _readBookText(book);
+    if (text.isEmpty) return toNovel(book);
+    final nextChapters = splitLocalChaptersCustom(
+      text,
+      customPattern: customPattern,
+      maxChapterChars: maxChapterChars,
+    );
+    if (nextChapters.isEmpty) return toNovel(book);
+    final updated = book.copyWith(
+      chapters: nextChapters,
+      revision: book.revision + 1,
+      chapterSplitVersion: _chapterSplitVersion,
+      customTitle: book.customTitle,
+      customAuthor: book.customAuthor,
+    );
+    _replaceBook(index, updated);
+    await _saveIndex();
+    return toNovel(updated);
+  });
 
   Future<void> ensureReady(int id) async {
     final book = bookFor(id);
@@ -2683,7 +2717,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
           if (!files.any((file) {
                 final lowerPath = file.path.toLowerCase();
                 return lowerPath.endsWith('.txt') ||
-                    lowerPath.endsWith('.epub');
+                    lowerPath.endsWith('.epub') ||
+                    isMobiFileName(lowerPath);
               }) &&
               _books.any((book) => book.sourceId == sourceId)) {
             throw const IncompleteScanException('empty_result');
@@ -2693,7 +2728,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 .where(
                   (file) =>
                       (file.path.toLowerCase().endsWith('.txt') ||
-                          file.path.toLowerCase().endsWith('.epub')) &&
+                          file.path.toLowerCase().endsWith('.epub') ||
+                          isMobiFileName(file.path)) &&
                       !byKey.containsKey(file.path) &&
                       !byUriLegacy.containsKey('file://${file.path}') &&
                       (!file.path.toLowerCase().endsWith('.epub') ||
@@ -2723,7 +2759,11 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
             );
             final name = file.path.split('/').last;
             final lower = name.toLowerCase();
-            if (!lower.endsWith('.txt') && !lower.endsWith('.epub')) continue;
+            if (!lower.endsWith('.txt') &&
+                !lower.endsWith('.epub') &&
+                !isMobiFileName(lower)) {
+              continue;
+            }
             final uri = lower.endsWith('.epub')
                 ? Uri.file(file.path).toString()
                 : 'file://${file.path}';
@@ -2933,7 +2973,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  /// 直接从文件路径导入 TXT（纯 Dart，无需原生代码）。
+  /// 直接从文件路径导入 TXT / EPUB / MOBI / AZW3（纯 Dart，无需原生代码）。
   Future<LocalBook?> _importDirectFile({
     required String path,
     required String name,
@@ -2960,6 +3000,35 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
     }
     final id = existing?.id ?? _nextId();
+    if (isMobiFileName(name)) {
+      final rawBytes = await File(path).readAsBytes();
+      final mobi = extractMobiBook(rawBytes, fallbackTitle: _titleFromName(name));
+      if (mobi.text.isEmpty) return null;
+      final sourceFingerprint = sha256.convert(rawBytes).toString();
+      final textFingerprint = sha256.convert(utf8.encode(mobi.text)).toString();
+      final target = '${_booksDir.path}/book_${id}_$textFingerprint.txt';
+      await File(target).writeAsString(mobi.text, flush: true);
+      return LocalBook(
+        id: id,
+        title: mobi.title.isNotEmpty ? mobi.title : _titleFromName(name),
+        author: mobi.author.isNotEmpty ? mobi.author : _authorFromName(name),
+        fileUri: 'file://$path',
+        fileName: name,
+        kind: LocalBookKind.txt,
+        size: size,
+        modified: modified,
+        textFingerprint: textFingerprint,
+        sourceFingerprint: sourceFingerprint,
+        chapters: mobi.chapters,
+        pageCount: 0,
+        wordCount: _countWords(mobi.text),
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        customTitle: existing?.customTitle,
+        customAuthor: existing?.customAuthor,
+        chapterSplitVersion: _chapterSplitVersion,
+      );
+    }
     final processed = await _importText(path, id, direct: true);
     if (processed.inputLength == 0) return null;
     return LocalBook(

@@ -16,20 +16,56 @@ import 'reader_vertical_text.dart';
 /// P3 bridge (design 2026-11 §4 阅读手势, decision 6): tap zones, volume-key
 /// paging and the page body for the existing paged / vertical engine.
 
-enum ReaderTapAction { toggle, previous, next }
+enum ReaderTapAction {
+  toggle,
+  previous,
+  next,
+  previousChapter,
+  nextChapter,
+  toggleListening,
+  addBookmark,
+  none,
+}
 
 /// Centre 40 % toggles controls. With [ReaderPreferences.tapPaging] on, the
 /// outer 30 % columns page:
 /// * 常规: left = previous, right = next;
 /// * 右手 / 左手: the thumb-side column is split, upper half previous and
 ///   lower half next; the far column always goes next;
-/// * [ReaderPreferences.tapBothSidesNext]: both columns go next.
+/// * 九宫格: maps the 3x3 grid cell to [ReaderPreferences.effectiveTapGrid];
+/// * [ReaderPreferences.tapBothSidesNext]: both columns go next;
+/// * [ReaderPreferences.edgeDeadZone]: ignores taps within the curved-screen
+///   dead-zone width on left and right edges.
 ReaderTapAction readerTapAction(
   Offset position,
   Size size,
   ReaderPreferences prefs,
 ) {
-  if (!prefs.tapPaging || size.width <= 0) return ReaderTapAction.toggle;
+  if (size.width <= 0) return ReaderTapAction.toggle;
+  if (prefs.edgeDeadZone > 0 &&
+      (position.dx < prefs.edgeDeadZone ||
+          position.dx > size.width - prefs.edgeDeadZone)) {
+    return ReaderTapAction.none;
+  }
+  if (!prefs.tapPaging) return ReaderTapAction.toggle;
+  if (prefs.tapLayout == ReaderTapLayout.custom) {
+    final col = (position.dx / size.width * 3).floor().clamp(0, 2);
+    final row = size.height <= 0
+        ? 1
+        : (position.dy / size.height * 3).floor().clamp(0, 2);
+    final zone = prefs.effectiveTapGrid[row * 3 + col];
+    return switch (zone) {
+      ReaderTapZoneAction.nextPage => ReaderTapAction.next,
+      ReaderTapZoneAction.prevPage =>
+        prefs.tapBothSidesNext ? ReaderTapAction.next : ReaderTapAction.previous,
+      ReaderTapZoneAction.toggleMenu => ReaderTapAction.toggle,
+      ReaderTapZoneAction.nextChapter => ReaderTapAction.nextChapter,
+      ReaderTapZoneAction.prevChapter => ReaderTapAction.previousChapter,
+      ReaderTapZoneAction.toggleListening => ReaderTapAction.toggleListening,
+      ReaderTapZoneAction.addBookmark => ReaderTapAction.addBookmark,
+      ReaderTapZoneAction.none => ReaderTapAction.none,
+    };
+  }
   final x = position.dx / size.width;
   final side = x < .3 ? -1 : (x > .7 ? 1 : 0);
   if (side == 0) return ReaderTapAction.toggle;
@@ -126,7 +162,11 @@ class _ReaderVolumePagingState extends State<ReaderVolumePaging> {
 /// One page of the paged engine. Horizontal fragments are re-laid at their
 /// measured width with the same span builder pagination used, so line breaks
 /// match; vertical pages draw with the existing [ReaderVerticalText].
-Widget readerPageBody(ReaderLeaf page, TextStyle style) {
+Widget readerPageBody(
+  ReaderLeaf page,
+  TextStyle style, {
+  bool compressPunctuation = true,
+}) {
   if (page.vertical) return ReaderVerticalText(page: page, style: style);
   return Stack(
     clipBehavior: Clip.hardEdge,
@@ -141,6 +181,7 @@ Widget readerPageBody(ReaderLeaf page, TextStyle style) {
                   children: [TextSpan(text: fragment.text)],
                   style: style,
                   indent: fragment.indent,
+                  compressPunctuation: compressPunctuation,
                 ),
                 softWrap: true,
               ),
@@ -164,37 +205,53 @@ class ReaderPagingSettings extends StatelessWidget {
     }
   }
 
+  void _cycleTapZone(BuildContext context, ReaderPreferences prefs, int cell) {
+    final grid = List<ReaderTapZoneAction>.of(prefs.effectiveTapGrid);
+    final current = grid[cell];
+    final nextIndex =
+        (ReaderTapZoneAction.values.indexOf(current) + 1) %
+        ReaderTapZoneAction.values.length;
+    grid[cell] = ReaderTapZoneAction.values[nextIndex];
+    _save(context, prefs.copyWith(tapGrid: grid));
+  }
+
   @override
   Widget build(BuildContext context) {
     final prefs = state.readerPreferences;
     final scheme = Theme.of(context).colorScheme;
     final muted = TextStyle(fontSize: 12, color: scheme.onSurfaceVariant);
-    Widget toggle(String title, String note, bool value, Key key,
-            ValueChanged<bool>? onChanged) =>
-        Padding(
-          padding: const EdgeInsets.only(top: 12),
-          child: Row(
-            children: [
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(title,
-                        style: const TextStyle(fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 2),
-                    Text(note, style: muted),
-                  ],
+    Widget toggle(
+      String title,
+      String note,
+      bool value,
+      Key key,
+      ValueChanged<bool>? onChanged,
+    ) => Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w600),
                 ),
-              ),
-              CupertinoSwitch(
-                key: key,
-                value: value,
-                activeTrackColor: scheme.primary,
-                onChanged: onChanged,
-              ),
-            ],
+                const SizedBox(height: 2),
+                Text(note, style: muted),
+              ],
+            ),
           ),
-        );
+          CupertinoSwitch(
+            key: key,
+            value: value,
+            activeTrackColor: scheme.primary,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
     return Padding(
       padding: const EdgeInsets.only(top: 16),
       child: Column(
@@ -214,15 +271,56 @@ class ReaderPagingSettings extends StatelessWidget {
               }
             },
           ),
-          if (prefs.mode.paginated)
+          if (prefs.mode.paginated) ...[
             Padding(
               padding: const EdgeInsets.only(top: 6),
-              child: Text('翻页模式下，查找定位、听书跟随与划线显示请切回上下滚动使用。',
-                  style: muted),
+              child: Text(
+                '翻页模式下，查找定位、听书跟随与划线显示请切回上下滚动使用。',
+                style: muted,
+              ),
             ),
+            const SizedBox(height: 12),
+            const Text('自动翻页', style: TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            CupertinoSlidingSegmentedControl<ReaderAutoPageMode>(
+              key: const ValueKey('reader-auto-page-mode'),
+              groupValue: prefs.autoPageMode,
+              children: {
+                for (final mode in ReaderAutoPageMode.values)
+                  mode: Text(mode.label),
+              },
+              onValueChanged: (mode) {
+                if (mode != null) {
+                  _save(context, prefs.copyWith(autoPageMode: mode));
+                }
+              },
+            ),
+            if (prefs.autoPageMode != ReaderAutoPageMode.off) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Text('推进速度', style: muted),
+                  Expanded(
+                    child: Slider(
+                      key: const ValueKey('reader-auto-page-speed'),
+                      value: prefs.autoScrollSpeed.clamp(8.0, 80.0),
+                      min: 8,
+                      max: 80,
+                      onChanged: (v) =>
+                          _save(context, prefs.copyWith(autoScrollSpeed: v)),
+                    ),
+                  ),
+                  Text(
+                    '${(360 / prefs.autoScrollSpeed).round()}s/页',
+                    style: muted,
+                  ),
+                ],
+              ),
+            ],
+          ],
           toggle(
             '点击翻页',
-            '左右各 30% 区域翻屏，中间区域切换控件',
+            '左右各 30% 区域翻屏，中间区域切换控件，或自定义九宫格',
             prefs.tapPaging,
             const ValueKey('reader-tap-paging'),
             (value) => _save(context, prefs.copyWith(tapPaging: value)),
@@ -242,7 +340,87 @@ class ReaderPagingSettings extends StatelessWidget {
                 }
               },
             ),
+            if (prefs.tapLayout == ReaderTapLayout.custom) ...[
+              const SizedBox(height: 8),
+              Text('轻触下方九宫格方块即可切换该区域的点击动作：', style: muted),
+              const SizedBox(height: 6),
+              GridView.builder(
+                key: const ValueKey('reader-tap-grid-editor'),
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: 9,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  mainAxisSpacing: 6,
+                  crossAxisSpacing: 6,
+                  childAspectRatio: 2.2,
+                ),
+                itemBuilder: (context, index) {
+                  final zone = prefs.effectiveTapGrid[index];
+                  return InkWell(
+                    key: ValueKey('reader-tap-grid-cell-$index'),
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _cycleTapZone(context, prefs, index),
+                    child: Container(
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: scheme.surfaceContainerHighest.withValues(
+                          alpha: 0.55,
+                        ),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: scheme.outlineVariant.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Text(
+                        zone.label,
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
           ],
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        '曲面屏防误触边缘屏蔽',
+                        style: TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        prefs.edgeDeadZone <= 0
+                            ? '关闭（全宽响应点击）'
+                            : '左右边缘各屏蔽 ${prefs.edgeDeadZone.round()} px',
+                        style: muted,
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(
+                  width: 140,
+                  child: Slider(
+                    key: const ValueKey('reader-edge-dead-zone-slider'),
+                    value: prefs.edgeDeadZone.clamp(0.0, 48.0),
+                    min: 0,
+                    max: 48,
+                    divisions: 12,
+                    onChanged: (v) =>
+                        _save(context, prefs.copyWith(edgeDeadZone: v)),
+                  ),
+                ),
+              ],
+            ),
+          ),
           toggle(
             '音量键翻页',
             LocalPlatform.volumePaging ? '音量+ 上一屏，音量− 下一屏' : '当前平台不支持音量键翻页',

@@ -537,6 +537,7 @@ Future<ReaderPagination?> paginateReader({
             children: format.spans(text),
             style: paragraphStyle,
             indent: indent,
+            compressPunctuation: preferences.kinsokuCompression,
           );
           final builder = ui.ParagraphBuilder(
             paragraphStyle.getParagraphStyle(
@@ -705,6 +706,14 @@ Future<ReaderPagination?> paginateReader({
             });
             rotations[c] = metric.rotation;
             advances[c] = metric.advance;
+            if (preferences.kinsokuCompression &&
+                c > 0 &&
+                isCompressibleCjkPunctuationPair(clusters[c - 1], cluster)) {
+              advances[c - 1] = math.max(
+                font * 0.55,
+                advances[c - 1] - font * 0.28,
+              );
+            }
             c++;
             if (c % 128 == 0 && clock.elapsedMilliseconds >= 4) {
               await Future<void>.delayed(Duration.zero);
@@ -744,6 +753,18 @@ Future<ReaderPagination?> paginateReader({
               break;
             }
             height += advances[end++];
+          }
+          // Kinsoku trailing punctuation compression: if the next glyph is a
+          // closing punctuation mark that barely overflows the column bottom,
+          // squeeze it into this column rather than backtracking a full char.
+          if (preferences.kinsokuCompression &&
+              end < clusters.length &&
+              end != breakCluster &&
+              clusters[end - 1] != '\n' &&
+              cjkClosingPunctuation.contains(clusters[end]) &&
+              height + advances[end] * 0.65 <= size.height + font * 0.35) {
+            height += advances[end] * 0.65;
+            end++;
           }
           // Backtrack on grapheme boundaries. Never split emoji/combining text.
           if (end < clusters.length &&

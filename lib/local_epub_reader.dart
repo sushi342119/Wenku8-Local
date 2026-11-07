@@ -874,7 +874,11 @@ class _LocalEpubReaderPageState extends State<LocalEpubReaderPage>
     return Padding(
       padding: const EdgeInsets.only(bottom: 14),
       child: Text(
-        ReaderPurificationStore.shared.purifyParagraph(block.text ?? ''),
+        ReaderPurificationStore.shared.purifyParagraph(
+          block.text ?? '',
+          bookId: _novel.id,
+          chapterIndex: _chapter,
+        ),
         style: TextStyle(
           fontSize: widget.state.fontSize,
           height: widget.state.lineHeight,

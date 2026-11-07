@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:html/parser.dart' as html_parser;
 import 'package:xml/xml.dart';
 
+import 'local_mobi.dart';
+
 typedef PreparedBookDocument = ({String name, String? path, String? error});
 typedef PreparedCloudBook = ({String name, Uint8List? epubBytes, String? text});
 
@@ -77,6 +79,15 @@ class PortableBookPreparer {
     switch (ext) {
       case 'epub':
         return [(name: name, epubBytes: bytes, text: null)];
+      case 'mobi':
+      case 'azw3':
+      case 'azw':
+      case 'prc':
+        final mobi = extractMobiBook(bytes, fallbackTitle: name);
+        final outName = mobi.author.isNotEmpty
+            ? '${mobi.title} - ${mobi.author}.txt'
+            : '${mobi.title}.txt';
+        return [(name: outName, epubBytes: null, text: mobi.text)];
       case 'txt':
       case 'md':
       case 'markdown':

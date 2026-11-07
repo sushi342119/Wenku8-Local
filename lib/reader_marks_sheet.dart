@@ -18,11 +18,17 @@ class ReaderMarksSheet extends StatefulWidget {
     required this.novel,
     required this.currentChapter,
     this.cache,
+    this.onConfigureTocRule,
   });
   final LibraryState state;
   final Novel novel;
   final int currentChapter;
   final OfflineCacheStore? cache;
+  final Future<Novel?> Function({
+    required TxtTocRulePreset preset,
+    String? customPattern,
+    required int maxChapterChars,
+  })? onConfigureTocRule;
 
   @override
   State<ReaderMarksSheet> createState() => _ReaderMarksSheetState();
@@ -67,6 +73,7 @@ class _ReaderMarksSheetState extends State<ReaderMarksSheet> {
           novel: widget.novel,
           currentChapter: widget.currentChapter,
           cache: widget.cache,
+          onConfigureTocRule: widget.onConfigureTocRule,
         ),
       );
     }

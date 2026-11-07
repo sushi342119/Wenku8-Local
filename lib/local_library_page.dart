@@ -10,12 +10,13 @@ import 'catalog.dart';
 import 'cloud_library_page.dart';
 import 'cloud_sources.dart';
 import 'feature_pages.dart';
+import 'lan_bookshelf_server.dart';
 import 'library_state.dart';
 import 'local_library.dart';
 import 'local_scan_follow_up.dart';
 import 'wenku_errors.dart';
 
-/// 本地书库管理：选择文件夹、扫描导入 TXT / EPUB / PDF、移除。
+/// 本地书库管理：选择文件夹、扫描导入 TXT / EPUB / PDF / MOBI / AZW3、移除。
 class LocalLibraryPage extends StatefulWidget {
   const LocalLibraryPage({
     super.key,
@@ -305,6 +306,22 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
             subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
             onTap: isScanning || _picking ? () {} : _scan,
+          ),
+          const SizedBox(height: 14),
+          FeatureEntry(
+            key: const ValueKey('local-library-lan-wifi'),
+            title: 'Wi-Fi 传书与网页书架',
+            subtitle: '在电脑或平板浏览器拖拽上传 TXT / EPUB / MOBI / AZW3 或在线阅读',
+            icon: CupertinoIcons.wifi,
+            onTap: () async {
+              await showLanBookshelfSheet(
+                context: context,
+                local: widget.local,
+                state: widget.state,
+                reduceMotion: widget.state.reduceMotion,
+              );
+              if (mounted) setState(() {});
+            },
           ),
           const SizedBox(height: 14),
           FeatureEntry(

@@ -8,6 +8,7 @@ import '../app_ui.dart';
 import '../catalog.dart';
 import '../reader_tools.dart' show ReaderValueSlider;
 import 'controller.dart';
+import 'http_tts.dart';
 import 'models.dart';
 
 class ListeningScope extends InheritedWidget {
@@ -59,6 +60,12 @@ class ListeningPanel extends StatefulWidget {
 
 class _ListeningPanelState extends State<ListeningPanel> {
   static const _source = ListeningSource.edge;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(HttpTtsStore.shared.ensureInitialized());
+  }
 
   Future<void> _act(Future<void> Function() action) async {
     try {
@@ -401,62 +408,85 @@ class _ListeningPanelState extends State<ListeningPanel> {
             const SizedBox(height: 8),
             ValueListenableBuilder<ListeningVoiceCatalog>(
               valueListenable: widget.controller.voices,
-              builder: (context, catalog, _) {
-                final available = catalog.online;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (catalog.loading)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: InlineSkeleton(
-                          width: double.infinity,
-                          height: 36,
-                        ),
-                      ),
-                    if (catalog.message != null &&
-                        catalog.messageSource == _source)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: Text(
-                          catalog.message!,
-                          style: const TextStyle(fontSize: 12, height: 1.6),
-                        ),
-                      ),
-                    for (final voice in available)
-                      Semantics(
-                        selected:
-                            state.voice.id == voice.id &&
-                            state.voice.engine == voice.engine,
-                        child: GlassTextButton(
-                          key: ValueKey(
-                            'listening-voice-${voice.engine}-${voice.id}',
+              builder: (context, catalog, _) => ListenableBuilder(
+                listenable: HttpTtsStore.shared,
+                builder: (context, _) {
+                  final customVoices = HttpTtsStore.shared.voices;
+                  final available = <SpeechVoice>[
+                    ...catalog.online,
+                    for (final custom in customVoices)
+                      if (!catalog.online.any(
+                        (v) => v.id == custom.id && v.engine == custom.engine,
+                      ))
+                        custom,
+                  ];
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (catalog.loading)
+                        const Padding(
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          child: InlineSkeleton(
+                            width: double.infinity,
+                            height: 36,
                           ),
-                          onPressed: () => _voice(voice),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  voice.label,
-                                  style: const TextStyle(fontSize: 13),
+                        ),
+                      if (catalog.message != null &&
+                          catalog.messageSource == _source)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Text(
+                            catalog.message!,
+                            style: const TextStyle(fontSize: 12, height: 1.6),
+                          ),
+                        ),
+                      for (final voice in available)
+                        Semantics(
+                          selected:
+                              state.voice.id == voice.id &&
+                              state.voice.engine == voice.engine,
+                          child: GlassTextButton(
+                            key: ValueKey(
+                              'listening-voice-${voice.engine}-${voice.id}',
+                            ),
+                            onPressed: () => _voice(voice),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    voice.label,
+                                    style: const TextStyle(fontSize: 13),
+                                  ),
                                 ),
-                              ),
-                              if (state.voice.id == voice.id &&
-                                  state.voice.engine == voice.engine)
-                                const Icon(CupertinoIcons.checkmark, size: 16),
-                            ],
+                                if (state.voice.id == voice.id &&
+                                    state.voice.engine == voice.engine)
+                                  const Icon(
+                                    CupertinoIcons.checkmark,
+                                    size: 16,
+                                  ),
+                              ],
+                            ),
                           ),
                         ),
+                      GlassTextButton(
+                        onPressed: catalog.loading
+                            ? null
+                            : () => _act(() => widget.controller.refreshVoices()),
+                        child: const Text('获取更多在线音色'),
                       ),
-                    GlassTextButton(
-                      onPressed: catalog.loading
-                          ? null
-                          : () => _act(() => widget.controller.refreshVoices()),
-                      child: const Text('获取更多在线音色'),
-                    ),
-                  ],
-                );
-              },
+                      GlassTextButton(
+                        key: const ValueKey('listening-http-tts-manage'),
+                        onPressed: () => showHttpTtsConfigSheet(
+                          context: context,
+                          reduceMotion: MediaQuery.disableAnimationsOf(context),
+                          onSelectVoice: (voice) => _voice(voice),
+                        ),
+                        child: const Text('自定义 HTTP 朗读引擎（兼容阅读 httpTTS）'),
+                      ),
+                    ],
+                  );
+                },
+              ),
             ),
             const SizedBox(height: 8),
             Text(

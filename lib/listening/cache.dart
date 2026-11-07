@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'edge_tts.dart';
+import 'http_tts.dart';
 import 'languages.dart';
 import 'models.dart';
 
@@ -70,7 +71,14 @@ class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
   }
 
   @override
-  Future<List<SpeechVoice>> onlineVoices() => edge.voices();
+  Future<List<SpeechVoice>> onlineVoices() async {
+    await HttpTtsStore.shared.ensureInitialized();
+    final edgeVoices = await edge.voices();
+    return List.unmodifiable([
+      ...edgeVoices,
+      ...HttpTtsStore.shared.voices,
+    ]);
+  }
 
   @override
   Future<List<SpeechVoice>> languageVoices(SpeechVoice preferred) {
@@ -204,7 +212,8 @@ class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
         );
       }
       await directory.create(recursive: true);
-      final extension = voice.source == ListeningSource.edge ? 'mp3' : 'wav';
+      final extension =
+          voice.source == ListeningSource.system ? 'wav' : 'mp3';
       final file = File('${directory.path}/$key.$extension');
       if (await file.exists() && await file.length() > 100) {
         await file.setLastModified(DateTime.now());
@@ -215,6 +224,14 @@ class SpeechAudioCache implements SpeechAudioSource, SpeechLanguageVoiceSource {
       try {
         if (voice.source == ListeningSource.edge) {
           final data = await edge.synthesize(text, voice, cancellation);
+          cancellation.check();
+          await temporary.writeAsBytes(data, flush: true);
+        } else if (voice.source == ListeningSource.custom) {
+          final data = await HttpTtsStore.shared.synthesize(
+            text,
+            voice,
+            cancellation,
+          );
           cancellation.check();
           await temporary.writeAsBytes(data, flush: true);
         } else {

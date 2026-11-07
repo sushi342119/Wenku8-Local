@@ -3,8 +3,10 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
+import 'app_interactions.dart';
 import 'app_ui.dart';
 import 'catalog.dart';
+import 'chapter_splitter.dart' show TxtTocRulePreset;
 import 'offline_cache.dart';
 
 /// A bounded, lazy chapter picker using the existing glass drawer. The current
@@ -15,10 +17,13 @@ class ReaderCatalogue extends StatefulWidget {
     required this.novel,
     required this.currentChapter,
     this.cache,
+    this.onConfigureTocRule,
   });
   final Novel novel;
   final int currentChapter;
   final OfflineCacheStore? cache;
+  final Future<Novel?> Function(String? customPattern, int maxChapterChars)?
+  onConfigureTocRule;
 
   @override
   State<ReaderCatalogue> createState() => _ReaderCatalogueState();
@@ -26,12 +31,19 @@ class ReaderCatalogue extends StatefulWidget {
 
 class _ReaderCatalogueState extends State<ReaderCatalogue> {
   final _search = TextEditingController();
+  final _customRegex = TextEditingController();
   final _scroll = ScrollController();
   final _center = GlobalKey();
+  late Novel _novel = widget.novel;
   late List<int> _matches = _filter('');
+  bool _configuringRule = false;
+  bool _applyingRule = false;
+  TxtTocRulePreset _selectedPreset = TxtTocRulePreset.auto;
+  bool _subdivideOversized = false;
+  String? _ruleError;
 
   List<int> _filter(String query) {
-    final chapters = widget.novel.chapters;
+    final chapters = _novel.chapters;
     final text = query.trim().toLowerCase();
     if (text.isEmpty) return List.generate(chapters.length, (index) => index);
     final number = int.tryParse(text);
@@ -40,7 +52,9 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     }
     return [
       for (var index = 0; index < chapters.length; index++)
-        if (chapters[index].title.toLowerCase().contains(text) || chapters[index].volume.toLowerCase().contains(text)) index,
+        if (chapters[index].title.toLowerCase().contains(text) ||
+            chapters[index].volume.toLowerCase().contains(text))
+          index,
     ];
   }
 
@@ -57,10 +71,53 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
     FocusScope.of(context).unfocus();
   }
 
+  Future<void> _applyTocRule() async {
+    final callback = widget.onConfigureTocRule;
+    if (callback == null || _applyingRule) return;
+    final custom = _customRegex.text.trim();
+    if (custom.isNotEmpty) {
+      try {
+        RegExp(custom, multiLine: true);
+      } on FormatException catch (e) {
+        setState(() => _ruleError = '正则表达式语法有误：${e.message}');
+        return;
+      }
+    }
+    setState(() {
+      _applyingRule = true;
+      _ruleError = null;
+    });
+    try {
+      final pattern = custom.isNotEmpty ? custom : _selectedPreset.pattern;
+      final updated = await callback(
+        pattern,
+        _subdivideOversized ? 12000 : 0,
+      );
+      if (!mounted) return;
+      setState(() {
+        if (updated != null) {
+          _novel = updated;
+          _matches = _filter(_search.text);
+        }
+        _configuringRule = false;
+      });
+      if (updated != null) {
+        showNovelFeedback(context, '已按新规则切分为 ${updated.chapters.length} 章');
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _ruleError = '重新切分目录失败，请检查规则后重试');
+      }
+    } finally {
+      if (mounted) setState(() => _applyingRule = false);
+    }
+  }
+
   @override
   void didUpdateWidget(ReaderCatalogue oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.novel.chapters, widget.novel.chapters)) {
+      _novel = widget.novel;
       _matches = _filter(_search.text);
     }
   }
@@ -68,6 +125,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   @override
   void dispose() {
     _search.dispose();
+    _customRegex.dispose();
     _scroll.dispose();
     super.dispose();
   }
@@ -107,6 +165,16 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
             const Expanded(
               child: ArchiveSection(title: '目录', code: 'READER / CONTENTS'),
             ),
+            if (widget.onConfigureTocRule != null)
+              GlassIconButton(
+                key: const ValueKey('reader-catalogue-toc-rule'),
+                icon: CupertinoIcons.slider_horizontal_3,
+                label: 'TXT 分章规则',
+                onPressed: () => setState(() {
+                  _configuringRule = !_configuringRule;
+                  _ruleError = null;
+                }),
+              ),
             GlassIconButton(
               icon: CupertinoIcons.location,
               label: '定位当前章节',
@@ -119,6 +187,83 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
             ),
           ],
         ),
+        if (_configuringRule && widget.onConfigureTocRule != null) ...[
+          const SizedBox(height: 8),
+          ContentPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'TXT 目录切分规则',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    for (final preset in TxtTocRulePreset.values)
+                      ChoiceChip(
+                        label: Text(
+                          preset.label,
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                        selected:
+                            _customRegex.text.trim().isEmpty &&
+                            _selectedPreset == preset,
+                        onSelected: (_) => setState(() {
+                          _selectedPreset = preset;
+                          _customRegex.clear();
+                        }),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                TextField(
+                  key: const ValueKey('reader-catalogue-custom-regex'),
+                  controller: _customRegex,
+                  onChanged: (_) => setState(() {}),
+                  decoration: const InputDecoration(
+                    labelText: '自定义章节标题正则（选填，留空使用上方预设）',
+                    isDense: true,
+                  ),
+                ),
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        '超长章节自动分节（> 1.2 万字）',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    Switch.adaptive(
+                      key: const ValueKey('reader-catalogue-subdivide-long'),
+                      value: _subdivideOversized,
+                      onChanged: (v) => setState(() => _subdivideOversized = v),
+                    ),
+                  ],
+                ),
+                if (_ruleError != null)
+                  Text(
+                    _ruleError!,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: GlassTextButton(
+                    key: const ValueKey('reader-catalogue-apply-toc-rule'),
+                    onPressed: _applyingRule ? null : _applyTocRule,
+                    child: Text(_applyingRule ? '正在切分…' : '重新切分目录'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
         const SizedBox(height: 8),
         CupertinoSearchTextField(
           key: const ValueKey('reader-chapter-search'),
@@ -136,7 +281,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
         const SizedBox(height: 10),
         Text(
           _search.text.trim().isEmpty
-              ? '共 ${widget.novel.chapters.length} 章 · 当前第 ${widget.currentChapter + 1} 章'
+              ? '共 ${_novel.chapters.length} 章 · 当前第 ${widget.currentChapter + 1} 章'
               : '找到 ${_matches.length} 章',
           style: TextStyle(
             fontSize: 12,
@@ -178,7 +323,7 @@ class _ReaderCatalogueState extends State<ReaderCatalogue> {
   }
 
   Widget _row(BuildContext context, int index) {
-    final chapter = widget.novel.chapters[index];
+    final chapter = _novel.chapters[index];
     final current = index == widget.currentChapter;
     return Semantics(
       selected: current,

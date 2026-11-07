@@ -67,9 +67,45 @@ bool readerLayoutIsPaginated(String layout) => layout
 enum ReaderTapLayout {
   standard('常规'),
   rightHand('右手'),
-  leftHand('左手');
+  leftHand('左手'),
+  custom('九宫格');
 
   const ReaderTapLayout(this.label);
+  final String label;
+}
+
+enum ReaderTapZoneAction {
+  nextPage('下一页'),
+  prevPage('上一页'),
+  toggleMenu('呼出菜单'),
+  nextChapter('下一章'),
+  prevChapter('上一章'),
+  toggleListening('听书开关'),
+  addBookmark('添加书签'),
+  none('无操作');
+
+  const ReaderTapZoneAction(this.label);
+  final String label;
+}
+
+const defaultReaderTapGrid = <ReaderTapZoneAction>[
+  ReaderTapZoneAction.prevPage,
+  ReaderTapZoneAction.prevPage,
+  ReaderTapZoneAction.nextPage,
+  ReaderTapZoneAction.prevPage,
+  ReaderTapZoneAction.toggleMenu,
+  ReaderTapZoneAction.nextPage,
+  ReaderTapZoneAction.nextPage,
+  ReaderTapZoneAction.nextPage,
+  ReaderTapZoneAction.nextPage,
+];
+
+enum ReaderAutoPageMode {
+  off('关闭'),
+  curtain('幕布推进'),
+  timed('定时翻页');
+
+  const ReaderAutoPageMode(this.label);
   final String label;
 }
 
@@ -155,6 +191,10 @@ class ReaderPreferences {
     this.backgroundOpacity = .18,
     this.backgroundFit = BoxFit.cover,
     this.warmth = 0,
+    this.edgeDeadZone = 0,
+    this.tapGrid = defaultReaderTapGrid,
+    this.autoPageMode = ReaderAutoPageMode.off,
+    this.kinsokuCompression = true,
   });
   final ReaderPaper paper;
   final double margin, paragraphGap, autoScrollSpeed;
@@ -188,6 +228,20 @@ class ReaderPreferences {
 
   /// 0–[readerWarmthMax]; drawn as an overlay, never changes text layout.
   final double warmth;
+
+  /// Curved-screen anti-mistouch dead-zone width on left/right edges (0..48 px).
+  final double edgeDeadZone;
+
+  /// 3x3 custom tap zone actions (row-major, 9 items).
+  final List<ReaderTapZoneAction> tapGrid;
+  List<ReaderTapZoneAction> get effectiveTapGrid =>
+      tapGrid.length == 9 ? tapGrid : defaultReaderTapGrid;
+
+  /// Paged-mode auto read mode (off / curtain scanline / timed page turn).
+  final ReaderAutoPageMode autoPageMode;
+
+  /// Kinsoku trailing punctuation compression in pagination.
+  final bool kinsokuCompression;
   String get layoutKey {
     final geometry =
         leftMargin == 26 &&
@@ -302,7 +356,25 @@ class ReaderPreferences {
     'backgroundOpacity': backgroundOpacity,
     'backgroundFit': backgroundFit.name,
     if (warmth != 0) 'warmth': warmth,
+    if (edgeDeadZone > 0) 'edgeDeadZone': edgeDeadZone,
+    if (tapLayout == ReaderTapLayout.custom ||
+        !_sameTapGrid(tapGrid, defaultReaderTapGrid))
+      'tapGrid': [for (final a in effectiveTapGrid) a.name],
+    if (autoPageMode != ReaderAutoPageMode.off)
+      'autoPageMode': autoPageMode.name,
+    if (!kinsokuCompression) 'kinsokuCompression': false,
   };
+  static bool _sameTapGrid(
+    List<ReaderTapZoneAction> a,
+    List<ReaderTapZoneAction> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   factory ReaderPreferences.fromJson(Map<String, dynamic> json) {
     double number(String key, double min, double max, double fallback) {
       final value = json[key];
@@ -325,6 +397,7 @@ class ReaderPreferences {
       'chapterEntrance',
       'paragraphGapOverride',
       'catalogueReversed',
+      'kinsokuCompression',
     ]) {
       if (json[key] != null && json[key] is! bool) {
         throw const FormatException('阅读偏好格式有误');
@@ -333,6 +406,17 @@ class ReaderPreferences {
     if (json['backgroundImage'] != null &&
         !validBackgroundId(json['backgroundImage'])) {
       throw const FormatException('阅读背景记录有误');
+    }
+    List<ReaderTapZoneAction> parsedTapGrid = defaultReaderTapGrid;
+    if (json['tapGrid'] case final List<dynamic> rawGrid
+        when rawGrid.length == 9) {
+      parsedTapGrid = [
+        for (final item in rawGrid)
+          ReaderTapZoneAction.values.firstWhere(
+            (v) => v.name == item,
+            orElse: () => ReaderTapZoneAction.nextPage,
+          ),
+      ];
     }
     return ReaderPreferences(
       paper: ReaderPaper.values.firstWhere(
@@ -379,7 +463,10 @@ class ReaderPreferences {
       verticalLatinOrientation: ReaderVerticalLatinOrientation.values.byName(
         json['verticalLatinOrientation'] ?? 'rotated',
       ),
-      tapLayout: ReaderTapLayout.values.byName(json['tapLayout'] ?? 'standard'),
+      tapLayout: ReaderTapLayout.values.firstWhere(
+        (v) => v.name == (json['tapLayout'] ?? 'standard'),
+        orElse: () => ReaderTapLayout.standard,
+      ),
       edgeBrightness: json['edgeBrightness'] == true,
       hideSystemStatus: json['hideSystemStatus'] == true,
       showStatusInfo: json['showStatusInfo'] != false,
@@ -388,6 +475,13 @@ class ReaderPreferences {
         json['pageEffect'] ?? 'staggered',
       ),
       pageSpeed: ReaderPageSpeed.values.byName(json['pageSpeed'] ?? 'normal'),
+      edgeDeadZone: number('edgeDeadZone', 0, 48, 0),
+      tapGrid: parsedTapGrid,
+      autoPageMode: ReaderAutoPageMode.values.firstWhere(
+        (v) => v.name == (json['autoPageMode'] ?? 'off'),
+        orElse: () => ReaderAutoPageMode.off,
+      ),
+      kinsokuCompression: json['kinsokuCompression'] != false,
     );
   }
   static ReaderPreferences fromRecord(Object? record) {
@@ -436,6 +530,10 @@ class ReaderPreferences {
     double? backgroundOpacity,
     BoxFit? backgroundFit,
     double? warmth,
+    double? edgeDeadZone,
+    List<ReaderTapZoneAction>? tapGrid,
+    ReaderAutoPageMode? autoPageMode,
+    bool? kinsokuCompression,
   }) => ReaderPreferences(
     paper: paper ?? this.paper,
     margin: margin ?? this.margin,
@@ -475,6 +573,10 @@ class ReaderPreferences {
     backgroundOpacity: backgroundOpacity ?? this.backgroundOpacity,
     backgroundFit: backgroundFit ?? this.backgroundFit,
     warmth: warmth ?? this.warmth,
+    edgeDeadZone: edgeDeadZone ?? this.edgeDeadZone,
+    tapGrid: tapGrid ?? this.tapGrid,
+    autoPageMode: autoPageMode ?? this.autoPageMode,
+    kinsokuCompression: kinsokuCompression ?? this.kinsokuCompression,
   );
 
   /// A book can keep its typography while interaction and device settings
@@ -515,5 +617,9 @@ class ReaderPreferences {
     statusFontSize: statusFontSize,
     statusTopOffset: statusTopOffset,
     warmth: warmth,
+    edgeDeadZone: edgeDeadZone,
+    tapGrid: tapGrid,
+    autoPageMode: autoPageMode,
+    kinsokuCompression: layout.kinsokuCompression,
   );
 }

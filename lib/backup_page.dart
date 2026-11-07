@@ -10,6 +10,7 @@ import 'cloud_sources.dart';
 import 'library_backup.dart';
 import 'library_state.dart';
 import 'local_platform.dart';
+import 'webdav_sync.dart';
 
 class LibraryBackupPage extends StatefulWidget {
   const LibraryBackupPage({super.key, required this.state});
@@ -42,6 +43,26 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
     context: context,
     reduceMotion: widget.state.reduceMotion,
     builder: (_) => CloudBookSyncPanel(sync: _bookSync),
+  );
+
+  Future<void> _openWebDav() => showWebDavBackupSheet(
+    context: context,
+    reduceMotion: widget.state.reduceMotion,
+    preferences: widget.state.preferences,
+    createBackupJson: () async {
+      final backup = await widget.state.createBackup();
+      return backup.encode();
+    },
+    onRestoreBackupJson: (jsonText) => _run('正在解析云端备份…', () async {
+      final backup = await LibraryBackup.parse(jsonText);
+      if (mounted) {
+        setState(() {
+          _preview = backup;
+          _preferences = false;
+          _clipboardPreview = false;
+        });
+      }
+    }),
   );
 
   Future<void> _run(String label, Future<void> Function() action) async {
@@ -311,10 +332,20 @@ class _LibraryBackupPageState extends State<LibraryBackupPage> {
                 ],
                 const SizedBox(height: 16),
                 ContentPanel(
-                  child: GlassTextButton(
-                    key: const ValueKey('backup-cloud-sync'),
-                    onPressed: _busy == null ? _openCloudSync : null,
-                    child: const Text('云端书库同步（S3 / 系统文档）'),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      GlassTextButton(
+                        key: const ValueKey('backup-webdav-entry'),
+                        onPressed: _busy == null ? _openWebDav : null,
+                        child: const Text('WebDAV 云端备份与恢复（坚果云 / Nextcloud）'),
+                      ),
+                      GlassTextButton(
+                        key: const ValueKey('backup-cloud-sync'),
+                        onPressed: _busy == null ? _openCloudSync : null,
+                        child: const Text('云端书库同步（S3 / 系统文档）'),
+                      ),
+                    ],
                   ),
                 ),
               ],

@@ -312,6 +312,15 @@ class _ReaderToolsState extends State<ReaderTools> {
                         ),
                   child: const Text('取词查词典'),
                 ),
+                const SizedBox(height: 8),
+                GlassTextButton(
+                  key: const ValueKey('reader-open-purification'),
+                  onPressed: () => Navigator.pop(
+                    context,
+                    const ReaderOpenPurification(),
+                  ),
+                  child: const Text('正文净化与纠错'),
+                ),
                 if (LocalPlatform.android)
                   AnimatedBuilder(
                     animation: widget.state.readerBehaviorChanges,

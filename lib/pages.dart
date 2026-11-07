@@ -5865,7 +5865,11 @@ class _ReaderPageState extends State<ReaderPage>
         _novel.chapters.isEmpty) {
       return;
     }
-    final catalogueRevision = _novel.chapters.first.revision;
+    var catalogueRevision = _novel.chapters.first.revision;
+    final canResplitTxt =
+        _local != null &&
+        isLocalNovelId(_novel.id) &&
+        _local!.bookFor(_novel.id)?.kind == LocalBookKind.txt;
     _catalogueOpen = true;
     _followTicket++;
     _followScroll.cancel();
@@ -5879,6 +5883,30 @@ class _ReaderPageState extends State<ReaderPage>
           currentChapter: _chapter,
           cache: widget.repository is OfflineNovelRepository
               ? (widget.repository as OfflineNovelRepository).cache
+              : null,
+          onConfigureTocRule: canResplitTxt
+              ? ({
+                  required preset,
+                  customPattern,
+                  required maxChapterChars,
+                }) async {
+                  final updated = await _local!.resplitTxtChapters(
+                    _novel.id,
+                    preset: preset,
+                    customPattern: customPattern,
+                    maxChapterChars: maxChapterChars,
+                  );
+                  if (updated != null && mounted && updated.chapters.isNotEmpty) {
+                    setState(() {
+                      _novel = updated;
+                      catalogueRevision = _novel.chapters.first.revision;
+                      _chapter = _chapter.clamp(0, _novel.chapters.length - 1);
+                      _computeChapterWeights();
+                      _content = _loadContent();
+                    });
+                  }
+                  return updated;
+                }
               : null,
         ),
       );
@@ -5990,12 +6018,16 @@ class _ReaderPageState extends State<ReaderPage>
     }
   }
 
-  /// Design §4: centre 40 % toggles controls; with 点击翻页 on, the side
-  /// columns page (常规 / 左手 / 右手). While controls show, any tap hides them.
   void _tapAt(Offset position, Size size) {
+    final prefs = widget.state.readerPreferences;
+    if (prefs.edgeDeadZone > 0 &&
+        (position.dx < prefs.edgeDeadZone ||
+            position.dx > size.width - prefs.edgeDeadZone)) {
+      return;
+    }
     final action = _chromeTarget
         ? ReaderTapAction.toggle
-        : readerTapAction(position, size, widget.state.readerPreferences);
+        : readerTapAction(position, size, prefs);
     switch (action) {
       case ReaderTapAction.toggle:
         _toggleChrome();
@@ -6003,6 +6035,16 @@ class _ReaderPageState extends State<ReaderPage>
         _pageBy(-1);
       case ReaderTapAction.next:
         _pageBy(1);
+      case ReaderTapAction.previousChapter:
+        _go(_chapter - 1);
+      case ReaderTapAction.nextChapter:
+        _go(_chapter + 1);
+      case ReaderTapAction.toggleListening:
+        if (_listening != null) unawaited(_listen());
+      case ReaderTapAction.addBookmark:
+        unawaited(_quickAddBookmark());
+      case ReaderTapAction.none:
+        break;
     }
   }
 
@@ -6138,7 +6180,16 @@ class _ReaderPageState extends State<ReaderPage>
       );
     }
     return ReaderHighlightText(
-      text: ReaderPurificationStore.shared.purifyParagraph(paragraphs[index]),
+      text: ReaderPurificationStore.shared.purifyParagraph(
+        paragraphs[index],
+        bookId: _novel.id,
+        chapterIndex: _chapter,
+        paragraphIndex: index,
+        chapterTitle: _chapter >= 0 && _chapter < _novel.chapters.length
+            ? _novel.chapters[_chapter].title
+            : null,
+        isFirstParagraph: index == 0,
+      ),
       index: index,
       match: _findMatch,
       style: style,
@@ -7354,6 +7405,9 @@ class _ReaderPageState extends State<ReaderPage>
         case ReaderOpenDictionary():
           _toolsOpen = false;
           await _lookupInChapter(position);
+        case ReaderOpenPurification():
+          _toolsOpen = false;
+          await _openPurificationInChapter(position);
         case null:
           break;
       }
@@ -7363,6 +7417,30 @@ class _ReaderPageState extends State<ReaderPage>
       preview.dispose();
       _savePosition(notify: false);
     }
+  }
+
+  Future<void> _openPurificationInChapter([
+    ReadingPosition? position,
+    String? initialPattern,
+  ]) async {
+    final content = _currentContent;
+    final paragraphIndex =
+        (position?.paragraphIndex ?? _currentPosition()?.paragraphIndex ?? 0)
+            .clamp(0, (content?.paragraphs.length ?? 1) - 1);
+    final chapterTitle = _chapter >= 0 && _chapter < _novel.chapters.length
+        ? _novel.chapters[_chapter].title
+        : null;
+    await showReaderPurificationSheet(
+      context: context,
+      reduceMotion: widget.state.reduceMotion,
+      bookId: _novel.id,
+      bookTitle: _novel.title,
+      chapterIndex: _chapter,
+      chapterTitle: chapterTitle,
+      chapterParagraphs: content?.paragraphs,
+      initialParagraphIndex: paragraphIndex,
+      initialPattern: initialPattern,
+    );
   }
 
   Future<void> _lookupInChapter(ReadingPosition? position) async {
@@ -7409,7 +7487,8 @@ class _ReaderPageState extends State<ReaderPage>
         children: [
           for (final (order, id, label) in const [
             (0, 'find', '章内查找'),
-            (1, 'settings', '全部阅读设置'),
+            (1, 'purify', '正文净化与纠错'),
+            (2, 'settings', '全部阅读设置'),
           ])
             GlassMenuItem(
               order: order,
@@ -7421,6 +7500,7 @@ class _ReaderPageState extends State<ReaderPage>
     );
     if (!mounted) return;
     if (action == 'find') await _findInChapter();
+    if (action == 'purify') await _openPurificationInChapter();
     if (action == 'settings') await _settings();
   }
 

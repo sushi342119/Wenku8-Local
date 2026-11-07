@@ -556,3 +556,235 @@ class ChapterTextIndex {
 
 List<LocalChapterIndex> splitLocalChapters(String normalizedText) =>
     (ChapterTextIndex()..add(normalizedText)).finish();
+
+/// Built-in TXT TOC rule presets inspired by legado-E's `txtTocRule.json`.
+enum TxtTocRulePreset {
+  auto('智能识别（默认）', '', '多族启发式自动识别章节与卷名'),
+  standard(
+    '标准章节（第X章/回/话/节）',
+    r'^[ \t　]*第[ \t　]*[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌]+[ \t　]*[章节節回囘话話幕折卷捲部集篇季期更].*$',
+    '第1章 标题 / 第一百零二回 标题',
+  ),
+  numbered(
+    '序号与括号标题（1. / (1) / 【01】）',
+    r'^[ \t　]*(?:[（(【\[［〖〔][0-9０-９一二三四五六七八九十百千万零〇两]+[）)】\]］〗〕]|[0-9０-９一二三四五六七八九十百千万零〇两]{1,6}[、.．:： \t　]).{0,40}$',
+    '1. 标题 / （12）标题 / 【01】标题',
+  ),
+  symbol(
+    '特殊符号标题（===标题=== / ***标题）',
+    r'^[ \t　]*(?:={2,6}|[*＊☆◆●—\-]{2,6})[ \t　]*[^=\n*＊]{1,40}?[ \t　]*={0,6}$',
+    '=== 第一章 === / *** 楔子 ***',
+  ),
+  fixedLength(
+    '按字数自动分节（无目录小说）',
+    '__fixed_length__',
+    '按约 8000 字在自然段边界自动切分章节',
+  );
+
+  const TxtTocRulePreset(this.label, this.pattern, this.example);
+  final String label;
+  final String pattern;
+  final String example;
+}
+
+/// Subdivides any chapter whose UTF-16 length exceeds [maxChapterChars] at
+/// natural newline boundaries (`\n`), preserving exact UTF-16 and UTF-8 ranges.
+List<LocalChapterIndex> subdivideOversizedChapters(
+  String normalizedText,
+  List<LocalChapterIndex> chapters, {
+  int maxChapterChars = 12000,
+}) {
+  if (maxChapterChars <= 0 || normalizedText.isEmpty) return chapters;
+  final result = <LocalChapterIndex>[];
+  for (final ch in chapters) {
+    if (ch.length <= maxChapterChars) {
+      result.add(ch);
+      continue;
+    }
+    final chapterEnd = (ch.offset + ch.length).clamp(0, normalizedText.length);
+    var cursor = ch.offset.clamp(0, chapterEnd);
+    var byteCursor = ch.byteOffset >= 0
+        ? ch.byteOffset
+        : utf8.encode(normalizedText.substring(0, cursor)).length;
+    var partIndex = 1;
+    while (cursor < chapterEnd) {
+      final remaining = chapterEnd - cursor;
+      if (remaining <= maxChapterChars) {
+        final slice = normalizedText.substring(cursor, chapterEnd);
+        final sliceBytes = utf8.encode(slice).length;
+        result.add(
+          LocalChapterIndex(
+            partIndex == 1 ? ch.title : '${ch.title}（$partIndex）',
+            cursor,
+            remaining,
+            volume: ch.volume,
+            byteOffset: byteCursor,
+            byteLength: sliceBytes,
+          ),
+        );
+        break;
+      }
+      var target = cursor + maxChapterChars;
+      // Prefer splitting right after a newline near target.
+      var newline = normalizedText.indexOf('\n', target);
+      if (newline < 0 || newline >= chapterEnd || newline - target > 2000) {
+        newline = normalizedText.lastIndexOf('\n', target);
+      }
+      final splitAt = (newline > cursor && newline < chapterEnd)
+          ? newline + 1
+          : target;
+      final slice = normalizedText.substring(cursor, splitAt);
+      final sliceBytes = utf8.encode(slice).length;
+      result.add(
+        LocalChapterIndex(
+          '${ch.title}（$partIndex）',
+          cursor,
+          splitAt - cursor,
+          volume: ch.volume,
+          byteOffset: byteCursor,
+          byteLength: sliceBytes,
+        ),
+      );
+      cursor = splitAt;
+      byteCursor += sliceBytes;
+      partIndex++;
+    }
+  }
+  return result.isEmpty ? chapters : List.unmodifiable(result);
+}
+
+/// Splits [normalizedText] using either a custom regex [customPattern],
+/// fixed-length segmentation (`__fixed_length__`), or the default heuristic
+/// splitter, optionally subdividing chapters larger than [maxChapterChars].
+List<LocalChapterIndex> splitLocalChaptersCustom(
+  String normalizedText, {
+  String? customPattern,
+  int maxChapterChars = 0,
+}) {
+  final pattern = customPattern?.trim() ?? '';
+  if (pattern == TxtTocRulePreset.fixedLength.pattern) {
+    final fullBytes = utf8.encode(normalizedText).length;
+    final single = [
+      LocalChapterIndex(
+        '正文',
+        0,
+        normalizedText.length,
+        byteOffset: 0,
+        byteLength: fullBytes,
+      ),
+    ];
+    return subdivideOversizedChapters(
+      normalizedText,
+      single,
+      maxChapterChars: maxChapterChars > 0 ? maxChapterChars : 8000,
+    );
+  }
+  if (pattern.isEmpty) {
+    final base = splitLocalChapters(normalizedText);
+    return maxChapterChars > 0
+        ? subdivideOversizedChapters(
+            normalizedText,
+            base,
+            maxChapterChars: maxChapterChars,
+          )
+        : base;
+  }
+
+  final regExp = RegExp(pattern, multiLine: true);
+  final rawChapters = <LocalChapterIndex>[];
+  var lineStart = 0;
+  var lineByteStart = 0;
+  final matches = <({String title, int start, int content, int startBytes, int contentBytes})>[];
+
+  while (lineStart <= normalizedText.length) {
+    final nl = normalizedText.indexOf('\n', lineStart);
+    final lineEnd = nl < 0 ? normalizedText.length : nl;
+    final nextStart = nl < 0 ? normalizedText.length : nl + 1;
+    final line = normalizedText.substring(lineStart, lineEnd);
+    final lineBytes = utf8.encode(line).length + (nl < 0 ? 0 : 1);
+    final nextBytes = lineByteStart + lineBytes;
+    final trimmed = line.trim();
+    if (trimmed.isNotEmpty && trimmed.length <= 120 && regExp.hasMatch(line)) {
+      matches.add((
+        title: trimmed,
+        start: lineStart,
+        content: nextStart,
+        startBytes: lineByteStart,
+        contentBytes: nextBytes,
+      ));
+    }
+    if (nl < 0) break;
+    lineStart = nextStart;
+    lineByteStart = nextBytes;
+  }
+
+  final totalBytes = lineByteStart;
+  if (matches.isEmpty) {
+    final fallback = [
+      LocalChapterIndex(
+        '正文',
+        0,
+        normalizedText.length,
+        byteOffset: 0,
+        byteLength: totalBytes,
+      ),
+    ];
+    return maxChapterChars > 0
+        ? subdivideOversizedChapters(
+            normalizedText,
+            fallback,
+            maxChapterChars: maxChapterChars,
+          )
+        : fallback;
+  }
+
+  if (matches.first.start > 0 &&
+      normalizedText.substring(0, matches.first.start).trim().isNotEmpty) {
+    rawChapters.add(
+      LocalChapterIndex(
+        '前言',
+        0,
+        matches.first.start,
+        byteOffset: 0,
+        byteLength: matches.first.startBytes,
+      ),
+    );
+  }
+
+  for (var i = 0; i < matches.length; i++) {
+    final m = matches[i];
+    final next = i + 1 < matches.length ? matches[i + 1] : null;
+    final end = next?.start ?? normalizedText.length;
+    final endBytes = next?.startBytes ?? totalBytes;
+    if (end <= m.content) continue;
+    rawChapters.add(
+      LocalChapterIndex(
+        m.title,
+        m.content,
+        end - m.content,
+        byteOffset: m.contentBytes,
+        byteLength: endBytes - m.contentBytes,
+      ),
+    );
+  }
+
+  if (rawChapters.isEmpty) {
+    return [
+      LocalChapterIndex(
+        '正文',
+        0,
+        normalizedText.length,
+        byteOffset: 0,
+        byteLength: totalBytes,
+      ),
+    ];
+  }
+
+  return maxChapterChars > 0
+      ? subdivideOversizedChapters(
+          normalizedText,
+          rawChapters,
+          maxChapterChars: maxChapterChars,
+        )
+      : List.unmodifiable(rawChapters);
+}

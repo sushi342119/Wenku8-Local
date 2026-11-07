@@ -33,7 +33,9 @@ class SpeechVoice {
       (offline && supportedSystemSpeechEngine(engine));
   // Offline engine plumbing is retained for development, not offered as a
   // working product feature until device coverage and synthesis are ready.
-  bool get availableForListening => source == ListeningSource.edge && supported;
+  bool get availableForListening =>
+      (source == ListeningSource.edge || source == ListeningSource.custom) &&
+      supported;
   Map<String, Object?> toJson() => {
     'id': id,
     'label': label,

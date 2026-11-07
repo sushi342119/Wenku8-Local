@@ -518,6 +518,66 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       ? null
       : _pagination!.pages[_visiblePages.first].anchor;
 
+  late final _autoPager = AnimationController(
+    vsync: this,
+    duration: _autoPageDuration,
+  )..addStatusListener(_onAutoPageStatus);
+
+  Duration get _autoPageDuration => Duration(
+    milliseconds:
+        ((360.0 / widget.preferences.autoScrollSpeed.clamp(8.0, 80.0)) * 1000)
+            .round()
+            .clamp(4000, 45000),
+  );
+
+  void _syncAutoPager({bool restart = false}) {
+    if (!mounted ||
+        widget.preferences.autoPageMode == ReaderAutoPageMode.off ||
+        _pagination == null ||
+        _layingOut) {
+      _autoPager.stop();
+      _autoPager.value = 0;
+      return;
+    }
+    _autoPager.duration = _autoPageDuration;
+    if (restart) {
+      _autoPager.forward(from: 0);
+    } else if (!_autoPager.isAnimating && _swipeOrigin == null) {
+      _autoPager.forward();
+    }
+  }
+
+  void _onAutoPageStatus(AnimationStatus status) {
+    if (status != AnimationStatus.completed || !mounted) return;
+    final mode = widget.preferences.autoPageMode;
+    if (mode == ReaderAutoPageMode.off || _pagination == null || _layingOut) {
+      return;
+    }
+    if (mode == ReaderAutoPageMode.curtain) {
+      final nextSpread = _restingSpread + 1;
+      if (nextSpread < _spreadCount) {
+        final target = (nextSpread * _perSpread - _leadingPages).clamp(
+          0,
+          _pagination!.pages.length - 1,
+        );
+        _pendingPosition = null;
+        _pendingFraction = null;
+        _move(target, animate: false);
+        _autoPager.forward(from: 0);
+      } else {
+        _autoPager.value = 0;
+        _moveBoundary(1);
+      }
+    } else if (mode == ReaderAutoPageMode.timed) {
+      final moved = widget.controller.pageBy(1);
+      if (moved) {
+        _autoPager.forward(from: 0);
+      } else {
+        _autoPager.value = 0;
+      }
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -532,6 +592,17 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
   @override
   void didUpdateWidget(ReaderPagedView old) {
     super.didUpdateWidget(old);
+    if (old.preferences.autoPageMode != widget.preferences.autoPageMode ||
+        old.preferences.autoScrollSpeed != widget.preferences.autoScrollSpeed) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _syncAutoPager(
+            restart:
+                old.preferences.autoPageMode != widget.preferences.autoPageMode,
+          );
+        }
+      });
+    }
     if (old.preferences.chapterEntrance &&
         !widget.preferences.chapterEntrance &&
         _initialArrival) {
@@ -604,6 +675,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
   void dispose() {
     _generation++;
     if (widget.controller._owner == this) widget.controller._owner = null;
+    _autoPager.dispose();
     _pager?.dispose();
     _arrival.dispose();
     _paperClock.dispose();
@@ -1185,6 +1257,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       oldPager?.dispose();
       if (mounted && ticket == _generation) {
+        _syncAutoPager(restart: chapterChanged || firstLayout);
         widget.onReady();
         widget.onChanged();
       }
@@ -1963,12 +2036,137 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
                 ),
               ),
             );
+      final autoMode = widget.preferences.autoPageMode;
+      final autoOverlay =
+          autoMode != ReaderAutoPageMode.off &&
+              !_layingOut &&
+              _pagination != null
+          ? AnimatedBuilder(
+              animation: _autoPager,
+              builder: (context, _) {
+                final progress = _autoPager.value.clamp(0.0, 1.0);
+                final primary = Theme.of(context).colorScheme.primary;
+                if (autoMode == ReaderAutoPageMode.timed) {
+                  return Positioned(
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    child: IgnorePointer(
+                      key: const ValueKey('reader-auto-page-indicator'),
+                      child: Align(
+                        alignment: Alignment.topLeft,
+                        child: Container(
+                          width: _frameSize.width * progress,
+                          height: 2.5,
+                          color: primary.withValues(alpha: 0.55),
+                        ),
+                      ),
+                    ),
+                  );
+                }
+                final isVertical =
+                    (_publishedMode ?? widget.preferences.mode) ==
+                    ReaderMode.vertical;
+                final nextSpread = _restingSpread + 1;
+                final nextPageOverlay = nextSpread < _spreadCount
+                    ? ColoredBox(
+                        color: widget.preferences.background(
+                          Theme.of(context).brightness == Brightness.dark,
+                        ),
+                        child: _spreadBody(
+                          nextSpread,
+                          reflow: false,
+                          turn: false,
+                        ),
+                      )
+                    : ColoredBox(
+                        color: widget.preferences
+                            .background(
+                              Theme.of(context).brightness == Brightness.dark,
+                            )
+                            .withValues(alpha: 0.92),
+                      );
+                final scanY = _frameSize.height * progress;
+                final scanX = _frameSize.width * (1.0 - progress);
+                return Positioned.fill(
+                  child: IgnorePointer(
+                    key: const ValueKey('reader-auto-curtain-overlay'),
+                    child: ExcludeSemantics(
+                      child: SelectionContainer.disabled(
+                        child: Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ClipRect(
+                              clipper: _AutoCurtainClipper(
+                                progress: progress,
+                                vertical: isVertical,
+                              ),
+                              child: nextPageOverlay,
+                            ),
+                            if (!isVertical)
+                              Positioned(
+                                top: (scanY - 1).clamp(0.0, _frameSize.height),
+                                left: 0,
+                                right: 0,
+                                child: Container(
+                                  key: const ValueKey(
+                                    'reader-auto-curtain-line',
+                                  ),
+                                  height: 2,
+                                  decoration: BoxDecoration(
+                                    color: primary.withValues(alpha: 0.65),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.14,
+                                        ),
+                                        blurRadius: 4,
+                                        offset: const Offset(0, 1.5),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            else
+                              Positioned(
+                                left: (scanX - 1).clamp(0.0, _frameSize.width),
+                                top: 0,
+                                bottom: 0,
+                                child: Container(
+                                  key: const ValueKey(
+                                    'reader-auto-curtain-line',
+                                  ),
+                                  width: 2,
+                                  decoration: BoxDecoration(
+                                    color: primary.withValues(alpha: 0.65),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withValues(
+                                          alpha: 0.14,
+                                        ),
+                                        blurRadius: 4,
+                                        offset: const Offset(-1.5, 0),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              },
+            )
+          : null;
       final chapterFrame = Stack(
         key: const ValueKey('reader-chapter-transition'),
         fit: StackFit.expand,
         children: [
           if (outgoingChapter != null && _chapterTurnForward) outgoingChapter,
           turning,
+          if (autoOverlay != null) autoOverlay,
           if (outgoingChapter != null && !_chapterTurnForward) outgoingChapter,
         ],
       );
@@ -2044,7 +2242,6 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
         originDelta: Offset.zero,
         // Each paragraph/vertical column owns its outgoing ink. A
         // second full-page tail paints the same glyphs twice while
-        // the viewport shrinks, darkening them for one transition.
         child: OverflowBox(
           alignment: Alignment.topLeft,
           minWidth: _frameSize.width,
@@ -2057,4 +2254,23 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
       return viewport;
     },
   );
+}
+
+class _AutoCurtainClipper extends CustomClipper<Rect> {
+  const _AutoCurtainClipper({required this.progress, required this.vertical});
+  final double progress;
+  final bool vertical;
+
+  @override
+  Rect getClip(Size size) {
+    final p = progress.clamp(0.0, 1.0);
+    if (vertical) {
+      return Rect.fromLTRB(size.width * (1.0 - p), 0, size.width, size.height);
+    }
+    return Rect.fromLTRB(0, 0, size.width, size.height * p);
+  }
+
+  @override
+  bool shouldReclip(_AutoCurtainClipper oldClipper) =>
+      oldClipper.progress != progress || oldClipper.vertical != vertical;
 }
