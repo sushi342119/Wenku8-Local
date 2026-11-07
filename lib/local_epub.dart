@@ -646,8 +646,8 @@ class _LenientEpubInputFileStream extends InputFileStream {
 
   @override
   String readString({int? size, bool utf8 = true}) {
-    if (!utf8) {
-      return super.readString(size: size, utf8: false);
+    if (!utf8 || size == null) {
+      return super.readString(size: size, utf8: utf8);
     }
     final bytes = readBytes(size).toUint8List();
     try {

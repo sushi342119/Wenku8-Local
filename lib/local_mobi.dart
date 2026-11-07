@@ -206,7 +206,7 @@ MobiBookData extractMobiBook(
       )
       .trim();
 
-  String ExtractHeaderAndText(int headerRecordIndex) {
+  String extractHeaderAndText(int headerRecordIndex) {
     final rec0 = recordAt(headerRecordIndex);
     if (rec0.length < 16) return '';
     final compression = _readUint16BE(rec0, 0);
@@ -309,14 +309,14 @@ MobiBookData extractMobiBook(
     }
   }
 
-  var text = ExtractHeaderAndText(0);
+  var text = extractHeaderAndText(0);
   // Check for hybrid KF8/AZW3 BOUNDARY record if primary text is empty.
   if (text.isEmpty) {
     for (var i = 1; i < recordCount - 1; i++) {
       final rec = recordAt(i);
       if (rec.length == 8 &&
           ascii.decode(rec, allowInvalid: true) == 'BOUNDARY') {
-        text = ExtractHeaderAndText(i + 1);
+        text = extractHeaderAndText(i + 1);
         if (text.isNotEmpty) break;
       }
     }

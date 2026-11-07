@@ -2166,7 +2166,7 @@ class _ReaderPagedViewState extends State<ReaderPagedView>
         children: [
           if (outgoingChapter != null && _chapterTurnForward) outgoingChapter,
           turning,
-          if (autoOverlay != null) autoOverlay,
+          ?autoOverlay,
           if (outgoingChapter != null && !_chapterTurnForward) outgoingChapter,
         ],
       );
