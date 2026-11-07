@@ -6,7 +6,6 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'app_interactions.dart';
 import 'app_ui.dart';
 
 const String _webDavConfigStorageKey = 'webdav.backup.config.v1';
@@ -364,7 +363,8 @@ class _WebDavBackupSheetState extends State<_WebDavBackupSheet> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return GlassSheet(
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
       child: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

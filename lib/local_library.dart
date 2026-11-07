@@ -32,6 +32,7 @@ part 'local_text_worker.dart';
 /// 因此书架、历史、进度等既有 `id > 0` 逻辑无需改动。
 const localNovelIdBase = 0x40000000;
 const localTextMaxSourceBytes = 256 * 1024 * 1024;
+const localEpubMaxSourceBytes = 1024 * 1024 * 1024;
 const localTextMaxDecodedBytes = 3 * localTextMaxSourceBytes;
 const localTextMaxReadCodeUnits = 4 * 1024 * 1024;
 
@@ -1314,7 +1315,6 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (nextChapters.isEmpty) return toNovel(book);
     final updated = book.copyWith(
       chapters: nextChapters,
-      revision: book.revision + 1,
       chapterSplitVersion: _chapterSplitVersion,
       customTitle: book.customTitle,
       customAuthor: book.customAuthor,
@@ -2985,16 +2985,34 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }) async {
     final kind = localBookKindForFileName(name);
     if (kind == LocalBookKind.epub) {
-      return _importEpub(
-        localPath: path,
-        uri: Uri.file(path).toString(),
-        name: name,
-        size: size,
-        modified: modified,
-        sourceId: sourceId,
-        sourceKey: sourceKey,
-        existing: existing,
-      );
+      final epubId = existing?.id ?? _nextId();
+      try {
+        return await _importEpub(
+          localPath: path,
+          uri: Uri.file(path).toString(),
+          name: name,
+          size: size,
+          modified: modified,
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          existing: existing,
+          id: epubId,
+        );
+      } on StateError {
+        final fallback = await _tryImportMisnamedEpubFile(
+          localPath: path,
+          uri: 'file://$path',
+          name: name,
+          size: size,
+          modified: modified,
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          id: epubId,
+          existing: existing,
+        );
+        if (fallback != null) return fallback;
+        rethrow;
+      }
     }
     if (size > localTextMaxSourceBytes) {
       throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
@@ -3336,12 +3354,12 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
       if (await File(legacyPath).exists()) return legacyPath;
       return Uri.parse(fileUri).toFilePath();
     }
-    if (size > localTextMaxSourceBytes) {
-      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    if (size > localEpubMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
     }
     final cacheFile = await _epubCacheFile(id);
     if (await cacheFile.exists() &&
-        await cacheFile.length() == size &&
+        (size <= 0 || await cacheFile.length() == size) &&
         sourceFingerprint.isNotEmpty &&
         await _epubSourceFingerprint(cacheFile.path) == sourceFingerprint) {
       return cacheFile.path;
@@ -3367,14 +3385,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   }
 
   Future<File> _stageEpubCopy(String uri, int size, Directory cacheDir) async {
-    if (size > localTextMaxSourceBytes) {
-      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    if (size > localEpubMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
     }
     final stagingDir = await cacheDir.createTemp('import-');
     final staged = File('${stagingDir.path}/book.epub');
     try {
       await LocalPlatform.copyDocumentToFile(uri, staged.path);
-      if (!await staged.exists() || await staged.length() != size) {
+      final actualLength = await staged.exists() ? await staged.length() : -1;
+      if (actualLength <= 0 || (size > 0 && actualLength != size)) {
         throw StateError('EPUB 缓存长度不一致，请重新扫描');
       }
       return staged;
@@ -3425,8 +3444,8 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     LocalBook? existing,
     int? id,
   }) async {
-    if (size > localTextMaxSourceBytes) {
-      throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+    if (size > localEpubMaxSourceBytes) {
+      throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
     }
     final bookId = id ?? existing?.id ?? _nextId();
     final epub = await EpubPackage.open(localPath);
@@ -3464,6 +3483,122 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
+  /// 当扩展名为 `.epub` 的文件实际是改了后缀名的 `.mobi` 或纯文本 `.txt` 时，
+  /// 自动按真实格式回退导入，避免网文资源因扩展名不符报错。
+  Future<LocalBook?> _tryImportMisnamedEpubFile({
+    required String localPath,
+    required String uri,
+    required String name,
+    required int size,
+    required int modified,
+    required String sourceId,
+    required String sourceKey,
+    required int id,
+    LocalBook? existing,
+  }) async {
+    try {
+      final file = File(localPath);
+      final stat = await file.stat();
+      if (stat.type != FileSystemEntityType.file ||
+          stat.size < 64 ||
+          stat.size > localTextMaxSourceBytes) {
+        return null;
+      }
+      final head = await file.openRead(0, 4096).fold<List<int>>(
+        <int>[],
+        (acc, chunk) => acc..addAll(chunk),
+      );
+      if (head.length < 4) return null;
+      // 排除 ZIP / RAR / 7z / PDF 等二进制归档头。
+      if ((head[0] == 0x50 && head[1] == 0x4B) ||
+          (head[0] == 0x52 &&
+              head[1] == 0x61 &&
+              head[2] == 0x72 &&
+              head[3] == 0x21) ||
+          (head.length >= 6 &&
+              head[0] == 0x37 &&
+              head[1] == 0x7A &&
+              head[2] == 0xBC &&
+              head[3] == 0xAF) ||
+          (head[0] == 0x25 &&
+              head[1] == 0x50 &&
+              head[2] == 0x44 &&
+              head[3] == 0x46)) {
+        return null;
+      }
+      if (head.length >= 68) {
+        final magic = ascii.decode(head.sublist(60, 68), allowInvalid: true);
+        if (magic == 'BOOKMOBI' || magic == 'TEXtREAd') {
+          final rawBytes = await file.readAsBytes();
+          final mobi = extractMobiBook(
+            rawBytes,
+            fallbackTitle: _titleFromName(name),
+          );
+          if (mobi.text.isEmpty) return null;
+          final sourceFingerprint = sha256.convert(rawBytes).toString();
+          final textFingerprint = sha256
+              .convert(utf8.encode(mobi.text))
+              .toString();
+          final target = '${_booksDir.path}/book_${id}_$textFingerprint.txt';
+          await File(target).writeAsString(mobi.text, flush: true);
+          return LocalBook(
+            id: id,
+            title: mobi.title.isNotEmpty ? mobi.title : _titleFromName(name),
+            author: mobi.author.isNotEmpty
+                ? mobi.author
+                : _authorFromName(name),
+            fileUri: uri,
+            fileName: name,
+            kind: LocalBookKind.txt,
+            size: size,
+            modified: modified,
+            textFingerprint: textFingerprint,
+            sourceFingerprint: sourceFingerprint,
+            chapters: mobi.chapters,
+            pageCount: 0,
+            wordCount: _countWords(mobi.text),
+            sourceId: sourceId,
+            sourceKey: sourceKey,
+            customTitle: existing?.customTitle,
+            customAuthor: existing?.customAuthor,
+            chapterSplitVersion: _chapterSplitVersion,
+          );
+        }
+      }
+      final hasUtf16Bom =
+          (head[0] == 0xFF && head[1] == 0xFE) ||
+          (head[0] == 0xFE && head[1] == 0xFF);
+      final nulCount = head.where((b) => b == 0).length;
+      if (!hasUtf16Bom && nulCount > head.length ~/ 20) {
+        return null;
+      }
+      final processed = await _importText(localPath, id, direct: true);
+      if (processed.inputLength == 0) return null;
+      return LocalBook(
+        id: id,
+        title: _titleFromName(name),
+        author: _authorFromName(name),
+        fileUri: uri,
+        fileName: name,
+        kind: LocalBookKind.txt,
+        size: size,
+        modified: modified,
+        textFingerprint: processed.fingerprint,
+        sourceFingerprint: processed.sourceFingerprint,
+        chapters: processed.chapters,
+        pageCount: 0,
+        wordCount: processed.wordCount,
+        sourceId: sourceId,
+        sourceKey: sourceKey,
+        customTitle: existing?.customTitle,
+        customAuthor: existing?.customAuthor,
+        chapterSplitVersion: _chapterSplitVersion,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<LocalBook?> _importEntry({
     required Map<String, File?> epubCacheBackups,
     required String uri,
@@ -3480,23 +3615,40 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     final title = _titleFromName(name);
     final author = _authorFromName(name);
     if (kind == LocalBookKind.epub) {
-      if (size > localTextMaxSourceBytes) {
-        throw const FormatException('EPUB 文件超过 256 MiB，无法导入');
+      if (size > localEpubMaxSourceBytes) {
+        throw const FormatException('EPUB 文件超过 1 GiB，无法导入');
       }
       final cacheFile = await _epubCacheFile(id);
       final staged = await _stageEpubCopy(uri, size, cacheFile.parent);
       try {
-        final book = await _importEpub(
-          localPath: staged.path,
-          uri: uri,
-          name: name,
-          size: size,
-          modified: modified,
-          sourceId: sourceId,
-          sourceKey: sourceKey,
-          existing: existing,
-          id: id,
-        );
+        LocalBook? book;
+        try {
+          book = await _importEpub(
+            localPath: staged.path,
+            uri: uri,
+            name: name,
+            size: size,
+            modified: modified,
+            sourceId: sourceId,
+            sourceKey: sourceKey,
+            existing: existing,
+            id: id,
+          );
+        } on StateError {
+          final fallback = await _tryImportMisnamedEpubFile(
+            localPath: staged.path,
+            uri: uri,
+            name: name,
+            size: size,
+            modified: modified,
+            sourceId: sourceId,
+            sourceKey: sourceKey,
+            id: id,
+            existing: existing,
+          );
+          if (fallback != null) return fallback;
+          rethrow;
+        }
         if (book != null) {
           if (!epubCacheBackups.containsKey(cacheFile.path)) {
             File? backup;
@@ -3541,6 +3693,43 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
     if (size > localTextMaxSourceBytes) {
       throw const FormatException('TXT 文件过大：超过 256 MiB 导入上限');
+    }
+    if (isMobiFileName(name)) {
+      final cacheFile = await _epubCacheFile(id);
+      final staged = await _stageEpubCopy(uri, size, cacheFile.parent);
+      try {
+        final rawBytes = await staged.readAsBytes();
+        final mobi = extractMobiBook(rawBytes, fallbackTitle: title);
+        if (mobi.text.isEmpty) return null;
+        final sourceFingerprint = sha256.convert(rawBytes).toString();
+        final textFingerprint = sha256
+            .convert(utf8.encode(mobi.text))
+            .toString();
+        final target = '${_booksDir.path}/book_${id}_$textFingerprint.txt';
+        await File(target).writeAsString(mobi.text, flush: true);
+        return LocalBook(
+          id: id,
+          title: mobi.title.isNotEmpty ? mobi.title : title,
+          author: mobi.author.isNotEmpty ? mobi.author : author,
+          fileUri: uri,
+          fileName: name,
+          kind: LocalBookKind.txt,
+          size: size,
+          modified: modified,
+          textFingerprint: textFingerprint,
+          sourceFingerprint: sourceFingerprint,
+          chapters: mobi.chapters,
+          pageCount: 0,
+          wordCount: _countWords(mobi.text),
+          sourceId: sourceId,
+          sourceKey: sourceKey,
+          customTitle: existing?.customTitle,
+          customAuthor: existing?.customAuthor,
+          chapterSplitVersion: _chapterSplitVersion,
+        );
+      } finally {
+        await staged.parent.delete(recursive: true);
+      }
     }
     final processed = await _importText(uri, id);
     if (processed.inputLength == 0) return null;

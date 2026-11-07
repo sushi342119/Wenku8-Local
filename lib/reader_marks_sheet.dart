@@ -24,11 +24,8 @@ class ReaderMarksSheet extends StatefulWidget {
   final Novel novel;
   final int currentChapter;
   final OfflineCacheStore? cache;
-  final Future<Novel?> Function({
-    required TxtTocRulePreset preset,
-    String? customPattern,
-    required int maxChapterChars,
-  })? onConfigureTocRule;
+  final Future<Novel?> Function(String? customPattern, int maxChapterChars)?
+  onConfigureTocRule;
 
   @override
   State<ReaderMarksSheet> createState() => _ReaderMarksSheetState();

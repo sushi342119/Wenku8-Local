@@ -57,7 +57,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         private const val MAX_FONT_BYTES = 100 * 1024 * 1024
         private const val MAX_BYTES = 4 * 1024 * 1024
         private const val MAX_TEXT_BYTES = 256 * 1024 * 1024
-        private const val MAX_TEXT_BUFFER_BYTES = 4 * 1024 * 1024
+        private const val MAX_TEXT_BUFFER_BYTES = 32 * 1024 * 1024
         private const val MAX_SCAN_FILES = 30000
         private const val IO_TIMEOUT_MS = 20000L
         private const val PDF_CACHE_MAX_BYTES = 256L * 1024 * 1024
@@ -713,9 +713,22 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             val hasUtf16BeBom = sample.size >= 2 &&
                 sample[0] == 0xFE.toByte() &&
                 sample[1] == 0xFF.toByte()
+            var evenZeros = 0
+            var oddZeros = 0
+            val pairCount = sample.size / 2
+            for (i in 0 until pairCount) {
+                if (sample[i * 2] == 0.toByte()) evenZeros++
+                if (sample[i * 2 + 1] == 0.toByte()) oddZeros++
+            }
+            val likelyUtf16LeNoBom = !hasUtf16LeBom && !hasUtf16BeBom &&
+                pairCount >= 8 && oddZeros > pairCount / 4 && evenZeros <= pairCount / 20
+            val likelyUtf16BeNoBom = !hasUtf16LeBom && !hasUtf16BeBom &&
+                pairCount >= 8 && evenZeros > pairCount / 4 && oddZeros <= pairCount / 20
             val big5 = runCatching { charset("Big5-HKSCS") }.getOrElse { charset("Big5") }
             val encodings = buildList {
                 if (hasUtf16LeBom || hasUtf16BeBom) add(Charsets.UTF_16)
+                if (likelyUtf16LeNoBom) add(Charsets.UTF_16LE)
+                if (likelyUtf16BeNoBom) add(Charsets.UTF_16BE)
                 add(Charsets.UTF_8)
                 add(charset("GB18030"))
                 add(big5)
@@ -726,7 +739,26 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                         .onMalformedInput(CodingErrorAction.REPORT)
                         .onUnmappableCharacter(CodingErrorAction.REPORT)).use { reader ->
                         decoded.bufferedWriter(Charsets.UTF_8).use { writer ->
-                            reader.copyTo(writer, 32768)
+                            val charBuf = CharArray(32768)
+                            while (true) {
+                                val n = reader.read(charBuf)
+                                if (n < 0) break
+                                var hasNul = false
+                                for (i in 0 until n) {
+                                    if (charBuf[i] == '\u0000') {
+                                        hasNul = true
+                                        break
+                                    }
+                                }
+                                if (!hasNul) {
+                                    writer.write(charBuf, 0, n)
+                                } else {
+                                    for (i in 0 until n) {
+                                        val c = charBuf[i]
+                                        if (c != '\u0000') writer.write(c.code)
+                                    }
+                                }
+                            }
                         }
                     }
                     return if (withFingerprint) mapOf(
@@ -735,23 +767,39 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     ) else decoded.absolutePath
                 } catch (_: CharacterCodingException) { }
             }
-            // 若严格解码因个别损坏字节失败，只要样本不含二进制 NUL 字节（或具备 UTF-16 BOM），
-            // 则在 UTF-8 与 GB18030 之间选择替换字符（\uFFFD）更少的编码做容错流式解码。
-            if (sample.isNotEmpty() && (hasUtf16LeBom || hasUtf16BeBom || sample.none { it == 0.toByte() })) {
+            // 若严格解码因个别损坏字节或夹杂 NUL 字节失败，选择替换字符（\uFFFD）更少的编码做容错流式解码，
+            // 并自动剔除 \u0000 字符，避免网文 TXT 因零星坏字节而整本扫描失败。
+            if (sample.isNotEmpty()) {
+                val cleanedSample = if (sample.any { it == 0.toByte() } &&
+                    !hasUtf16LeBom && !hasUtf16BeBom && !likelyUtf16LeNoBom && !likelyUtf16BeNoBom) {
+                    sample.filter { it != 0.toByte() }.toByteArray()
+                } else {
+                    sample
+                }
                 val fallbackCharset = when {
                     hasUtf16LeBom || hasUtf16BeBom -> Charsets.UTF_16
+                    likelyUtf16LeNoBom -> Charsets.UTF_16LE
+                    likelyUtf16BeNoBom -> Charsets.UTF_16BE
                     else -> {
                         val gb = charset("GB18030")
-                        val utf8Bad = sample.toString(Charsets.UTF_8).count { it == '\uFFFD' }
-                        val gbBad = String(sample, gb).count { it == '\uFFFD' }
-                        if (gbBad < utf8Bad) gb else Charsets.UTF_8
+                        val utf8Bad = cleanedSample.toString(Charsets.UTF_8).count { it == '\uFFFD' }
+                        val gbBad = String(cleanedSample, gb).count { it == '\uFFFD' }
+                        if (gbBad <= utf8Bad) gb else Charsets.UTF_8
                     }
                 }
                 InputStreamReader(raw.inputStream(), fallbackCharset.newDecoder()
                     .onMalformedInput(CodingErrorAction.REPLACE)
                     .onUnmappableCharacter(CodingErrorAction.REPLACE)).use { reader ->
                     decoded.bufferedWriter(Charsets.UTF_8).use { writer ->
-                        reader.copyTo(writer, 32768)
+                        val charBuf = CharArray(32768)
+                        while (true) {
+                            val n = reader.read(charBuf)
+                            if (n < 0) break
+                            for (i in 0 until n) {
+                                val c = charBuf[i]
+                                if (c != '\u0000') writer.write(c.code)
+                            }
+                        }
                     }
                 }
                 return if (withFingerprint) mapOf(
@@ -777,7 +825,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                 if (Thread.currentThread().isInterrupted) throw InterruptedException()
                 val count = input.read(buffer)
                 if (count < 0) break
-                if (bytes.size() + count > MAX_TEXT_BUFFER_BYTES) throw IllegalArgumentException("文本缓冲区超过 4 MiB，请使用流式导入")
+                if (bytes.size() + count > MAX_TEXT_BUFFER_BYTES) throw IllegalArgumentException("文本缓冲区超过 32 MiB，请使用流式导入")
                 bytes.write(buffer, 0, count)
             }
         } ?: throw IllegalStateException("File is not readable")
@@ -820,7 +868,7 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
         } catch (_: Exception) { /* fall through to lenient */ }
         val utf8Text = bytes.toString(Charsets.UTF_8)
         val gbText = runCatching { String(bytes, charset("GB18030")) }.getOrNull() ?: return utf8Text
-        return if (gbText.count { it == '\uFFFD' } < utf8Text.count { it == '\uFFFD' }) gbText else utf8Text
+        return if (gbText.count { it == '\uFFFD' } <= utf8Text.count { it == '\uFFFD' }) gbText else utf8Text
     }
 
     /** 解码 Dart 传来的原始字节，支持自动识别 UTF-8/GB18030。 */

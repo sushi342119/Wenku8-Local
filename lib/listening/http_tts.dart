@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
@@ -406,7 +407,8 @@ class _HttpTtsConfigSheetState extends State<_HttpTtsConfigSheet> {
       listenable: HttpTtsStore.shared,
       builder: (context, _) {
         final engines = HttpTtsStore.shared.engines;
-        return GlassSheet(
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

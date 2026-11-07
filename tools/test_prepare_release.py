@@ -181,7 +181,7 @@ class ReleasePublicationTest(unittest.TestCase):
             )
             return result, json.loads(state_file.read_text())
 
-    def test_all_triggers_create_only_a_draft(self):
+    def test_all_triggers_create_published_release(self):
         for event in (
             {'GITHUB_EVENT_NAME': 'push', 'GITHUB_REF_TYPE': 'tag',
              'GITHUB_REF': 'refs/tags/v1.8.2+49'},
@@ -194,7 +194,7 @@ class ReleasePublicationTest(unittest.TestCase):
                 result, state = self.run_release_step(**event)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(state['release'], {
-                    'tag': 'v1.8.2+49', 'draft': True, 'latest': False,
+                    'tag': 'v1.8.2+49', 'draft': False, 'latest': True,
                     'target': 'candidate-commit',
                     'assets': ['build/wenku8-local-v1.8.2+49-arm64-v8a.apk',
                                'build/shuyu-source.zip'],

@@ -491,7 +491,7 @@ void main() {
             await File(path).writeAsBytes([1]);
           };
         case '超过 256 MiB':
-          entry['size'] = localTextMaxSourceBytes + 1;
+          entry['size'] = localEpubMaxSourceBytes + 1;
           return;
       }
       entry['size'] = sourceBytes.length;
@@ -1442,7 +1442,7 @@ void main() {
       }
     });
 
-    test('spine 无效映射、缺失章节及 fallback 环路拒绝空包或丢章', () async {
+    test('spine 无效映射、缺失章节及 fallback 环路拒绝空包并跳过局部坏项', () async {
       for (final spine in [
         '',
         '<spine/>',
@@ -1452,7 +1452,6 @@ void main() {
         '<spine><itemref idref="lost"/></spine>',
         '<spine><itemref idref="no-href"/></spine>',
         '<spine><itemref idref="cycle"/></spine>',
-        '<spine><itemref idref="ch1"/><itemref idref="lost"/></spine>',
       ]) {
         final files = baseEpubFiles();
         files['OEBPS/content.opf'] = utf8.encode(
@@ -1473,6 +1472,28 @@ void main() {
           throwsA(isA<StateError>()),
           reason: spine,
         );
+      }
+
+      final partialFiles = baseEpubFiles();
+      partialFiles['OEBPS/content.opf'] = utf8.encode(
+        utf8
+            .decode(partialFiles['OEBPS/content.opf']!)
+            .replaceFirst(
+              RegExp(r'<spine\b.*?</spine>', dotAll: true),
+              '<spine><itemref idref="ch1"/><itemref idref="lost"/></spine>',
+            )
+            .replaceFirst(
+              '</manifest>',
+              '<item id="lost" href="missing.xhtml" media-type="application/xhtml+xml"/></manifest>',
+            ),
+      );
+      final partialPkg = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), partialFiles),
+      );
+      try {
+        expect(partialPkg.chapters.map((c) => c.href).toList(), ['OEBPS/ch1.xhtml']);
+      } finally {
+        await partialPkg.close();
       }
     });
 

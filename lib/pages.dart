@@ -5885,14 +5885,9 @@ class _ReaderPageState extends State<ReaderPage>
               ? (widget.repository as OfflineNovelRepository).cache
               : null,
           onConfigureTocRule: canResplitTxt
-              ? ({
-                  required preset,
-                  customPattern,
-                  required maxChapterChars,
-                }) async {
+              ? (customPattern, maxChapterChars) async {
                   final updated = await _local!.resplitTxtChapters(
                     _novel.id,
-                    preset: preset,
                     customPattern: customPattern,
                     maxChapterChars: maxChapterChars,
                   );

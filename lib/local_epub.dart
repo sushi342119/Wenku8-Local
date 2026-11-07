@@ -7,6 +7,7 @@ import 'package:archive/archive_io.dart';
 import 'package:xml/xml.dart';
 
 import 'chapter_splitter.dart' show splitLocalChapters;
+import 'local_platform.dart';
 import 'reader_rich_content.dart'
     show joinBrokenParagraph, shouldMergeBrokenParagraph;
 
@@ -24,7 +25,7 @@ class EpubBlock {
 enum EpubBlockKind { text, image }
 
 /// EPUB 声明的解压总量上限；不代表对伪造元数据的完整 ZIP 炸弹防护。
-const epubMaxDecodedBytes = 768 * 1024 * 1024;
+const epubMaxDecodedBytes = 1536 * 1024 * 1024;
 
 void _preflightZip(InputFileStream input) {
   // archive 4.5.2 的 ZipDirectory 只读取元数据和压缩数据视图，不解压。
@@ -46,7 +47,7 @@ void _preflightZip(InputFileStream input) {
 }
 
 final _fontEntryPattern = RegExp(
-  r'\.(?:ttf|otf|woff2?|ttc|eot)$',
+  r'\.(?:ttf|otf|woff2?|ttc|eot|dfont)$',
   caseSensitive: false,
 );
 
@@ -71,15 +72,27 @@ String? _resolveEntryKey(Map<String, ArchiveFile> entries, String? path) {
   return null;
 }
 
-void _validateEncryption(
+String? _attr(XmlElement element, String name) {
+  final exact = element.getAttribute(name);
+  if (exact != null) return exact;
+  final target = name.toLowerCase();
+  for (final attribute in element.attributes) {
+    if (attribute.name.local.toLowerCase() == target) {
+      return attribute.value;
+    }
+  }
+  return null;
+}
+
+Future<void> _validateEncryption(
   Map<String, ArchiveFile> entries,
   Iterable<_ManifestItem> manifest,
-) {
+) async {
   final encryptionKey = _resolveEntryKey(entries, 'META-INF/encryption.xml');
   if (encryptionKey == null) return;
   final encryption = entries[encryptionKey]!;
 
-  final doc = _parseXml(_decodeText(_extract(encryption)));
+  final doc = _parseXml(await _decodeText(_extract(encryption)));
   final resourcePaths = <String>{};
   final contentPaths = <String>{};
   for (final item in manifest) {
@@ -104,7 +117,7 @@ void _validateEncryption(
       throw StateError('不支持加密的 EPUB');
     }
     for (final reference in references) {
-      final target = resolveEpubHref('', reference.getAttribute('URI') ?? '');
+      final target = resolveEpubHref('', _attr(reference, 'URI') ?? '');
       if (target == null) {
         throw StateError('不支持加密的 EPUB');
       }
@@ -171,7 +184,7 @@ class EpubPackage {
     _EpubFileHandle? file;
     try {
       file = _EpubFileHandle(File(path).openSync());
-      final input = InputFileStream.withFileHandle(file);
+      final input = _LenientEpubInputFileStream(file);
       _preflightZip(input);
       input.reset();
       final archive = ZipDecoder().decodeStream(input);
@@ -195,7 +208,7 @@ class EpubPackage {
         entries[normalized] = f;
         entries.putIfAbsent(f.name, () => f);
       }
-      return _parse(input, entries);
+      return await _parse(input, entries);
     } catch (e) {
       final failure = e is StateError
           ? e
@@ -211,11 +224,11 @@ class EpubPackage {
     }
   }
 
-  static EpubPackage _parse(
+  static Future<EpubPackage> _parse(
     InputFileStream input,
     Map<String, ArchiveFile> entries,
-  ) {
-    String readText(String entry) {
+  ) async {
+    Future<String> readText(String entry) async {
       final key = _resolveEntryKey(entries, entry);
       final f = key == null ? null : entries[key];
       if (f == null) throw StateError('EPUB 条目不存在: $entry');
@@ -227,69 +240,61 @@ class EpubPackage {
     if (containerKey == null) {
       throw StateError('无效的 EPUB：缺少 META-INF/container.xml');
     }
-    final container = _parseXml(readText(containerKey));
+    final containerText = await readText(containerKey);
     String? opfPath;
-    for (final e in _elements(container, 'rootfile')) {
-      final fullPath = e.getAttribute('full-path');
-      if (fullPath == null || fullPath.trim().isEmpty) continue;
-      final candidate = resolveEpubHref('', fullPath);
-      final resolved = _resolveEntryKey(entries, candidate);
-      if (resolved != null) {
-        opfPath = resolved;
-        break;
+    try {
+      final container = _parseXml(containerText);
+      for (final e in _elements(container, 'rootfile')) {
+        final fullPath = _attr(e, 'full-path');
+        if (fullPath == null || fullPath.trim().isEmpty) continue;
+        final candidate = resolveEpubHref('', fullPath);
+        final resolved = _resolveEntryKey(entries, candidate);
+        if (resolved != null) {
+          opfPath = resolved;
+          break;
+        }
+      }
+    } on XmlException {
+      for (final match in _markupTokens.allMatches(_withoutComments(containerText))) {
+        final tag = match.group(0)!;
+        if (_tagLocalName(tag) != 'rootfile') continue;
+        final fullPath = _tagAttribute(tag, 'full-path');
+        if (fullPath == null || fullPath.trim().isEmpty) continue;
+        final candidate = resolveEpubHref('', fullPath);
+        final resolved = _resolveEntryKey(entries, candidate);
+        if (resolved != null) {
+          opfPath = resolved;
+          break;
+        }
       }
     }
+    opfPath ??= entries.keys
+        .where((k) => k.toLowerCase().endsWith('.opf'))
+        .firstOrNull;
     if (opfPath == null) {
       throw StateError('无效的 EPUB：找不到 OPF 文件');
     }
     final opfDir = _dirOf(opfPath);
-    final opf = _parseXml(readText(opfPath));
-
-    // 元数据
-    final metadata = _firstElement(opf, 'metadata') ?? opf.rootElement;
-    final title = _firstText(metadata, 'title') ?? '';
-    final author = _firstText(metadata, 'creator');
-
-    // manifest
-    final manifest = <String, _ManifestItem>{};
-    final manifestOrder = <_ManifestItem>[];
-    for (final e in _elements(opf, 'item')) {
-      final id = e.getAttribute('id');
-      final href = e.getAttribute('href');
-      if (id == null) continue;
-      final rawPath = href == null ? null : resolveEpubHref(opfDir, href);
-      final item = _ManifestItem(
-        path: _resolveEntryKey(entries, rawPath) ?? rawPath,
-        mediaType: _baseMediaType(e.getAttribute('media-type') ?? ''),
-        fallbackId: e.getAttribute('fallback')?.trim(),
-        properties: (e.getAttribute('properties') ?? '')
-            .split(RegExp(r'\s+'))
-            .where((s) => s.isNotEmpty)
-            .toSet(),
-      );
-      manifest[id] = item;
-      manifestOrder.add(item);
-    }
-    _validateEncryption(entries, manifestOrder);
+    final opfText = await readText(opfPath);
+    final parsedOpf = _parseOpfDocument(opfText, opfDir, entries);
+    final title = parsedOpf.title;
+    final author = parsedOpf.author;
+    final manifest = parsedOpf.manifest;
+    final manifestOrder = parsedOpf.manifestOrder;
+    await _validateEncryption(entries, manifestOrder);
 
     // spine：按 itemref 顺序解析可读章节（支持 XHTML/HTML/XML 及插画页），也跟随 fallback 链。
-    final spine = _firstElement(opf, 'spine');
+    // 若个别 itemref 指向已删除的封面/广告页，跳过该损坏项并保留其余有效章节。
     final spineHrefs = <String>[];
     final nonLinearSpineHrefs = <String>[];
-    if (spine != null) {
-      for (final ref in spine.childElements) {
-        if (ref.name.local.toLowerCase() != 'itemref') continue;
-        final isNonLinear =
-            (ref.getAttribute('linear') ?? '').trim().toLowerCase() == 'no';
-        final item = manifest[ref.getAttribute('idref') ?? ''];
-        final href = _readableSpineHref(item, manifest, entries);
-        if (isNonLinear) {
-          if (href != null) nonLinearSpineHrefs.add(href);
-          continue;
-        }
-        if (href == null) {
-          throw StateError('无效的 EPUB：spine 条目无可读 XHTML');
-        }
+    for (final ref in parsedOpf.spineRefs) {
+      final item = manifest[ref.idref];
+      final href = _readableSpineHref(item, manifest, entries);
+      if (ref.nonLinear) {
+        if (href != null) nonLinearSpineHrefs.add(href);
+        continue;
+      }
+      if (href != null) {
         spineHrefs.add(href);
       }
     }
@@ -304,7 +309,7 @@ class EpubPackage {
 
     // NCX 标题与分锚点目录项
     String? ncxPath;
-    final tocId = spine?.getAttribute('toc');
+    final tocId = parsedOpf.tocId;
     if (tocId != null) ncxPath = manifest[tocId]?.path;
     ncxPath ??= manifestOrder
         .where((i) => i.mediaType == 'application/x-dtbncx+xml')
@@ -316,7 +321,7 @@ class EpubPackage {
     if (ncxPath != null) {
       try {
         for (final item in _parseNcxEntries(
-          readText(ncxPath),
+          await readText(ncxPath),
           _dirOf(ncxPath),
           opfDir,
           spineHrefSet,
@@ -354,7 +359,7 @@ class EpubPackage {
         );
         final navPath = _resolveEntryKey(entries, navItem.path);
         if (navPath != null) {
-          final navDoc = _parseXml(readText(navPath));
+          final navDoc = _parseXml(await readText(navPath));
           final navs = _elements(navDoc, 'nav').toList();
           if (navs.isNotEmpty) {
             final toc = navs.firstWhere(
@@ -441,12 +446,13 @@ class EpubPackage {
               entrySize >= 64 * 1024);
 
       String? cachedSource;
-      String loadSource() => cachedSource ??= readText(href);
+      Future<String> loadSource() async =>
+          cachedSource ??= await readText(href);
 
       List<_SplitEpubChapter>? splitChapters;
       if (hasMultiToc || checkInlineSplit) {
         try {
-          final parsed = _extractDocument(href, loadSource(), entries);
+          final parsed = _extractDocument(href, await loadSource(), entries);
           if (hasMultiToc) {
             splitChapters = _splitBlocksByToc(href, parsed, tocCandidates);
           }
@@ -471,7 +477,7 @@ class EpubPackage {
       var chapterTitle = navTitles[href];
       if (chapterTitle == null) {
         try {
-          chapterTitle = _fallbackTitle(loadSource());
+          chapterTitle = _fallbackTitle(await loadSource());
         } on Object {
           chapterTitle = null;
         }
@@ -491,14 +497,10 @@ class EpubPackage {
         item.path != null &&
         item.mediaType.startsWith('image/') &&
         _resolveEntryKey(entries, item.path) != null;
-    for (final meta in _elements(metadata, 'meta')) {
-      if ((meta.getAttribute('name') ?? '').trim().toLowerCase() != 'cover') {
-        continue;
-      }
-      final item = manifest[(meta.getAttribute('content') ?? '').trim()];
+    if (parsedOpf.coverMetaId != null) {
+      final item = manifest[parsedOpf.coverMetaId!];
       if (usableImage(item)) {
         cover = _resolveEntryKey(entries, item!.path);
-        break;
       }
     }
     cover ??= manifestOrder
@@ -535,7 +537,7 @@ class EpubPackage {
       final resolved = _resolveEntryKey(_entries, href);
       return resolved == null ? const [] : [EpubBlock.image(resolved)];
     }
-    final source = _decodeText(_readEntrySync(href));
+    final source = await _decodeText(_readEntrySync(href));
     return _extractDocument(href, source, _entries).blocks;
   }
 
@@ -639,6 +641,23 @@ String? _decodeHrefSegment(String raw) {
 // ---------------------------------------------------------------------------
 // 内部实现
 
+class _LenientEpubInputFileStream extends InputFileStream {
+  _LenientEpubInputFileStream(super.file) : super.withFileHandle();
+
+  @override
+  String readString({int? size, bool utf8 = true}) {
+    if (!utf8) {
+      return super.readString(size: size, utf8: false);
+    }
+    final bytes = readBytes(size).toUint8List();
+    try {
+      return const Utf8Decoder().convert(bytes);
+    } on FormatException {
+      return const Utf8Decoder(allowMalformed: true).convert(bytes);
+    }
+  }
+}
+
 class _EpubFileHandle extends AbstractFileHandle {
   _EpubFileHandle(this._file);
 
@@ -702,6 +721,171 @@ class _ManifestItem {
   final Set<String> properties;
 }
 
+typedef _SpineRef = ({String idref, bool nonLinear});
+
+typedef _ParsedOpf = ({
+  String title,
+  String? author,
+  Map<String, _ManifestItem> manifest,
+  List<_ManifestItem> manifestOrder,
+  List<_SpineRef> spineRefs,
+  String? tocId,
+  String? coverMetaId,
+});
+
+final _descriptionBlockPattern = RegExp(
+  r'<(?:[\w.\-]+:)?description\b[^>]*>[\s\S]*?</(?:[\w.\-]+:)?description\s*>',
+  caseSensitive: false,
+);
+
+_ParsedOpf _parseOpfDocument(
+  String source,
+  String opfDir,
+  Map<String, ArchiveFile> entries,
+) {
+  XmlDocument? opf;
+  try {
+    opf = _parseXml(source);
+  } on XmlException {
+    final stripped = source.replaceAll(_descriptionBlockPattern, '');
+    if (stripped != source) {
+      try {
+        opf = _parseXml(stripped);
+      } on XmlException {
+        opf = null;
+      }
+    }
+  }
+
+  if (opf != null) {
+    final metadata = _firstElement(opf, 'metadata') ?? opf.rootElement;
+    final title = _firstText(metadata, 'title') ?? '';
+    final author = _firstText(metadata, 'creator');
+    final manifest = <String, _ManifestItem>{};
+    final manifestOrder = <_ManifestItem>[];
+    for (final e in _elements(opf, 'item')) {
+      final id = _attr(e, 'id');
+      final href = _attr(e, 'href');
+      if (id == null) continue;
+      final rawPath = href == null ? null : resolveEpubHref(opfDir, href);
+      final item = _ManifestItem(
+        path: _resolveEntryKey(entries, rawPath) ?? rawPath,
+        mediaType: _baseMediaType(_attr(e, 'media-type') ?? ''),
+        fallbackId: _attr(e, 'fallback')?.trim(),
+        properties: (_attr(e, 'properties') ?? '')
+            .split(RegExp(r'\s+'))
+            .where((s) => s.isNotEmpty)
+            .toSet(),
+      );
+      manifest[id] = item;
+      manifestOrder.add(item);
+    }
+    final spine = _firstElement(opf, 'spine');
+    final spineRefs = <_SpineRef>[];
+    if (spine != null) {
+      for (final ref in spine.childElements) {
+        if (ref.name.local.toLowerCase() != 'itemref') continue;
+        final isNonLinear =
+            (_attr(ref, 'linear') ?? '').trim().toLowerCase() == 'no';
+        spineRefs.add((
+          idref: _attr(ref, 'idref') ?? '',
+          nonLinear: isNonLinear,
+        ));
+      }
+    }
+    String? coverMetaId;
+    for (final meta in _elements(metadata, 'meta')) {
+      if ((_attr(meta, 'name') ?? '').trim().toLowerCase() != 'cover') {
+        continue;
+      }
+      final content = (_attr(meta, 'content') ?? '').trim();
+      if (content.isNotEmpty) {
+        coverMetaId = content;
+        break;
+      }
+    }
+    return (
+      title: title,
+      author: author,
+      manifest: manifest,
+      manifestOrder: manifestOrder,
+      spineRefs: spineRefs,
+      tocId: spine == null ? null : _attr(spine, 'toc'),
+      coverMetaId: coverMetaId,
+    );
+  }
+
+  // OPF 因未闭合标签或属性微瑕导致严格 XML 解析失败时，若具备完整闭合的
+  // manifest/spine 结构，降级用标签扫描恢复条目。
+  final cleaned = _withoutComments(source);
+  if (!RegExp(r'</(?:[\w.\-]+:)?package\s*>', caseSensitive: false)
+      .hasMatch(cleaned)) {
+    throw StateError('无效的 EPUB：OPF 格式损坏');
+  }
+  final manifest = <String, _ManifestItem>{};
+  final manifestOrder = <_ManifestItem>[];
+  final spineRefs = <_SpineRef>[];
+  String? tocId;
+  String? coverMetaId;
+  for (final match in _markupTokens.allMatches(cleaned)) {
+    final tag = match.group(0)!;
+    if (_isClosingTag(tag)) continue;
+    final name = _tagLocalName(tag);
+    if (name == 'item') {
+      final id = _tagAttribute(tag, 'id');
+      final href = _tagAttribute(tag, 'href');
+      if (id == null) continue;
+      final rawPath = href == null ? null : resolveEpubHref(opfDir, href);
+      final item = _ManifestItem(
+        path: _resolveEntryKey(entries, rawPath) ?? rawPath,
+        mediaType: _baseMediaType(_tagAttribute(tag, 'media-type') ?? ''),
+        fallbackId: _tagAttribute(tag, 'fallback')?.trim(),
+        properties: (_tagAttribute(tag, 'properties') ?? '')
+            .split(RegExp(r'\s+'))
+            .where((s) => s.isNotEmpty)
+            .toSet(),
+      );
+      manifest[id] = item;
+      manifestOrder.add(item);
+    } else if (name == 'spine') {
+      tocId ??= _tagAttribute(tag, 'toc');
+    } else if (name == 'itemref') {
+      final isNonLinear =
+          (_tagAttribute(tag, 'linear') ?? '').trim().toLowerCase() == 'no';
+      spineRefs.add((
+        idref: _tagAttribute(tag, 'idref') ?? '',
+        nonLinear: isNonLinear,
+      ));
+    } else if (name == 'meta') {
+      if ((_tagAttribute(tag, 'name') ?? '').trim().toLowerCase() == 'cover') {
+        final content = (_tagAttribute(tag, 'content') ?? '').trim();
+        if (content.isNotEmpty) coverMetaId ??= content;
+      }
+    }
+  }
+  final titleMatch = RegExp(
+    r'<(?:[\w.\-]+:)?title\b[^>]*>([\s\S]*?)</(?:[\w.\-]+:)?title\s*>',
+    caseSensitive: false,
+  ).firstMatch(cleaned);
+  final creatorMatch = RegExp(
+    r'<(?:[\w.\-]+:)?creator\b[^>]*>([\s\S]*?)</(?:[\w.\-]+:)?creator\s*>',
+    caseSensitive: false,
+  ).firstMatch(cleaned);
+  return (
+    title: titleMatch == null
+        ? ''
+        : _decodeEntities(titleMatch.group(1)!).replaceAll(_whitespace, ' ').trim(),
+    author: creatorMatch == null
+        ? null
+        : _decodeEntities(creatorMatch.group(1)!).replaceAll(_whitespace, ' ').trim(),
+    manifest: manifest,
+    manifestOrder: manifestOrder,
+    spineRefs: spineRefs,
+    tocId: tocId,
+    coverMetaId: coverMetaId,
+  );
+}
+
 String _baseMediaType(String raw) =>
     raw.split(';').first.trim().toLowerCase();
 
@@ -716,10 +900,11 @@ bool _isReadableSpineMediaType(String mediaType, String path) {
       mediaType == 'application/xml' ||
       mediaType == 'text/xml' ||
       mediaType == 'application/x-dtbook+xml' ||
+      mediaType == 'text/plain' ||
       mediaType.startsWith('image/')) {
     return true;
   }
-  if (mediaType.isEmpty && _readableMarkupExtension.hasMatch(path)) {
+  if (_readableMarkupExtension.hasMatch(path)) {
     return true;
   }
   return false;
@@ -838,15 +1023,28 @@ Uint8List _extract(ArchiveFile file) {
   return out.getBytes();
 }
 
-String _decodeText(Uint8List bytes) {
+Future<String> _decodeText(Uint8List bytes) async {
   if (bytes.length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe) {
     return _decodeUtf16(bytes, bigEndian: false);
   }
   if (bytes.length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff) {
     return _decodeUtf16(bytes, bigEndian: true);
   }
-  final text = utf8.decode(bytes, allowMalformed: true);
-  return text.startsWith('\uFEFF') ? text.substring(1) : text;
+  try {
+    final text = utf8.decode(bytes);
+    return text.startsWith('\uFEFF') ? text.substring(1) : text;
+  } on FormatException {
+    if (LocalPlatform.android) {
+      try {
+        final decoded = await LocalPlatform.decodeLocalText(bytes);
+        return decoded.startsWith('\uFEFF') ? decoded.substring(1) : decoded;
+      } on Object {
+        // Fallback to lenient UTF-8 below.
+      }
+    }
+    final text = utf8.decode(bytes, allowMalformed: true);
+    return text.startsWith('\uFEFF') ? text.substring(1) : text;
+  }
 }
 
 String _decodeUtf16(Uint8List bytes, {required bool bigEndian}) {
@@ -999,7 +1197,7 @@ List<_TocEntry> _parseNcxEntries(
     order[points[i]] = i;
   }
   int playOrder(XmlElement e) =>
-      int.tryParse((e.getAttribute('playOrder') ?? '').trim()) ?? 1 << 30;
+      int.tryParse((_attr(e, 'playOrder') ?? '').trim()) ?? 1 << 30;
   points.sort((a, b) {
     final c = playOrder(a).compareTo(playOrder(b));
     return c != 0 ? c : order[a]!.compareTo(order[b]!);
@@ -1014,7 +1212,7 @@ List<_TocEntry> _parseNcxEntries(
       if (name == 'navlabel') label ??= child;
       if (name == 'content') content ??= child;
     }
-    final src = content?.getAttribute('src');
+    final src = content == null ? null : _attr(content, 'src');
     if (label == null || src == null) continue;
     final text = (_firstText(label, 'text') ?? '').trim();
     if (text.isEmpty) continue;

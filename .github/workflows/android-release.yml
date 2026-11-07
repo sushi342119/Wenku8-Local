@@ -145,8 +145,8 @@ jobs:
           if any(release["tag_name"] == os.environ["RELEASE_TAG"] for page in pages for release in page):
               raise SystemExit("Release already exists (including drafts); use a new build number and tag")
           PY
-          # Never replace existing assets or publish without manual review.
-          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
+          # Never replace existing assets.
+          gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --latest --title "书屿 $RELEASE_TAG" --notes-file build/release-notes.md "build/wenku8-local-${RELEASE_TAG}-arm64-v8a.apk" build/shuyu-source.zip
       - name: Remove signing material
         if: always()
         run: rm -f android/key.properties android/release.keystore

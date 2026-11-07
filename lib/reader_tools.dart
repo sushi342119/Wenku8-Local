@@ -38,6 +38,10 @@ class ReaderOpenDictionary extends ReaderToolAction {
   const ReaderOpenDictionary();
 }
 
+class ReaderOpenPurification extends ReaderToolAction {
+  const ReaderOpenPurification();
+}
+
 /// A bounded settings sheet. Typography drafts preview the article while
 /// preferences are committed once, when the gesture ends.
 class ReaderTools extends StatefulWidget {
