@@ -149,8 +149,16 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
       } catch (_) {
         if (mounted) showNovelFeedback(context, '关联清理未完成，已保留待重试任务');
       }
-      // 字数静默补算后刷新首页 feed，详情页简介才能显示最新字数。
-      if (result.backfilled > 0) {
+      final changed = result.added + result.refreshed + result.removed;
+      final shelfAdditions = [
+        for (final book in local.books)
+          if (!state.contains(book.id)) local.toNovel(book),
+      ];
+      await state.addShelfBooks(shelfAdditions);
+      // 字数静默补算或本地书库增删改后刷新首页 feed，确保本地书库页和详情页即时显示最新数据。
+      if (result.backfilled > 0 ||
+          changed > 0 ||
+          result.switchedRemovedIds.isNotEmpty) {
         if (!mounted) return;
         try {
           await _catalog.refresh();
@@ -159,12 +167,6 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
         }
         if (!mounted) return;
       }
-      final changed = result.added + result.refreshed + result.removed;
-      final shelfAdditions = [
-        for (final book in local.books)
-          if (!state.contains(book.id)) local.toNovel(book),
-      ];
-      await state.addShelfBooks(shelfAdditions);
       if (!mounted) return;
       if (changed == 0 && result.switchedRemovedIds.isEmpty) return;
       final parts = <String>[];
@@ -182,6 +184,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
 
   late NovelFeedController _catalog;
   late NovelFeedController _searchFeed;
+  LocalLibraryStore? _boundLocal;
+  int _lastSyncedRevision = 0;
+  int _lastSyncedScanAdded = 0;
+  bool _syncingLocalCatalog = false;
+  bool _pendingLocalCatalogSync = false;
   List<Widget> _pageWidgets = const [];
   List<WidgetBuilder> _headers = const [];
   int _tab = 0;
@@ -216,6 +223,57 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
           }
         });
 
+  void _onLocalProgressChanged() {
+    final local = _boundLocal;
+    if (!mounted || local == null) return;
+    final progress = localScanProgressFor(local).value;
+    if (progress.scanning) {
+      if (progress.added < _lastSyncedScanAdded) {
+        _lastSyncedScanAdded = 0;
+      }
+      if (progress.added - _lastSyncedScanAdded >= 15) {
+        _lastSyncedScanAdded = progress.added;
+        _scheduleLocalCatalogSync(local);
+      }
+      return;
+    }
+    _lastSyncedScanAdded = 0;
+    if (progress.revision != _lastSyncedRevision) {
+      _lastSyncedRevision = progress.revision;
+      _scheduleLocalCatalogSync(local);
+    }
+  }
+
+  void _scheduleLocalCatalogSync(LocalLibraryStore local) {
+    if (_syncingLocalCatalog) {
+      _pendingLocalCatalogSync = true;
+      return;
+    }
+    _syncingLocalCatalog = true;
+    unawaited(() async {
+      try {
+        do {
+          _pendingLocalCatalogSync = false;
+          if (!mounted) return;
+          final books = local.books;
+          final additions = [
+            for (final book in books)
+              if (!widget.state.contains(book.id)) local.toNovel(book),
+          ];
+          if (additions.isNotEmpty) {
+            await widget.state.addShelfBooks(additions);
+          }
+          if (!mounted) return;
+          await _catalog.refresh();
+        } while (_pendingLocalCatalogSync && mounted);
+      } catch (_) {
+        // 渐进同步失败不打断当前浏览。
+      } finally {
+        _syncingLocalCatalog = false;
+      }
+    }());
+  }
+
   @override
   void initState() {
     super.initState();
@@ -225,8 +283,14 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
     if (repo is CompositeNovelRepository) {
       widget.state.bindLocalChapters(repo.local);
       homeRepository = repo.local;
+      _boundLocal = repo.local;
     } else {
       homeRepository = repo;
+      if (repo is LocalLibraryStore) _boundLocal = repo;
+    }
+    if (_boundLocal != null) {
+      _lastSyncedRevision = localScanProgressFor(_boundLocal!).value.revision;
+      localScanProgressFor(_boundLocal!).addListener(_onLocalProgressChanged);
     }
     _catalog = NovelFeedController(
       homeRepository,
@@ -282,6 +346,11 @@ class _HomeShellState extends State<HomeShell> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    if (_boundLocal != null) {
+      localScanProgressFor(
+        _boundLocal!,
+      ).removeListener(_onLocalProgressChanged);
+    }
     _pageTransition.dispose();
     _searchExpansion.dispose();
     _searchText.dispose();

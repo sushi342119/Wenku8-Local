@@ -695,7 +695,30 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                     }
                 }
             } ?: throw IllegalStateException("File is not readable")
-            val encodings = listOf(Charsets.UTF_8, charset("GB18030"))
+            val sample = raw.inputStream().use { input ->
+                val buf = ByteArray(65536)
+                var read = 0
+                while (read < buf.size) {
+                    val n = input.read(buf, read, buf.size - read)
+                    if (n < 0) break
+                    read += n
+                }
+                if (read <= 0) ByteArray(0) else buf.copyOf(read)
+            }
+            val hasUtf16LeBom = sample.size >= 2 &&
+                sample[0] == 0xFF.toByte() &&
+                sample[1] == 0xFE.toByte() &&
+                !(sample.size >= 4 && sample[2] == 0.toByte() && sample[3] == 0.toByte())
+            val hasUtf16BeBom = sample.size >= 2 &&
+                sample[0] == 0xFE.toByte() &&
+                sample[1] == 0xFF.toByte()
+            val big5 = runCatching { charset("Big5-HKSCS") }.getOrElse { charset("Big5") }
+            val encodings = buildList {
+                if (hasUtf16LeBom || hasUtf16BeBom) add(Charsets.UTF_16)
+                add(Charsets.UTF_8)
+                add(charset("GB18030"))
+                add(big5)
+            }
             for (encoding in encodings) {
                 try {
                     InputStreamReader(raw.inputStream(), encoding.newDecoder()
@@ -710,6 +733,30 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
                         "fingerprint" to digest.digest().joinToString("") { "%02x".format(it) },
                     ) else decoded.absolutePath
                 } catch (_: CharacterCodingException) { }
+            }
+            // 若严格解码因个别损坏字节失败，只要样本不含二进制 NUL 字节（或具备 UTF-16 BOM），
+            // 则在 UTF-8 与 GB18030 之间选择替换字符（\uFFFD）更少的编码做容错流式解码。
+            if (sample.isNotEmpty() && (hasUtf16LeBom || hasUtf16BeBom || sample.none { it == 0.toByte() })) {
+                val fallbackCharset = when {
+                    hasUtf16LeBom || hasUtf16BeBom -> Charsets.UTF_16
+                    else -> {
+                        val gb = charset("GB18030")
+                        val utf8Bad = sample.toString(Charsets.UTF_8).count { it == '\uFFFD' }
+                        val gbBad = String(sample, gb).count { it == '\uFFFD' }
+                        if (gbBad < utf8Bad) gb else Charsets.UTF_8
+                    }
+                }
+                InputStreamReader(raw.inputStream(), fallbackCharset.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPLACE)
+                    .onUnmappableCharacter(CodingErrorAction.REPLACE)).use { reader ->
+                    decoded.bufferedWriter(Charsets.UTF_8).use { writer ->
+                        reader.copyTo(writer, 32768)
+                    }
+                }
+                return if (withFingerprint) mapOf(
+                    "path" to decoded.absolutePath,
+                    "fingerprint" to digest.digest().joinToString("") { "%02x".format(it) },
+                ) else decoded.absolutePath
             }
             throw IllegalArgumentException("TXT 解码失败：不是有效的 UTF-8 或 GB18030 文本")
         } catch (error: Exception) {
@@ -737,6 +784,23 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
     }
 
     private fun decodeTextBytes(bytes: ByteArray): String {
+        val hasUtf16LeBom = bytes.size >= 2 &&
+            bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xFE.toByte() &&
+            !(bytes.size >= 4 && bytes[2] == 0.toByte() && bytes[3] == 0.toByte())
+        val hasUtf16BeBom = bytes.size >= 2 &&
+            bytes[0] == 0xFE.toByte() &&
+            bytes[1] == 0xFF.toByte()
+        if (hasUtf16LeBom || hasUtf16BeBom) {
+            try {
+                return Charsets.UTF_16.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString()
+            } catch (_: Exception) {
+                return String(bytes, Charsets.UTF_16)
+            }
+        }
         try {
             return Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
@@ -746,8 +810,16 @@ class LocalTools(private var activity: Activity) : MethodChannel.MethodCallHandl
             return charset("GB18030").newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(bytes)).toString()
+        } catch (_: Exception) { /* fall through to Big5 / lenient */ }
+        try {
+            val big5 = runCatching { charset("Big5-HKSCS") }.getOrElse { charset("Big5") }
+            return big5.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString()
         } catch (_: Exception) { /* fall through to lenient */ }
-        return bytes.toString(Charsets.UTF_8)
+        val utf8Text = bytes.toString(Charsets.UTF_8)
+        val gbText = runCatching { String(bytes, charset("GB18030")) }.getOrNull() ?: return utf8Text
+        return if (gbText.count { it == '\uFFFD' } < utf8Text.count { it == '\uFFFD' }) gbText else utf8Text
     }
 
     /** 解码 Dart 传来的原始字节，支持自动识别 UTF-8/GB18030。 */

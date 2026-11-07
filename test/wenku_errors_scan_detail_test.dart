@@ -15,6 +15,10 @@ void main() {
         describeLocalScanError(
             const FormatException('TXT 文件过大：超过 256 MiB 导入上限')),
         contains('文件过大'));
+    expect(
+        describeLocalScanError(
+            const FormatException('EPUB 文件超过 256 MiB，无法导入')),
+        'EPUB 文件超过 256 MiB，无法导入');
     // 非受控 FormatException 归为解码失败，不带原文。
     expect(
         describeLocalScanError(

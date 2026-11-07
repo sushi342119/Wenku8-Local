@@ -35,6 +35,7 @@ String describeLocalScanError(Object error) {
   if (error is FormatException) {
     final message = error.message;
     if (message.startsWith('TXT ') ||
+        message.startsWith('EPUB ') ||
         message == _scanDetailEmpty ||
         message == _scanDetailDecodeFailed ||
         message == _scanDetailTooLarge) {

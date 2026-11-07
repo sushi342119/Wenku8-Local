@@ -45,6 +45,7 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
     super.initState();
     widget.state.bindLocalChapters(widget.local);
     _folderUri = widget.local.folderUri;
+    localScanProgressFor(widget.local).addListener(_onLocalProgressChanged);
     if (widget.pickFolderOnOpen) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _pickFolder(returnOnCancel: true);
@@ -53,7 +54,28 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   }
 
   @override
+  void didUpdateWidget(covariant LocalLibraryPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.local, widget.local)) {
+      localScanProgressFor(
+        oldWidget.local,
+      ).removeListener(_onLocalProgressChanged);
+      widget.state.bindLocalChapters(widget.local);
+      _folderUri = widget.local.folderUri;
+      localScanProgressFor(widget.local).addListener(_onLocalProgressChanged);
+    }
+  }
+
+  void _onLocalProgressChanged() {
+    if (!mounted) return;
+    setState(() {
+      _folderUri = widget.local.folderUri;
+    });
+  }
+
+  @override
   void dispose() {
+    localScanProgressFor(widget.local).removeListener(_onLocalProgressChanged);
     _cloudSources.dispose();
     super.dispose();
   }
@@ -175,7 +197,13 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
       if (result.failures.isNotEmpty) {
         _showDebugDialog(
           '部分书籍扫描失败',
-          result.failures.entries.map((entry) => '${entry.key}：${entry.value}').join('\n'),
+          result.failures.entries
+              .map(
+                (entry) => entry.key.endsWith('(${entry.value})')
+                    ? entry.key
+                    : '${entry.key}：${entry.value}',
+              )
+              .join('\n'),
           localScan: true,
         );
       }
@@ -222,20 +250,27 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
   @override
   Widget build(BuildContext context) {
     final books = widget.local.books;
+    final progress = localScanProgressFor(widget.local).value;
+    final isScanning = _scanning || progress.scanning;
+    final scanTitle = isScanning
+        ? (progress.total > 0
+              ? '正在扫描（${progress.processed} / ${progress.total}）…'
+              : '正在扫描…')
+        : '扫描文件夹';
     return ArchiveFeaturePage(
       title: '本地书库',
       actions: [
         GlassIconButton(
           icon: CupertinoIcons.refresh,
           label: '扫描',
-          onPressed: _scanning || _picking ? null : _scan,
+          onPressed: isScanning || _picking ? null : _scan,
         ),
       ],
       child: ListView(
         padding: featurePadding(context),
         children: [
           ContentPanel(
-            onTap: _scanning || _picking ? null : _pickFolder,
+            onTap: isScanning || _picking ? null : _pickFolder,
             child: Row(
               children: [
                 const Icon(CupertinoIcons.folder, size: 21),
@@ -266,10 +301,10 @@ class _LocalLibraryPageState extends State<LocalLibraryPage> {
           const SizedBox(height: 14),
           FeatureEntry(
             key: const ValueKey('local-library-scan'),
-            title: _scanning ? '正在扫描…' : '扫描文件夹',
+            title: scanTitle,
             subtitle: '自动导入新增，移除已删除的（共 ${books.length} 本）',
             icon: CupertinoIcons.doc_text_search,
-            onTap: _scanning || _picking ? () {} : _scan,
+            onTap: isScanning || _picking ? () {} : _scan,
           ),
           const SizedBox(height: 14),
           FeatureEntry(

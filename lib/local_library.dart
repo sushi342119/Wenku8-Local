@@ -534,6 +534,31 @@ class LocalScanResult {
   final List<LocalChapterRemap> chapterRemaps;
 }
 
+typedef LocalScanProgress = ({
+  bool scanning,
+  int processed,
+  int total,
+  int added,
+  int revision,
+});
+
+const LocalScanProgress _idleScanProgress = (
+  scanning: false,
+  processed: 0,
+  total: 0,
+  added: 0,
+  revision: 0,
+);
+
+final Expando<ValueNotifier<LocalScanProgress>> _localScanProgressNotifiers =
+    Expando<ValueNotifier<LocalScanProgress>>('localScanProgress');
+
+/// 返回给定 [store] 的扫描与变更进度通知器（基于 [Expando]，不触发 Fake.noSuchMethod）。
+ValueNotifier<LocalScanProgress> localScanProgressFor(LocalLibraryStore store) {
+  return _localScanProgressNotifiers[store] ??=
+      ValueNotifier<LocalScanProgress>(_idleScanProgress);
+}
+
 /// 章节切分规则版本；与应用版本独立。
 const _chapterSplitVersion = 3;
 const _localOperationTimeout = Duration(seconds: 12);
@@ -609,6 +634,26 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
   int _reservedIdEnd = localNovelIdBase;
   final Set<int> _dirtyBookIds = {};
   final Map<String, String> _tagMigrationFailures = {};
+  Future<LocalScanResult>? _activeScan;
+
+  void _updateScanProgress({
+    bool? scanning,
+    int? processed,
+    int? total,
+    int? added,
+    bool bumpRevision = false,
+  }) {
+    if (_disposed) return;
+    final notifier = localScanProgressFor(this);
+    final current = notifier.value;
+    notifier.value = (
+      scanning: scanning ?? current.scanning,
+      processed: processed ?? current.processed,
+      total: total ?? current.total,
+      added: added ?? current.added,
+      revision: bumpRevision ? current.revision + 1 : current.revision,
+    );
+  }
 
   /// EPUB 源文件指纹缓存：路径 -> (大小, 修改时间, 已算出的 sha256)。
   /// 只有大小或修改时间变化才重算；书修订变化/删除/重扫时整体清空。
@@ -2176,326 +2221,368 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     }
   }
 
-  Future<LocalScanResult> scan({bool force = false}) => _synchronized(
-    () => _scanTransaction((epubCacheBackups) async {
-      // 扫描入口必须先恢复，尤其不能先扫描导入、最后才恢复。
-      await _recordRemovalJournal.recover();
-      final treeUri = folderUri;
-      if (treeUri == null) throw StateError('请先选择小说文件夹');
-      final sourceId = 'saf:$treeUri';
-      final scanResult = await LocalPlatform.scanLocalFolder(treeUri);
-      // 扫描不完整时 entries 不可信：直接抛错，不更新书库，
-      // 也不清理旧书（调用方据此提示用户，而非显示"书库无变化"）。
-      if (!scanResult.complete) {
-        throw IncompleteScanException(scanResult.reason ?? 'unknown');
-      }
-      final entries = scanResult.entries;
-      if (entries.isEmpty && _books.any((book) => book.sourceId == sourceId)) {
-        throw const IncompleteScanException('empty_result');
-      }
-      final failures = <String, String>{};
-      final chapterRemaps = <LocalChapterRemap>[];
-      final chapterUpdates = <int, LocalBook>{};
-      // 忽略名单对账移除的书：先只移除记录，其内部副本等索引落盘后再删。
-      final reconciledData = <LocalBook>[];
-      // 按 sourceKey 索引当前来源的书籍，避免误删其他来源（修复#1）。
-      final byKey = {
-        for (final book in _books)
-          if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
-            book.sourceKey: book,
-      };
-      // 兼容旧数据：没有 sourceId 的书用 fileUri 匹配。
-      final byUriLegacy = {
-        for (final book in _books)
-          if (book.sourceId.isEmpty) book.fileUri: book,
-      };
-      final seen = <String>{};
-      final ignored = _readIgnoredSources();
-      var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
-      await _reserveIds(
-        entries.where((entry) {
-          final uri = entry['uri'] as String? ?? '';
-          return uri.isNotEmpty &&
-              !byKey.containsKey(uri) &&
-              !byUriLegacy.containsKey(uri) &&
-              !ignored.contains(
-                LocalSourceIdentity.saf(treeUri, uri).ignoredKey,
-              );
-        }).length,
-      );
-      for (final entry in entries) {
-        final uri = entry['uri'] as String? ?? '';
-        final name = entry['name'] as String? ?? '';
-        if (uri.isEmpty) continue;
-        final sourceKey = uri;
-        seen.add(sourceKey);
-        if (name.isEmpty) continue;
-        // 「仅移出书库」的书：源文件还在，但用户已明确移出，跳过导入。
-        // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
-        if (ignored.contains(
-          LocalSourceIdentity.saf(treeUri, sourceKey).ignoredKey,
-        )) {
-          skipped++;
-          // 对账：记录若仍在库中（移出过程中进程中断、忽略已写但索引未落盘），
-          // 在此完成移除，避免「书还在但永远被跳过」的死状态。
-          // 内部副本延迟到本轮索引落盘后删除，避免中途抛错时索引与副本不一致。
-          final existing = byKey[sourceKey] ?? byUriLegacy[uri];
-          if (existing != null) {
-            _removeBook(existing);
-            reconciledData.add(existing);
-            removed++;
+  Future<LocalScanResult> scan({bool force = false}) {
+    if (!force && _activeScan != null) return _activeScan!;
+    late final Future<LocalScanResult> running;
+    running = _runScan(force: force);
+    if (!force) _activeScan = running;
+    return running;
+  }
+
+  Future<LocalScanResult> _runScan({required bool force}) async {
+    try {
+      return await _synchronized(
+        () => _scanTransaction((epubCacheBackups) async {
+          // 扫描入口必须先恢复，尤其不能先扫描导入、最后才恢复。
+          await _recordRemovalJournal.recover();
+          final treeUri = folderUri;
+          if (treeUri == null) throw StateError('请先选择小说文件夹');
+          final sourceId = 'saf:$treeUri';
+          _updateScanProgress(
+            scanning: true,
+            processed: 0,
+            total: 0,
+            added: 0,
+          );
+          final scanResult = await LocalPlatform.scanLocalFolder(treeUri);
+          // 扫描不完整时 entries 不可信：直接抛错，不更新书库，
+          // 也不清理旧书（调用方据此提示用户，而非显示"书库无变化"）。
+          if (!scanResult.complete) {
+            throw IncompleteScanException(scanResult.reason ?? 'unknown');
           }
-          continue;
-        }
-        final size = (entry['size'] as num?)?.toInt() ?? 0;
-        final modified = (entry['modified'] as num?)?.toInt() ?? 0;
-        var existing = byKey[sourceKey] ?? byUriLegacy[uri];
-        if (existing != null) {
-          if (existing.fileName != name ||
-              existing.fileUri != uri ||
-              existing.sourceKey != sourceKey) {
-            existing = _withFilenameMetadata(
-              existing,
-              name,
-              fileUri: uri,
-              sourceKey: sourceKey,
+          final entries = scanResult.entries;
+          if (entries.isEmpty &&
+              _books.any((book) => book.sourceId == sourceId)) {
+            throw const IncompleteScanException('empty_result');
+          }
+          final failures = <String, String>{};
+          final chapterRemaps = <LocalChapterRemap>[];
+          final chapterUpdates = <int, LocalBook>{};
+          // 忽略名单对账移除的书：先只移除记录，其内部副本等索引落盘后再删。
+          final reconciledData = <LocalBook>[];
+          // 按 sourceKey 索引当前来源的书籍，避免误删其他来源（修复#1）。
+          final byKey = {
+            for (final book in _books)
+              if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
+                book.sourceKey: book,
+          };
+          // 兼容旧数据：没有 sourceId 的书用 fileUri 匹配。
+          final byUriLegacy = {
+            for (final book in _books)
+              if (book.sourceId.isEmpty) book.fileUri: book,
+          };
+          final seen = <String>{};
+          final ignored = _readIgnoredSources();
+          var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
+          await _reserveIds(
+            entries.where((entry) {
+              final uri = entry['uri'] as String? ?? '';
+              return uri.isNotEmpty &&
+                  !byKey.containsKey(uri) &&
+                  !byUriLegacy.containsKey(uri) &&
+                  !ignored.contains(
+                    LocalSourceIdentity.saf(treeUri, uri).ignoredKey,
+                  );
+            }).length,
+          );
+          var processed = 0;
+          _updateScanProgress(
+            scanning: true,
+            processed: 0,
+            total: entries.length,
+            added: 0,
+          );
+          for (final entry in entries) {
+            processed++;
+            _updateScanProgress(
+              scanning: true,
+              processed: processed,
+              total: entries.length,
+              added: added,
             );
-            chapterUpdates[existing.id] = existing;
-          }
-          if ((existing.kind == LocalBookKind.pdf ||
-                  existing.kind == LocalBookKind.epub) &&
-              !force &&
-              existing.size == size &&
-              existing.modified == modified) {
-            continue;
-          }
-          // Metadata is the fast candidate check. A provider can leave both
-          // size and mtime unchanged after an in-place overwrite, so the final
-          // skip decision also requires a SHA-256 fingerprint. The hash-only
-          // native/worker job does not decode, split or rewrite the book.
-          if (!force &&
-              existing.kind == LocalBookKind.txt &&
-              existing.size == size &&
-              existing.modified == modified &&
-              existing.chapterSplitVersion == _chapterSplitVersion &&
-              existing.wordCount != null &&
-              existing.sourceFingerprint.isNotEmpty) {
-            try {
-              if (await _sourceHasFingerprint(
-                existing,
-                existing.sourceFingerprint,
-              )) {
-                continue;
-              }
-            } catch (error) {
-              _recordScanFailure(failures, name, error);
+            final uri = entry['uri'] as String? ?? '';
+            final name = entry['name'] as String? ?? '';
+            if (uri.isEmpty) continue;
+            final sourceKey = uri;
+            seen.add(sourceKey);
+            if (name.isEmpty) continue;
+            // 「仅移出书库」的书：源文件还在，但用户已明确移出，跳过导入。
+            // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
+            if (ignored.contains(
+              LocalSourceIdentity.saf(treeUri, sourceKey).ignoredKey,
+            )) {
               skipped++;
+              // 对账：记录若仍在库中（移出过程中进程中断、忽略已写但索引未落盘），
+              // 在此完成移除，避免「书还在但永远被跳过」的死状态。
+              // 内部副本延迟到本轮索引落盘后删除，避免中途抛错时索引与副本不一致。
+              final existing = byKey[sourceKey] ?? byUriLegacy[uri];
+              if (existing != null) {
+                _removeBook(existing);
+                reconciledData.add(existing);
+                removed++;
+              }
               continue;
             }
+            final size = (entry['size'] as num?)?.toInt() ?? 0;
+            final modified = (entry['modified'] as num?)?.toInt() ?? 0;
+            var existing = byKey[sourceKey] ?? byUriLegacy[uri];
+            if (existing != null) {
+              if (existing.fileName != name ||
+                  existing.fileUri != uri ||
+                  existing.sourceKey != sourceKey) {
+                existing = _withFilenameMetadata(
+                  existing,
+                  name,
+                  fileUri: uri,
+                  sourceKey: sourceKey,
+                );
+                chapterUpdates[existing.id] = existing;
+              }
+              if ((existing.kind == LocalBookKind.pdf ||
+                      existing.kind == LocalBookKind.epub) &&
+                  !force &&
+                  existing.size == size &&
+                  existing.modified == modified) {
+                continue;
+              }
+              // Metadata is the fast candidate check. A provider can leave both
+              // size and mtime unchanged after an in-place overwrite, so the final
+              // skip decision also requires a SHA-256 fingerprint. The hash-only
+              // native/worker job does not decode, split or rewrite the book.
+              if (!force &&
+                  existing.kind == LocalBookKind.txt &&
+                  existing.size == size &&
+                  existing.modified == modified &&
+                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  existing.wordCount != null &&
+                  existing.sourceFingerprint.isNotEmpty) {
+                try {
+                  if (await _sourceHasFingerprint(
+                    existing,
+                    existing.sourceFingerprint,
+                  )) {
+                    continue;
+                  }
+                } catch (error) {
+                  _recordScanFailure(failures, name, error);
+                  skipped++;
+                  continue;
+                }
+              }
+              LocalBook? book;
+              try {
+                await _preserveCachedSnapshot(existing);
+                book = await _importEntry(
+                  epubCacheBackups: epubCacheBackups,
+                  uri: uri,
+                  name: name,
+                  size: size,
+                  modified: modified,
+                  sourceId: sourceId,
+                  sourceKey: sourceKey,
+                  existing: existing,
+                );
+              } catch (error) {
+                _recordScanFailure(failures, name, error);
+                skipped++;
+                continue;
+              }
+              if (book == null) {
+                failures[name] = 'PDF 没有可读取的页面';
+                skipped++;
+                continue;
+              }
+              if (!force &&
+                  book.revision == existing.revision &&
+                  book.size == existing.size &&
+                  book.modified == existing.modified &&
+                  book.wordCount == existing.wordCount &&
+                  book.sourceFingerprint == existing.sourceFingerprint) {
+                continue;
+              }
+              if (book.kind == LocalBookKind.txt &&
+                  existing.chapters.isNotEmpty &&
+                  book.revision != existing.revision) {
+                chapterRemaps.add(_remapFor(existing, book));
+              }
+              if (existing.wordCount == null && book.wordCount != null) {
+                backfilled++;
+              }
+              chapterUpdates[book.id] = book;
+              refreshed++;
+            } else {
+              LocalBook? book;
+              try {
+                book = await _importEntry(
+                  epubCacheBackups: epubCacheBackups,
+                  uri: uri,
+                  name: name,
+                  size: size,
+                  modified: modified,
+                  sourceId: sourceId,
+                  sourceKey: sourceKey,
+                );
+              } catch (error) {
+                _recordScanFailure(failures, name, error);
+                skipped++;
+                continue;
+              }
+              if (book == null) {
+                failures[name] = 'PDF 没有可读取的页面';
+                skipped++;
+                continue;
+              }
+              _addBook(book);
+              added++;
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: entries.length,
+                added: added,
+              );
+            }
           }
-          LocalBook? book;
-          try {
-            await _preserveCachedSnapshot(existing);
-            book = await _importEntry(
-              epubCacheBackups: epubCacheBackups,
-              uri: uri,
-              name: name,
-              size: size,
-              modified: modified,
-              sourceId: sourceId,
-              sourceKey: sourceKey,
-              existing: existing,
+          // 忽略名单清理：本来源下源文件已不在磁盘上的条目自动移除，
+          // 避免名单无限增长，也让同名新文件日后能正常导入。
+          final staleIgnored = ignored.where((key) {
+            try {
+              final parts = jsonDecode(key);
+              return parts is List &&
+                  parts.length == 2 &&
+                  parts[0] == sourceId &&
+                  !seen.contains(parts[1]);
+            } catch (_) {
+              return false;
+            }
+          }).toList();
+          if (staleIgnored.isNotEmpty) {
+            ignored.removeAll(staleIgnored);
+            // 纯清理性质：写失败不中断正常扫描，下次扫描会再清。
+            try {
+              await _writeIgnoredSources(ignored);
+            } catch (_) {}
+          }
+          // 只清理当前来源的书籍，不碰其他来源（修复#1）。
+          // 能到这里扫描一定是完整的（不完整已在开头抛错）。
+          final removedBooks = _books
+              .where(
+                (b) =>
+                    b.sourceId == sourceId &&
+                    b.sourceKey.isNotEmpty &&
+                    !seen.contains(b.sourceKey),
+              )
+              .toList();
+          // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
+          removed += removedBooks.length;
+          _removeBooks(removedBooks);
+          // 文件夹切换：新文件夹扫描成功后，清理待清理列表中的旧来源书籍。
+          // 注意：不沿用 sourceKey.isNotEmpty 条件，避免旧来源下缺 sourceKey 的记录残留。
+          //
+          // 关键顺序（都在 _synchronized 保护内）：
+          // 1. 重读当前 folderUri（提交时刻的值，而非扫描开始时捕获的 treeUri）：
+          //    scan(B) 进行中用户切回 A 时，A 已是当前目录，不能按 u != treeUri 误删 A。
+          // 2. 收集待删除书籍及其 ID（此时不删内存）。
+          // 3. 关联清理 ID 先合并入持久化队列，成功后才继续——若入队失败，
+          //    书仍在 _books 中，下次可重新收集 ID，不丢失。
+          // 4. 删除书籍数据并移除内存记录。
+          // 5. _saveIndex() 落盘。
+          // 6. 落盘成功后，才从待清理列表中移除已处理的 URI；若 _saveIndex 失败，
+          //    待清理记录与关联队列都保留，下次扫描可重试（关联清理操作本身幂等）。
+          final pendingCleanups =
+              _prefs.getStringList('local_library_pending_cleanups') ?? [];
+          final currentUri = folderUri;
+          final toClean = pendingCleanups
+              .where((u) => u.isNotEmpty && u != currentUri)
+              .toList();
+          // 先收集，不删除。
+          final toDelete = <LocalBook>[];
+          for (final oldUri in toClean) {
+            final oldSourceId = 'saf:$oldUri';
+            toDelete.addAll(_books.where((b) => b.sourceId == oldSourceId));
+          }
+          final switchedRemovedIds = toDelete.map((b) => b.id).toList();
+          // 先暂存被删书籍的标签（供切回时恢复），再入关联清理队列。
+          // 顺序：读旧标签→stash 落盘→关联入队→删书，任一步失败都中断，
+          // 书仍在 _books 中，下次可重试。
+          if (toDelete.isNotEmpty) {
+            await _stashTagsForRemoved(toDelete);
+          }
+          // 关联清理 ID 入队（删除内存记录之前）。
+          if (switchedRemovedIds.isNotEmpty) {
+            final queued =
+                _prefs.getStringList('local_library_associated_cleanup') ?? [];
+            final merged = <String>{...queued};
+            for (final id in switchedRemovedIds) {
+              merged.add('$id');
+            }
+            await _checkedSet(
+              () => _prefs.setStringList(
+                'local_library_associated_cleanup',
+                merged.toList(),
+              ),
+              'local_library_associated_cleanup',
             );
-          } catch (error) {
-            _recordScanFailure(failures, name, error);
-            skipped++;
-            continue;
           }
-          if (book == null) {
-            failures[name] = 'PDF 没有可读取的页面';
-            skipped++;
-            continue;
+          // 入队成功后，才删除数据与内存记录。
+          _removeBooks(toDelete);
+          // Journal must precede publishing any changed chapter table.
+          await _stageChapterRemaps(chapterRemaps);
+          for (final book in chapterUpdates.values) {
+            final index = _indexForBook(book.id);
+            if (index >= 0) _replaceBook(index, book);
           }
-          if (!force &&
-              book.revision == existing.revision &&
-              book.size == existing.size &&
-              book.modified == existing.modified &&
-              book.wordCount == existing.wordCount &&
-              book.sourceFingerprint == existing.sourceFingerprint) {
-            continue;
+          await _queueDataCleanup(removedBooks, clearStash: true);
+          await _queueDataCleanup([
+            ...toDelete,
+            ...reconciledData,
+          ], clearStash: false);
+          await _saveIndex();
+          await _recoverDataCleanup();
+          // 索引落盘成功后，才确认消费待清理记录。
+          if (toClean.isNotEmpty) {
+            final remaining = pendingCleanups
+                .where((u) => !toClean.contains(u))
+                .toList();
+            if (remaining.isEmpty) {
+              await _prefs.remove('local_library_pending_cleanups');
+            } else {
+              await _checkedSet(
+                () => _prefs.setStringList(
+                  'local_library_pending_cleanups',
+                  remaining,
+                ),
+                'local_library_pending_cleanups',
+              );
+            }
           }
-          if (book.kind == LocalBookKind.txt &&
-              existing.chapters.isNotEmpty &&
-              book.revision != existing.revision) {
-            chapterRemaps.add(_remapFor(existing, book));
-          }
-          if (existing.wordCount == null && book.wordCount != null) {
-            backfilled++;
-          }
-          chapterUpdates[book.id] = book;
-          refreshed++;
-        } else {
-          LocalBook? book;
-          try {
-            book = await _importEntry(
-              epubCacheBackups: epubCacheBackups,
-              uri: uri,
-              name: name,
-              size: size,
-              modified: modified,
-              sourceId: sourceId,
-              sourceKey: sourceKey,
-            );
-          } catch (error) {
-            _recordScanFailure(failures, name, error);
-            skipped++;
-            continue;
-          }
-          if (book == null) {
-            failures[name] = 'PDF 没有可读取的页面';
-            skipped++;
-            continue;
-          }
-          _addBook(book);
-          added++;
-        }
-      }
-      // 忽略名单清理：本来源下源文件已不在磁盘上的条目自动移除，
-      // 避免名单无限增长，也让同名新文件日后能正常导入。
-      final staleIgnored = ignored.where((key) {
-        try {
-          final parts = jsonDecode(key);
-          return parts is List &&
-              parts.length == 2 &&
-              parts[0] == sourceId &&
-              !seen.contains(parts[1]);
-        } catch (_) {
-          return false;
-        }
-      }).toList();
-      if (staleIgnored.isNotEmpty) {
-        ignored.removeAll(staleIgnored);
-        // 纯清理性质：写失败不中断正常扫描，下次扫描会再清。
-        try {
-          await _writeIgnoredSources(ignored);
-        } catch (_) {}
-      }
-      // 只清理当前来源的书籍，不碰其他来源（修复#1）。
-      // 能到这里扫描一定是完整的（不完整已在开头抛错）。
-      final removedBooks = _books
-          .where(
-            (b) =>
-                b.sourceId == sourceId &&
-                b.sourceKey.isNotEmpty &&
-                !seen.contains(b.sourceKey),
-          )
-          .toList();
-      // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
-      removed += removedBooks.length;
-      _removeBooks(removedBooks);
-      // 文件夹切换：新文件夹扫描成功后，清理待清理列表中的旧来源书籍。
-      // 注意：不沿用 sourceKey.isNotEmpty 条件，避免旧来源下缺 sourceKey 的记录残留。
-      //
-      // 关键顺序（都在 _synchronized 保护内）：
-      // 1. 重读当前 folderUri（提交时刻的值，而非扫描开始时捕获的 treeUri）：
-      //    scan(B) 进行中用户切回 A 时，A 已是当前目录，不能按 u != treeUri 误删 A。
-      // 2. 收集待删除书籍及其 ID（此时不删内存）。
-      // 3. 关联清理 ID 先合并入持久化队列，成功后才继续——若入队失败，
-      //    书仍在 _books 中，下次可重新收集 ID，不丢失。
-      // 4. 删除书籍数据并移除内存记录。
-      // 5. _saveIndex() 落盘。
-      // 6. 落盘成功后，才从待清理列表中移除已处理的 URI；若 _saveIndex 失败，
-      //    待清理记录与关联队列都保留，下次扫描可重试（关联清理操作本身幂等）。
-      final pendingCleanups =
-          _prefs.getStringList('local_library_pending_cleanups') ?? [];
-      final currentUri = folderUri;
-      final toClean = pendingCleanups
-          .where((u) => u.isNotEmpty && u != currentUri)
-          .toList();
-      // 先收集，不删除。
-      final toDelete = <LocalBook>[];
-      for (final oldUri in toClean) {
-        final oldSourceId = 'saf:$oldUri';
-        toDelete.addAll(_books.where((b) => b.sourceId == oldSourceId));
-      }
-      final switchedRemovedIds = toDelete.map((b) => b.id).toList();
-      // 先暂存被删书籍的标签（供切回时恢复），再入关联清理队列。
-      // 顺序：读旧标签→stash 落盘→关联入队→删书，任一步失败都中断，
-      // 书仍在 _books 中，下次可重试。
-      if (toDelete.isNotEmpty) {
-        await _stashTagsForRemoved(toDelete);
-      }
-      // 关联清理 ID 入队（删除内存记录之前）。
-      if (switchedRemovedIds.isNotEmpty) {
-        final queued =
-            _prefs.getStringList('local_library_associated_cleanup') ?? [];
-        final merged = <String>{...queued};
-        for (final id in switchedRemovedIds) {
-          merged.add('$id');
-        }
-        await _checkedSet(
-          () => _prefs.setStringList(
-            'local_library_associated_cleanup',
-            merged.toList(),
-          ),
-          'local_library_associated_cleanup',
-        );
-      }
-      // 入队成功后，才删除数据与内存记录。
-      _removeBooks(toDelete);
-      // Journal must precede publishing any changed chapter table.
-      await _stageChapterRemaps(chapterRemaps);
-      for (final book in chapterUpdates.values) {
-        final index = _indexForBook(book.id);
-        if (index >= 0) _replaceBook(index, book);
-      }
-      await _queueDataCleanup(removedBooks, clearStash: true);
-      await _queueDataCleanup([
-        ...toDelete,
-        ...reconciledData,
-      ], clearStash: false);
-      await _saveIndex();
-      await _recoverDataCleanup();
-      // 索引落盘成功后，才确认消费待清理记录。
-      if (toClean.isNotEmpty) {
-        final remaining = pendingCleanups
-            .where((u) => !toClean.contains(u))
-            .toList();
-        if (remaining.isEmpty) {
-          await _prefs.remove('local_library_pending_cleanups');
-        } else {
-          await _checkedSet(
-            () => _prefs.setStringList(
-              'local_library_pending_cleanups',
-              remaining,
-            ),
-            'local_library_pending_cleanups',
+          // 索引已落盘：现在才删对账移除书籍的内部副本。
+          // 完整扫描成功：恢复暂存标签（切回旧文件夹的场景），
+          // 并清理该来源下已不存在文件对应的暂存条目。
+          await _restoreStashedTags(sourceId);
+          await _migrateInternalTagsToFilenames(
+            sourceId: sourceId,
+            failures: failures,
           );
-        }
-      }
-      // 索引已落盘：现在才删对账移除书籍的内部副本。
-      // 完整扫描成功：恢复暂存标签（切回旧文件夹的场景），
-      // 并清理该来源下已不存在文件对应的暂存条目。
-      await _restoreStashedTags(sourceId);
-      await _migrateInternalTagsToFilenames(
-        sourceId: sourceId,
-        failures: failures,
+          return LocalScanResult(
+            added: added,
+            refreshed: refreshed,
+            removed: removed,
+            total: _books.length,
+            skipped: skipped,
+            backfilled: backfilled,
+            failures: failures,
+            switchedRemovedIds: switchedRemovedIds,
+            // 返回持久化队列而非仅本轮新发现的迁移：上轮已落盘新表、
+            // 但进度未确认的任务，下次扫描仍要返回。
+            chapterRemaps: pendingChapterRemaps,
+          );
+        }),
       );
-      return LocalScanResult(
-        added: added,
-        refreshed: refreshed,
-        removed: removed,
-        total: _books.length,
-        skipped: skipped,
-        backfilled: backfilled,
-        failures: failures,
-        switchedRemovedIds: switchedRemovedIds,
-        // 返回持久化队列而非仅本轮新发现的迁移：上轮已落盘新表、
-        // 但进度未确认的任务，下次扫描仍要返回。
-        chapterRemaps: pendingChapterRemaps,
-      );
-    }),
-  );
+    } finally {
+      if (!force) _activeScan = null;
+      _updateScanProgress(scanning: false, bumpRevision: true);
+    }
+  }
 
   /// 备用方案：扫描应用外部文件夹中的 TXT（无需 SAF，直接用 dart:io 读取）。
   /// 用户需手动将小说 TXT 放入 [appFolderPath]/novels/ 目录。
@@ -2507,258 +2594,288 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     return novels.path;
   }
 
-  Future<LocalScanResult> scanAppFolder({bool force = false}) => _synchronized(
-    () => _scanTransaction((_) async {
-      // 与 scan() 同规则：先恢复仅移出待办，再扫描导入。
-      await _recordRemovalJournal.recover();
-      final folderPath = await appFolderPath;
-      const sourceId = 'appFolder:novels';
-      final dir = Directory(folderPath);
-      final byKey = {
-        for (final book in _books)
-          if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
-            book.sourceKey: book,
-      };
-      final byUriLegacy = {
-        for (final book in _books)
-          if (book.sourceId.isEmpty && book.fileUri.startsWith('file://'))
-            book.fileUri: book,
-      };
-      final seen = <String>{};
-      final ignored = _readIgnoredSources();
-      final failures = <String, String>{};
-      final chapterRemaps = <LocalChapterRemap>[];
-      final chapterUpdates = <int, LocalBook>{};
-      final reconciledData = <LocalBook>[];
-      var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
-      final files = await dir
-          .list()
-          .where((e) => e is File)
-          .cast<File>()
-          .toList();
-      if (!files.any((file) {
-            final lowerPath = file.path.toLowerCase();
-            return lowerPath.endsWith('.txt') || lowerPath.endsWith('.epub');
-          }) &&
-          _books.any((book) => book.sourceId == sourceId)) {
-        throw const IncompleteScanException('empty_result');
-      }
-      await _reserveIds(
-        files
-            .where(
-              (file) =>
-                  (file.path.toLowerCase().endsWith('.txt') ||
-                      file.path.toLowerCase().endsWith('.epub')) &&
-                  !byKey.containsKey(file.path) &&
-                  !byUriLegacy.containsKey('file://${file.path}') &&
-                  (!file.path.toLowerCase().endsWith('.epub') ||
-                      !byUriLegacy.containsKey(Uri.file(file.path).toString())) &&
-                  !ignored.contains(
-                    LocalSourceIdentity.appFolder(file.path).ignoredKey,
-                  ),
-            )
-            .length,
-      );
-      for (final file in files) {
-        final name = file.path.split('/').last;
-        final lower = name.toLowerCase();
-        if (!lower.endsWith('.txt') && !lower.endsWith('.epub')) continue;
-        final uri = lower.endsWith('.epub')
-            ? Uri.file(file.path).toString()
-            : 'file://${file.path}';
-        final legacy = byUriLegacy[uri] ?? byUriLegacy['file://${file.path}'];
-        final sourceKey = file.path;
-        seen.add(sourceKey);
-        // 「仅移出书库」的书跳过导入；记录仍在时对账移除（与 scan() 同规则）。
-        // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
-        if (ignored.contains(
-          LocalSourceIdentity.appFolder(file.path).ignoredKey,
-        )) {
-          skipped++;
-          final existingIgnored = byKey[sourceKey] ?? legacy;
-          if (existingIgnored != null) {
-            _removeBook(existingIgnored);
-            reconciledData.add(existingIgnored);
-            removed++;
+  Future<LocalScanResult> scanAppFolder({bool force = false}) async {
+    try {
+      return await _synchronized(
+        () => _scanTransaction((_) async {
+          // 与 scan() 同规则：先恢复仅移出待办，再扫描导入。
+          await _recordRemovalJournal.recover();
+          final folderPath = await appFolderPath;
+          const sourceId = 'appFolder:novels';
+          final dir = Directory(folderPath);
+          final byKey = {
+            for (final book in _books)
+              if (book.sourceId == sourceId && book.sourceKey.isNotEmpty)
+                book.sourceKey: book,
+          };
+          final byUriLegacy = {
+            for (final book in _books)
+              if (book.sourceId.isEmpty && book.fileUri.startsWith('file://'))
+                book.fileUri: book,
+          };
+          final seen = <String>{};
+          final ignored = _readIgnoredSources();
+          final failures = <String, String>{};
+          final chapterRemaps = <LocalChapterRemap>[];
+          final chapterUpdates = <int, LocalBook>{};
+          final reconciledData = <LocalBook>[];
+          var added = 0, refreshed = 0, removed = 0, skipped = 0, backfilled = 0;
+          final files = await dir
+              .list()
+              .where((e) => e is File)
+              .cast<File>()
+              .toList();
+          if (!files.any((file) {
+                final lowerPath = file.path.toLowerCase();
+                return lowerPath.endsWith('.txt') ||
+                    lowerPath.endsWith('.epub');
+              }) &&
+              _books.any((book) => book.sourceId == sourceId)) {
+            throw const IncompleteScanException('empty_result');
           }
-          continue;
-        }
-        final FileStat stat;
-        try {
-          stat = await file.stat();
-          if (stat.type != FileSystemEntityType.file) {
-            throw const FileSystemException('文件暂不可读');
-          }
-        } catch (error) {
-          _recordScanFailure(failures, name, error);
-          skipped++;
-          continue;
-        }
-        final size = stat.size;
-        final modified = stat.modified.millisecondsSinceEpoch;
-        var existing = byKey[sourceKey] ?? legacy;
-        if (existing != null) {
-          if (existing.fileName != name ||
-              existing.fileUri != uri ||
-              existing.sourceKey != sourceKey) {
-            existing = _withFilenameMetadata(
-              existing,
-              name,
-              fileUri: uri,
-              sourceKey: sourceKey,
+          await _reserveIds(
+            files
+                .where(
+                  (file) =>
+                      (file.path.toLowerCase().endsWith('.txt') ||
+                          file.path.toLowerCase().endsWith('.epub')) &&
+                      !byKey.containsKey(file.path) &&
+                      !byUriLegacy.containsKey('file://${file.path}') &&
+                      (!file.path.toLowerCase().endsWith('.epub') ||
+                          !byUriLegacy.containsKey(
+                            Uri.file(file.path).toString(),
+                          )) &&
+                      !ignored.contains(
+                        LocalSourceIdentity.appFolder(file.path).ignoredKey,
+                      ),
+                )
+                .length,
+          );
+          var processed = 0;
+          _updateScanProgress(
+            scanning: true,
+            processed: 0,
+            total: files.length,
+            added: 0,
+          );
+          for (final file in files) {
+            processed++;
+            _updateScanProgress(
+              scanning: true,
+              processed: processed,
+              total: files.length,
+              added: added,
             );
-            chapterUpdates[existing.id] = existing;
-          }
-          if (existing.kind == LocalBookKind.epub &&
-              !force &&
-              existing.size == size &&
-              existing.modified == modified &&
-              existing.chapters.isNotEmpty) {
-            continue;
-          }
-          if (!force &&
-              existing.size == size &&
-              existing.modified == modified &&
-              existing.chapterSplitVersion == _chapterSplitVersion &&
-              existing.wordCount != null &&
-              existing.sourceFingerprint.isNotEmpty) {
+            final name = file.path.split('/').last;
+            final lower = name.toLowerCase();
+            if (!lower.endsWith('.txt') && !lower.endsWith('.epub')) continue;
+            final uri = lower.endsWith('.epub')
+                ? Uri.file(file.path).toString()
+                : 'file://${file.path}';
+            final legacy =
+                byUriLegacy[uri] ?? byUriLegacy['file://${file.path}'];
+            final sourceKey = file.path;
+            seen.add(sourceKey);
+            // 「仅移出书库」的书跳过导入；记录仍在时对账移除（与 scan() 同规则）。
+            // 忽略键统一走 LocalSourceIdentity，与 _effectiveIgnoredKeyFor 一致。
+            if (ignored.contains(
+              LocalSourceIdentity.appFolder(file.path).ignoredKey,
+            )) {
+              skipped++;
+              final existingIgnored = byKey[sourceKey] ?? legacy;
+              if (existingIgnored != null) {
+                _removeBook(existingIgnored);
+                reconciledData.add(existingIgnored);
+                removed++;
+              }
+              continue;
+            }
+            final FileStat stat;
             try {
-              if (await _sourceHasFingerprint(
-                existing,
-                existing.sourceFingerprint,
-              )) {
-                continue;
+              stat = await file.stat();
+              if (stat.type != FileSystemEntityType.file) {
+                throw const FileSystemException('文件暂不可读');
               }
             } catch (error) {
               _recordScanFailure(failures, name, error);
               skipped++;
               continue;
             }
+            final size = stat.size;
+            final modified = stat.modified.millisecondsSinceEpoch;
+            var existing = byKey[sourceKey] ?? legacy;
+            if (existing != null) {
+              if (existing.fileName != name ||
+                  existing.fileUri != uri ||
+                  existing.sourceKey != sourceKey) {
+                existing = _withFilenameMetadata(
+                  existing,
+                  name,
+                  fileUri: uri,
+                  sourceKey: sourceKey,
+                );
+                chapterUpdates[existing.id] = existing;
+              }
+              if (existing.kind == LocalBookKind.epub &&
+                  !force &&
+                  existing.size == size &&
+                  existing.modified == modified &&
+                  existing.chapters.isNotEmpty) {
+                continue;
+              }
+              if (!force &&
+                  existing.size == size &&
+                  existing.modified == modified &&
+                  existing.chapterSplitVersion == _chapterSplitVersion &&
+                  existing.wordCount != null &&
+                  existing.sourceFingerprint.isNotEmpty) {
+                try {
+                  if (await _sourceHasFingerprint(
+                    existing,
+                    existing.sourceFingerprint,
+                  )) {
+                    continue;
+                  }
+                } catch (error) {
+                  _recordScanFailure(failures, name, error);
+                  skipped++;
+                  continue;
+                }
+              }
+              LocalBook? book;
+              try {
+                await _preserveCachedSnapshot(existing);
+                book = await _importDirectFile(
+                  path: file.path,
+                  name: name,
+                  size: size,
+                  modified: modified,
+                  sourceId: sourceId,
+                  sourceKey: sourceKey,
+                  existing: existing,
+                );
+              } catch (error) {
+                _recordScanFailure(failures, name, error);
+                skipped++;
+                continue;
+              }
+              if (book == null) {
+                failures[name] = 'TXT 文件为空';
+                skipped++;
+                continue;
+              }
+              if (!force &&
+                  book.revision == existing.revision &&
+                  book.size == existing.size &&
+                  book.modified == existing.modified &&
+                  book.wordCount == existing.wordCount &&
+                  book.sourceFingerprint == existing.sourceFingerprint) {
+                continue;
+              }
+              if (book.kind == LocalBookKind.txt &&
+                  existing.chapters.isNotEmpty &&
+                  book.revision != existing.revision) {
+                chapterRemaps.add(_remapFor(existing, book));
+              }
+              if (existing.wordCount == null && book.wordCount != null) {
+                backfilled++;
+              }
+              chapterUpdates[book.id] = book;
+              refreshed++;
+            } else {
+              LocalBook? book;
+              try {
+                book = await _importDirectFile(
+                  path: file.path,
+                  name: name,
+                  size: size,
+                  modified: modified,
+                  sourceId: sourceId,
+                  sourceKey: sourceKey,
+                );
+              } catch (error) {
+                _recordScanFailure(failures, name, error);
+                skipped++;
+                continue;
+              }
+              if (book == null) {
+                failures[name] = 'TXT 文件为空';
+                skipped++;
+                continue;
+              }
+              _addBook(book);
+              added++;
+              _updateScanProgress(
+                scanning: true,
+                processed: processed,
+                total: files.length,
+                added: added,
+              );
+            }
           }
-          LocalBook? book;
-          try {
-            await _preserveCachedSnapshot(existing);
-            book = await _importDirectFile(
-              path: file.path,
-              name: name,
-              size: size,
-              modified: modified,
-              sourceId: sourceId,
-              sourceKey: sourceKey,
-              existing: existing,
-            );
-          } catch (error) {
-            _recordScanFailure(failures, name, error);
-            skipped++;
-            continue;
+          // 只清理当前来源的书籍（修复#1）。
+          final appRemovedBooks = _books
+              .where(
+                (b) =>
+                    b.sourceId == sourceId &&
+                    b.sourceKey.isNotEmpty &&
+                    !seen.contains(b.sourceKey),
+              )
+              .toList();
+          // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
+          removed += appRemovedBooks.length;
+          _removeBooks(appRemovedBooks);
+          // 忽略名单清理：本来源下源文件已消失的条目自动移除（与 scan() 同规则，
+          // 写失败不中断扫描）。
+          final staleIgnored = ignored.where((key) {
+            try {
+              final parts = jsonDecode(key);
+              return parts is List &&
+                  parts.length == 2 &&
+                  parts[0] == sourceId &&
+                  !seen.contains(parts[1]);
+            } catch (_) {
+              return false;
+            }
+          }).toList();
+          if (staleIgnored.isNotEmpty) {
+            ignored.removeAll(staleIgnored);
+            try {
+              await _writeIgnoredSources(ignored);
+            } catch (_) {}
           }
-          if (book == null) {
-            failures[name] = 'TXT 文件为空';
-            skipped++;
-            continue;
+          await _stageChapterRemaps(chapterRemaps);
+          for (final book in chapterUpdates.values) {
+            final index = _indexForBook(book.id);
+            if (index >= 0) _replaceBook(index, book);
           }
-          if (!force &&
-              book.revision == existing.revision &&
-              book.size == existing.size &&
-              book.modified == existing.modified &&
-              book.wordCount == existing.wordCount &&
-              book.sourceFingerprint == existing.sourceFingerprint) {
-            continue;
-          }
-          if (book.kind == LocalBookKind.txt &&
-              existing.chapters.isNotEmpty &&
-              book.revision != existing.revision) {
-            chapterRemaps.add(_remapFor(existing, book));
-          }
-          if (existing.wordCount == null && book.wordCount != null) {
-            backfilled++;
-          }
-          chapterUpdates[book.id] = book;
-          refreshed++;
-        } else {
-          LocalBook? book;
-          try {
-            book = await _importDirectFile(
-              path: file.path,
-              name: name,
-              size: size,
-              modified: modified,
-              sourceId: sourceId,
-              sourceKey: sourceKey,
-            );
-          } catch (error) {
-            _recordScanFailure(failures, name, error);
-            skipped++;
-            continue;
-          }
-          if (book == null) {
-            failures[name] = 'TXT 文件为空';
-            skipped++;
-            continue;
-          }
-          _addBook(book);
-          added++;
-        }
-      }
-      // 只清理当前来源的书籍（修复#1）。
-      final appRemovedBooks = _books
-          .where(
-            (b) =>
-                b.sourceId == sourceId &&
-                b.sourceKey.isNotEmpty &&
-                !seen.contains(b.sourceKey),
-          )
-          .toList();
-      // 文件已从磁盘删除：不暂存标签，同时清除可能残留的暂存条目。
-      removed += appRemovedBooks.length;
-      _removeBooks(appRemovedBooks);
-      // 忽略名单清理：本来源下源文件已消失的条目自动移除（与 scan() 同规则，
-      // 写失败不中断扫描）。
-      final staleIgnored = ignored.where((key) {
-        try {
-          final parts = jsonDecode(key);
-          return parts is List &&
-              parts.length == 2 &&
-              parts[0] == sourceId &&
-              !seen.contains(parts[1]);
-        } catch (_) {
-          return false;
-        }
-      }).toList();
-      if (staleIgnored.isNotEmpty) {
-        ignored.removeAll(staleIgnored);
-        try {
-          await _writeIgnoredSources(ignored);
-        } catch (_) {}
-      }
-      await _stageChapterRemaps(chapterRemaps);
-      for (final book in chapterUpdates.values) {
-        final index = _indexForBook(book.id);
-        if (index >= 0) _replaceBook(index, book);
-      }
-      await _queueDataCleanup(appRemovedBooks, clearStash: true);
-      await _queueDataCleanup(reconciledData, clearStash: false);
-      await _saveIndex();
-      await _recoverDataCleanup();
-      // 完整扫描成功：恢复暂存标签并清理失效条目（与 scan() 同规则）。
-      await _restoreStashedTags(sourceId);
-      await _migrateInternalTagsToFilenames(
-        sourceId: sourceId,
-        failures: failures,
+          await _queueDataCleanup(appRemovedBooks, clearStash: true);
+          await _queueDataCleanup(reconciledData, clearStash: false);
+          await _saveIndex();
+          await _recoverDataCleanup();
+          // 完整扫描成功：恢复暂存标签并清理失效条目（与 scan() 同规则）。
+          await _restoreStashedTags(sourceId);
+          await _migrateInternalTagsToFilenames(
+            sourceId: sourceId,
+            failures: failures,
+          );
+          return LocalScanResult(
+            added: added,
+            refreshed: refreshed,
+            removed: removed,
+            total: _books.length,
+            skipped: skipped,
+            backfilled: backfilled,
+            failures: failures,
+            // 返回持久化队列而非仅本轮新发现的迁移（与 scan() 同规则）。
+            chapterRemaps: pendingChapterRemaps,
+          );
+        }),
       );
-      return LocalScanResult(
-        added: added,
-        refreshed: refreshed,
-        removed: removed,
-        total: _books.length,
-        skipped: skipped,
-        backfilled: backfilled,
-        failures: failures,
-        // 返回持久化队列而非仅本轮新发现的迁移（与 scan() 同规则）。
-        chapterRemaps: pendingChapterRemaps,
-      );
-    }),
-  );
+    } finally {
+      _updateScanProgress(scanning: false, bumpRevision: true);
+    }
+  }
 
   /// 直接从文件路径导入 TXT（纯 Dart，无需原生代码）。
   Future<LocalBook?> _importDirectFile({
@@ -3637,7 +3754,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
 
   @override
   void notifyListeners() {
-    if (!_disposed) super.notifyListeners();
+    if (_disposed) return;
+    _updateScanProgress(bumpRevision: true);
+    super.notifyListeners();
   }
 
   @override
