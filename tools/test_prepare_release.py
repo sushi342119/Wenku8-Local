@@ -196,7 +196,7 @@ class ReleasePublicationTest(unittest.TestCase):
                 self.assertEqual(state['release'], {
                     'tag': 'v1.8.2+49', 'draft': False, 'latest': True,
                     'target': 'candidate-commit',
-                    'assets': ['build/wenku8-local-v1.8.2+49-arm64-v8a.apk',
+                    'assets': ['build/shuyu-v1.8.2+49-arm64-v8a.apk',
                                'build/shuyu-source.zip'],
                 })
                 self.assertEqual(len(state['calls']), 2)

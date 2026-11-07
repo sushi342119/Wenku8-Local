@@ -118,7 +118,7 @@ class AppRelease {
               true;
       final size = raw['size'];
       if (name is! String ||
-          !name.startsWith('wenku8-') ||
+          (!name.startsWith('shuyu-') && !name.startsWith('wenku8-')) ||
           !name.endsWith('.apk') ||
           url == null ||
           url.scheme != 'https' ||
