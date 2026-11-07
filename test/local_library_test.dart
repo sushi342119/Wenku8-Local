@@ -1767,5 +1767,86 @@ void main() {
       await pkg.close();
       expect(titles, ['NCX第一章', '第二章']);
     });
+
+    test('单文件合集 EPUB 按 NCX #fragment 锚点切分独立章节', () async {
+      final base = baseEpubFiles();
+      final files = <String, List<int>>{
+        'mimetype': base['mimetype']!,
+        'META-INF/container.xml': base['META-INF/container.xml']!,
+        'OEBPS/content.opf': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+          '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+          '<dc:identifier id="id">frag-split</dc:identifier><dc:title>合集</dc:title></metadata>'
+          '<manifest>'
+          '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
+          '<item id="all" href="book.xhtml" media-type="application/xhtml+xml"/>'
+          '</manifest>'
+          '<spine toc="ncx"><itemref idref="all"/></spine>'
+          '</package>',
+        ),
+        'OEBPS/toc.ncx': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">'
+          '<head/><docTitle><text>合集</text></docTitle><navMap>'
+          '<navPoint id="p1" playOrder="1"><navLabel><text>第一章 晨光</text></navLabel>'
+          '<content src="book.xhtml#c1"/></navPoint>'
+          '<navPoint id="p2" playOrder="2"><navLabel><text>第二章 夜色</text></navLabel>'
+          '<content src="book.xhtml#c2"/></navPoint>'
+          '</navMap></ncx>',
+        ),
+        'OEBPS/book.xhtml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+          '<h2 id="c1">第一章 晨光</h2><p>第一段正文。</p><p>第二段正文。</p>'
+          '<h2 id="c2">第二章 夜色</h2><p>第三段正文。</p><p>第四段正文。</p>'
+          '</body></html>',
+        ),
+      };
+      final pkg = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), files),
+      );
+      addTearDown(pkg.close);
+      expect(pkg.chapters.map((c) => c.title).toList(), ['第一章 晨光', '第二章 夜色']);
+      final ch1 = await pkg.chapterBlocks(0);
+      final ch2 = await pkg.chapterBlocks(1);
+      expect(ch1.map((b) => b.text).toList(), ['第一段正文。', '第二段正文。']);
+      expect(ch2.map((b) => b.text).toList(), ['第三段正文。', '第四段正文。']);
+    });
+
+    test('单文件无目录锚点 EPUB 按正文标题自动切分独立章节', () async {
+      final base = baseEpubFiles();
+      final files = <String, List<int>>{
+        'mimetype': base['mimetype']!,
+        'META-INF/container.xml': base['META-INF/container.xml']!,
+        'OEBPS/content.opf': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">'
+          '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+          '<dc:identifier id="id">heading-split</dc:identifier><dc:title>合集</dc:title></metadata>'
+          '<manifest>'
+          '<item id="all" href="book.xhtml" media-type="application/xhtml+xml"/>'
+          '</manifest>'
+          '<spine><itemref idref="all"/></spine>'
+          '</package>',
+        ),
+        'OEBPS/book.xhtml': utf8.encode(
+          '<?xml version="1.0" encoding="utf-8"?>'
+          '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+          '<p>第一章 起风</p><p>起风正文一。</p><p>起风正文二。</p>'
+          '<p>第二章 落雨</p><p>落雨正文一。</p><p>落雨正文二。</p>'
+          '</body></html>',
+        ),
+      };
+      final pkg = await EpubPackage.open(
+        await buildEpub(await makeTempDir(), files),
+      );
+      addTearDown(pkg.close);
+      expect(pkg.chapters.map((c) => c.title).toList(), ['第一章 起风', '第二章 落雨']);
+      final ch1 = await pkg.chapterBlocks(0);
+      final ch2 = await pkg.chapterBlocks(1);
+      expect(ch1.map((b) => b.text).toList(), ['起风正文一。', '起风正文二。']);
+      expect(ch2.map((b) => b.text).toList(), ['落雨正文一。', '落雨正文二。']);
+    });
   });
 }

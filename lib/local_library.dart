@@ -560,7 +560,7 @@ ValueNotifier<LocalScanProgress> localScanProgressFor(LocalLibraryStore store) {
 }
 
 /// 章节切分规则版本；与应用版本独立。
-const _chapterSplitVersion = 3;
+const _chapterSplitVersion = 4;
 const _localOperationTimeout = Duration(seconds: 12);
 
 const _shelfPalette = [
@@ -1246,13 +1246,59 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         ],
       );
 
+  Future<LocalBook> _upgradeEpubChaptersIfNeeded(LocalBook book) async {
+    if (book.kind != LocalBookKind.epub ||
+        book.chapterSplitVersion == _chapterSplitVersion ||
+        book.sourceFingerprint.isEmpty) {
+      return book;
+    }
+    final index = _indexForBook(book.id);
+    if (index < 0) return book;
+    try {
+      final localPath = await _epubLocalPath(
+        id: book.id,
+        fileUri: book.fileUri,
+        size: book.size,
+        sourceKey: book.sourceKey,
+        sourceFingerprint: book.sourceFingerprint,
+      );
+      if (await _epubSourceFingerprint(localPath) != book.sourceFingerprint) {
+        return book;
+      }
+      final package = await EpubPackage.open(localPath);
+      try {
+        final spine = package.chapters;
+        if (spine.isEmpty) return book;
+        final updated = book.copyWith(
+          chapters: [
+            for (final c in spine) LocalChapterIndex(c.title, 0, 0, volume: ''),
+          ],
+          epubChapterHrefs: [for (final c in spine) c.href],
+          coverEntry: package.coverEntry ?? book.coverEntry,
+          chapterSplitVersion: _chapterSplitVersion,
+          customTitle: book.customTitle,
+          customAuthor: book.customAuthor,
+        );
+        _replaceBook(index, updated);
+        await _saveIndex();
+        return updated;
+      } finally {
+        await package.close();
+      }
+    } catch (_) {
+      return book;
+    }
+  }
+
   Future<void> ensureReady(int id) async {
     final book = bookFor(id);
     if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
     if (identical(_savedBookRefs[id], book) &&
         !isMigrationPending(id) &&
-        (book.kind != LocalBookKind.txt ||
-            book.chapterSplitVersion == _chapterSplitVersion)) {
+        (book.kind == LocalBookKind.pdf ||
+            book.chapterSplitVersion == _chapterSplitVersion ||
+            (book.kind == LocalBookKind.epub &&
+                book.sourceFingerprint.isEmpty))) {
       return;
     }
     await _synchronized(
@@ -1266,6 +1312,13 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     if (_dirtyBookIds.contains(id)) await _saveIndex();
     final book = bookFor(id);
     if (book == null) throw StateError('书库中没有这本书的记录，请重新扫描导入');
+    if (book.kind == LocalBookKind.epub) {
+      if (book.chapterSplitVersion != _chapterSplitVersion &&
+          book.sourceFingerprint.isNotEmpty) {
+        await _upgradeEpubChaptersIfNeeded(book);
+      }
+      return;
+    }
     if (book.kind != LocalBookKind.txt) return;
     if (book.chapterSplitVersion != _chapterSplitVersion) {
       final remaps = <LocalChapterRemap>[];
@@ -2339,7 +2392,9 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 chapterUpdates[existing.id] = existing;
               }
               if ((existing.kind == LocalBookKind.pdf ||
-                      existing.kind == LocalBookKind.epub) &&
+                      (existing.kind == LocalBookKind.epub &&
+                          existing.chapterSplitVersion ==
+                              _chapterSplitVersion)) &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified) {
@@ -2717,6 +2772,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
                 chapterUpdates[existing.id] = existing;
               }
               if (existing.kind == LocalBookKind.epub &&
+                  existing.chapterSplitVersion == _chapterSplitVersion &&
                   !force &&
                   existing.size == size &&
                   existing.modified == modified &&
@@ -3330,7 +3386,7 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
         textFingerprint: '',
         wordCount: null,
         pageCount: 0,
-        chapterSplitVersion: 0,
+        chapterSplitVersion: _chapterSplitVersion,
         customTitle: existing?.customTitle,
         customAuthor: existing?.customAuthor,
       );
@@ -4077,10 +4133,15 @@ class LocalLibraryStore extends NovelRepository with ChangeNotifier {
     int novelId,
     int chapterIndex,
   ) async {
-    final book = bookFor(novelId);
-    if (book == null ||
-        book.kind != LocalBookKind.epub ||
-        chapterIndex < 0 ||
+    var book = bookFor(novelId);
+    if (book == null || book.kind != LocalBookKind.epub) {
+      throw StateError('EPUB 章节索引缺失或越界，请重新扫描');
+    }
+    if (book.chapterSplitVersion != _chapterSplitVersion &&
+        book.sourceFingerprint.isNotEmpty) {
+      book = await _upgradeEpubChaptersIfNeeded(book);
+    }
+    if (chapterIndex < 0 ||
         chapterIndex >= book.chapters.length ||
         book.epubChapterHrefs.length != book.chapters.length) {
       throw StateError('EPUB 章节索引缺失或越界，请重新扫描');

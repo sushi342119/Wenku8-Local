@@ -106,7 +106,7 @@ void main() {
     ],
     pageCount: kind == LocalBookKind.pdf ? 2 : 0,
     wordCount: 100,
-    chapterSplitVersion: 3,
+    chapterSplitVersion: 4,
     sourceId: 'saf:content://test/tree/books',
     sourceKey: 'content://test/tree/books/document/book',
   );

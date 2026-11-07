@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:archive/archive_io.dart';
 import 'package:xml/xml.dart';
 
+import 'chapter_splitter.dart' show splitLocalChapters;
 import 'reader_rich_content.dart'
     show joinBrokenParagraph, shouldMergeBrokenParagraph;
 
@@ -140,12 +141,16 @@ class EpubPackage {
     required String? author,
     required String? coverEntry,
     required List<EpubChapter> chapters,
+    required Map<int, List<EpubBlock>> chapterBlocks,
+    required Map<int, int> chapterSizes,
   }) : _input = input,
        _entries = entries,
        _title = title,
        _author = author,
        _coverEntry = coverEntry,
-       _chapters = List.unmodifiable(chapters);
+       _chapters = List.unmodifiable(chapters),
+       _chapterBlocks = Map.unmodifiable(chapterBlocks),
+       _chapterSizes = Map.unmodifiable(chapterSizes);
 
   final InputFileStream _input;
   final Map<String, ArchiveFile> _entries;
@@ -153,6 +158,8 @@ class EpubPackage {
   final String? _author;
   final String? _coverEntry;
   final List<EpubChapter> _chapters;
+  final Map<int, List<EpubBlock>> _chapterBlocks;
+  final Map<int, int> _chapterSizes;
   bool _closed = false;
 
   String get title => _title;
@@ -293,7 +300,9 @@ class EpubPackage {
       throw StateError('无效的 EPUB：没有可读章节');
     }
 
-    // NCX 标题
+    final spineHrefSet = {...spineHrefs};
+
+    // NCX 标题与分锚点目录项
     String? ncxPath;
     final tocId = spine?.getAttribute('toc');
     if (tocId != null) ncxPath = manifest[tocId]?.path;
@@ -303,21 +312,32 @@ class EpubPackage {
         .firstWhere((p) => p != null, orElse: () => null);
     ncxPath = _resolveEntryKey(entries, ncxPath);
     final navTitles = <String, String>{};
+    final ncxByHref = <String, List<_TocEntry>>{};
     if (ncxPath != null) {
       try {
-        navTitles.addAll(
-          _parseNcx(readText(ncxPath), _dirOf(ncxPath), opfDir, {
-            ...spineHrefs,
-          }, entries),
-        );
+        for (final item in _parseNcxEntries(
+          readText(ncxPath),
+          _dirOf(ncxPath),
+          opfDir,
+          spineHrefSet,
+          entries,
+        )) {
+          navTitles.putIfAbsent(item.path, () => item.title);
+          (ncxByHref[item.path] ??= <_TocEntry>[]).add(item);
+        }
       } on Object {
         // NCX 损坏时走回退链
       }
     }
 
     // EPUB3 nav 回退：NCX 缺失的章节标题由 nav.xhtml 的 toc 补齐，
-    // NCX 已有标题不被覆盖；nav 缺失或损坏时静默忽略，走后续回退链。
-    if (spineHrefs.any((h) => (navTitles[h] ?? '').trim().isEmpty)) {
+    // NCX 已有标题不被覆盖；若单文件内有多个锚点章节也一并记录。
+    final navByHref = <String, List<_TocEntry>>{};
+    if (spineHrefs.any(
+      (h) =>
+          (navTitles[h] ?? '').trim().isEmpty ||
+          (ncxByHref[h]?.length ?? 0) < 2,
+    )) {
       try {
         final navItem = manifestOrder.firstWhere(
           (i) =>
@@ -359,14 +379,19 @@ class EpubPackage {
                 entries,
                 resolveEpubHref(navDir, href),
               );
-              if (target == null || !spineHrefs.contains(target)) {
+              if (target == null || !spineHrefSet.contains(target)) {
                 target = _resolveEntryKey(
                   entries,
                   resolveEpubHref(opfDir, href),
                 );
               }
-              if (target != null && spineHrefs.contains(target)) {
+              if (target != null && spineHrefSet.contains(target)) {
                 navTitles.putIfAbsent(target, () => title);
+                (navByHref[target] ??= <_TocEntry>[]).add((
+                  path: target,
+                  fragment: _extractHrefFragment(href),
+                  title: title,
+                ));
               }
             }
           }
@@ -376,21 +401,86 @@ class EpubPackage {
       }
     }
 
-    // 章节标题回退：NCX -> nav -> <title> -> 首个 <h1> -> 第 N 章
-    // N 为输出章节序号（与 chapterBlocks 的 index + 1 一致）。
+    final textSpineCount = spineHrefs
+        .where((h) => !_rasterImageEntryPattern.hasMatch(h))
+        .length;
+
+    // 章节标题回退与单文件多章节切分：
+    // 1. 若某 spine 文件在 NCX/nav 中有 >=2 个解析到真实锚点的目录项，按锚点切分；
+    // 2. 若整本/分卷合集把多章合并进单个 XHTML 文件（无锚点目录），按章节标题规则切分；
+    // 3. 否则保持 1 个 spine 条目对应 1 章，标题回退：NCX -> nav -> <title> -> 首个 <h1> -> 第 N 章。
     final chapters = <EpubChapter>[];
+    final precomputedBlocks = <int, List<EpubBlock>>{};
+    final customChapterSizes = <int, int>{};
+
     for (var i = 0; i < spineHrefs.length; i++) {
       final href = spineHrefs[i];
-      var chapterTitle = navTitles[href];
-      if (chapterTitle == null && !_rasterImageEntryPattern.hasMatch(href)) {
+      if (_rasterImageEntryPattern.hasMatch(href)) {
+        chapters.add(
+          EpubChapter(
+            title: navTitles[href] ?? '第 ${chapters.length + 1} 章',
+            href: href,
+          ),
+        );
+        continue;
+      }
+
+      final ncxList = ncxByHref[href] ?? const <_TocEntry>[];
+      final navList = navByHref[href] ?? const <_TocEntry>[];
+      final tocCandidates = ncxList.length >= 2
+          ? ncxList
+          : (ncxList.isEmpty && navList.length >= 2 ? navList : ncxList);
+      final hasMultiToc =
+          tocCandidates.length >= 2 &&
+          tocCandidates.any((e) => e.fragment != null);
+      final entrySize = entries[_resolveEntryKey(entries, href) ?? href]?.size ?? 0;
+      final checkInlineSplit =
+          !hasMultiToc &&
+          (textSpineCount <= 3 ||
+              (textSpineCount <= 16 && entrySize >= 6 * 1024) ||
+              entrySize >= 64 * 1024);
+
+      String? cachedSource;
+      String loadSource() => cachedSource ??= readText(href);
+
+      List<_SplitEpubChapter>? splitChapters;
+      if (hasMultiToc || checkInlineSplit) {
         try {
-          chapterTitle = _fallbackTitle(readText(href));
+          final parsed = _extractDocument(href, loadSource(), entries);
+          if (hasMultiToc) {
+            splitChapters = _splitBlocksByToc(href, parsed, tocCandidates);
+          }
+          if (splitChapters == null && checkInlineSplit) {
+            splitChapters = _splitBlocksByHeadings(href, parsed.blocks);
+          }
+        } on Object {
+          splitChapters = null;
+        }
+      }
+
+      if (splitChapters != null && splitChapters.length >= 2) {
+        for (final item in splitChapters) {
+          final chapterIndex = chapters.length;
+          chapters.add(EpubChapter(title: item.title, href: item.href));
+          precomputedBlocks[chapterIndex] = List.unmodifiable(item.blocks);
+          customChapterSizes[chapterIndex] = math.max(1, item.size);
+        }
+        continue;
+      }
+
+      var chapterTitle = navTitles[href];
+      if (chapterTitle == null) {
+        try {
+          chapterTitle = _fallbackTitle(loadSource());
         } on Object {
           chapterTitle = null;
         }
       }
       chapters.add(
-        EpubChapter(title: chapterTitle ?? '第 ${i + 1} 章', href: href),
+        EpubChapter(
+          title: chapterTitle ?? '第 ${chapters.length + 1} 章',
+          href: href,
+        ),
       );
     }
 
@@ -427,6 +517,8 @@ class EpubPackage {
       author: author,
       coverEntry: cover,
       chapters: chapters,
+      chapterBlocks: precomputedBlocks,
+      chapterSizes: customChapterSizes,
     );
   }
 
@@ -435,30 +527,16 @@ class EpubPackage {
     if (index < 0 || index >= _chapters.length) {
       throw RangeError.index(index, _chapters, 'index');
     }
-    final href = _chapters[index].href;
+    if (_chapterBlocks[index] case final splitBlocks?) {
+      return splitBlocks;
+    }
+    final href = _chapters[index].href.split('#').first;
     if (_rasterImageEntryPattern.hasMatch(href)) {
       final resolved = _resolveEntryKey(_entries, href);
       return resolved == null ? const [] : [EpubBlock.image(resolved)];
     }
     final source = _decodeText(_readEntrySync(href));
-    final dir = _dirOf(href);
-
-    String? resolveImage(String? src) {
-      if (src == null) return null;
-      final path = resolveEpubHref(dir, src);
-      return _resolveEntryKey(_entries, path);
-    }
-
-    try {
-      final doc = _parseXml(source);
-      final collector = _BlockCollector();
-      final root = _firstElement(doc, 'body') ?? doc.rootElement;
-      _walk(root, collector, resolveImage);
-      collector.flush();
-      return collector.blocks;
-    } on XmlException {
-      return _blocksFromRegex(source, resolveImage);
-    }
+    return _extractDocument(href, source, _entries).blocks;
   }
 
   Future<Uint8List> readEntry(String entryPath) async {
@@ -481,10 +559,16 @@ class EpubPackage {
   List<int> chapterSizes() {
     _ensureOpen();
     return [
-      for (final chapter in _chapters)
+      for (var i = 0; i < _chapters.length; i++)
         math.max(
           1,
-          _entries[_resolveEntryKey(_entries, chapter.href) ?? chapter.href]
+          _chapterSizes[i] ??
+              _entries[
+                      _resolveEntryKey(
+                            _entries,
+                            _chapters[i].href.split('#').first,
+                          ) ??
+                          _chapters[i].href.split('#').first]
                   ?.size ??
               1,
         ),
@@ -661,9 +745,40 @@ String? _readableSpineHref(
   return null;
 }
 
+typedef _TocEntry = ({String path, String? fragment, String title});
+
+typedef _SplitEpubChapter = ({
+  String title,
+  String href,
+  List<EpubBlock> blocks,
+  int size,
+});
+
+String? _extractHrefFragment(String href) {
+  final hash = href.indexOf('#');
+  if (hash < 0 || hash + 1 >= href.length) return null;
+  final raw = href.substring(hash + 1).trim();
+  if (raw.isEmpty) return null;
+  return _decodeHrefSegment(raw) ?? raw;
+}
+
 class _BlockCollector {
   final blocks = <EpubBlock>[];
+  final anchors = <String, int>{};
   final _buf = StringBuffer();
+  bool _anchorBoundary = false;
+
+  void markAnchor(String? rawId) {
+    final id = rawId?.trim();
+    if (id == null || id.isEmpty) return;
+    if (_buf.isNotEmpty) flush();
+    _anchorBoundary = true;
+    anchors.putIfAbsent(id, () => blocks.length);
+    final decoded = _decodeHrefSegment(id);
+    if (decoded != null && decoded.isNotEmpty) {
+      anchors.putIfAbsent(decoded, () => blocks.length);
+    }
+  }
 
   void addText(String text) => _buf.write(text);
 
@@ -675,7 +790,8 @@ class _BlockCollector {
         .trim();
     _buf.clear();
     if (text.isEmpty) return;
-    if (blocks.isNotEmpty &&
+    if (!_anchorBoundary &&
+        blocks.isNotEmpty &&
         blocks.last.text != null &&
         shouldMergeBrokenParagraph(blocks.last.text!, text)) {
       blocks[blocks.length - 1] = EpubBlock.text(
@@ -684,12 +800,14 @@ class _BlockCollector {
     } else {
       blocks.add(EpubBlock.text(text));
     }
+    _anchorBoundary = false;
   }
 
   void addImage(String? entryPath) {
     if (entryPath == null) return;
     flush();
     blocks.add(EpubBlock.image(entryPath));
+    _anchorBoundary = false;
   }
 }
 
@@ -697,7 +815,19 @@ final _cjkLineBreak = RegExp(
   r'(?<=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])[ \t]*[\r\n]+[ \t]*(?=[\u3000-\u303f\u3400-\u9fff\uff00-\uffef])',
 );
 final _whitespace = RegExp(r'\s+');
-const _blockTags = {'p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li'};
+const _blockTags = {
+  'p',
+  'div',
+  'section',
+  'article',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'li',
+};
 const _skipTags = {'head', 'script', 'style'};
 const _xmlEntities = {'amp', 'lt', 'gt', 'quot', 'apos'};
 
@@ -843,9 +973,19 @@ String? _hrefAttribute(XmlElement e) {
   return prefixed;
 }
 
-/// 返回 spine 路径 -> navLabel 文本。按 playOrder 排序，同一路径取第一个。
+String? _idAttribute(XmlElement e) {
+  String? prefixed;
+  for (final a in e.attributes) {
+    if (a.name.local.toLowerCase() != 'id') continue;
+    if (a.name.prefix == null || a.name.prefix!.isEmpty) return a.value;
+    prefixed ??= a.value;
+  }
+  return prefixed;
+}
+
+/// 返回按 playOrder 排序的 NCX 目录项（含同路径多锚点）。
 /// src 先相对 NCX 所在目录解析，匹配不到 spine 时再相对 OPF 目录解析。
-Map<String, String> _parseNcx(
+List<_TocEntry> _parseNcxEntries(
   String source,
   String ncxDir,
   String opfDir,
@@ -865,7 +1005,7 @@ Map<String, String> _parseNcx(
     return c != 0 ? c : order[a]!.compareTo(order[b]!);
   });
 
-  final result = <String, String>{};
+  final result = <_TocEntry>[];
   for (final point in points) {
     XmlElement? label;
     XmlElement? content;
@@ -884,9 +1024,174 @@ Map<String, String> _parseNcx(
       path = _resolveEntryKey(entries, resolveEpubHref(opfDir, src));
     }
     if (path == null || !spineHrefs.contains(path)) continue;
-    result.putIfAbsent(path, () => text);
+    result.add((
+      path: path,
+      fragment: _extractHrefFragment(src),
+      title: text,
+    ));
   }
   return result;
+}
+
+({List<EpubBlock> blocks, Map<String, int> anchors}) _extractDocument(
+  String href,
+  String source,
+  Map<String, ArchiveFile> entries,
+) {
+  final dir = _dirOf(href);
+  String? resolveImage(String? src) {
+    if (src == null) return null;
+    final path = resolveEpubHref(dir, src);
+    return _resolveEntryKey(entries, path);
+  }
+
+  try {
+    final doc = _parseXml(source);
+    final collector = _BlockCollector();
+    final root = _firstElement(doc, 'body') ?? doc.rootElement;
+    _recordElementAnchors(root, collector);
+    _walk(root, collector, resolveImage);
+    collector.flush();
+    return (blocks: collector.blocks, anchors: collector.anchors);
+  } on XmlException {
+    return _blocksFromRegex(source, resolveImage);
+  }
+}
+
+int _estimateBlocksSize(List<EpubBlock> blocks) {
+  var total = 0;
+  for (final b in blocks) {
+    total += b.kind == EpubBlockKind.text ? (b.text?.length ?? 0) * 3 : 256;
+  }
+  return math.max(1, total);
+}
+
+List<_SplitEpubChapter>? _splitBlocksByToc(
+  String spineHref,
+  ({List<EpubBlock> blocks, Map<String, int> anchors}) doc,
+  List<_TocEntry> tocEntries,
+) {
+  if (doc.blocks.isEmpty || tocEntries.length < 2) return null;
+  final resolved = <({int startBlock, String title, String? fragment})>[];
+  for (final entry in tocEntries) {
+    int? startBlock;
+    if (entry.fragment == null || entry.fragment!.isEmpty) {
+      startBlock = 0;
+    } else {
+      startBlock = doc.anchors[entry.fragment!];
+    }
+    if (startBlock == null || startBlock < 0 || startBlock >= doc.blocks.length) {
+      continue;
+    }
+    if (resolved.isEmpty || startBlock > resolved.last.startBlock) {
+      resolved.add((
+        startBlock: startBlock,
+        title: entry.title,
+        fragment: entry.fragment,
+      ));
+    } else if (startBlock == resolved.last.startBlock &&
+        resolved.last.fragment == null &&
+        entry.fragment != null) {
+      resolved[resolved.length - 1] = (
+        startBlock: startBlock,
+        title: entry.title,
+        fragment: entry.fragment,
+      );
+    }
+  }
+  if (resolved.length < 2) return null;
+
+  final result = <_SplitEpubChapter>[];
+  final usedHrefs = <String>{};
+  var carryStart = 0;
+  for (var k = 0; k < resolved.length; k++) {
+    final current = resolved[k];
+    final sliceStart = k == 0 ? 0 : math.min(carryStart, current.startBlock);
+    final sliceEnd = k + 1 < resolved.length
+        ? resolved[k + 1].startBlock
+        : doc.blocks.length;
+    carryStart = sliceEnd;
+    if (sliceEnd <= sliceStart) continue;
+    // 若某锚点与下一锚点之间只有 1 个与卷名完全相同的标题块（无正文），跳过空卷头。
+    if (k + 1 < resolved.length &&
+        sliceEnd - sliceStart == 1 &&
+        doc.blocks[sliceStart].kind == EpubBlockKind.text &&
+        doc.blocks[sliceStart].text!.trim() == current.title.trim()) {
+      continue;
+    }
+    var slice = doc.blocks.sublist(sliceStart, sliceEnd);
+    if (slice.length >= 2 &&
+        slice.first.kind == EpubBlockKind.text &&
+        slice.first.text!.trim() == current.title.trim()) {
+      slice = slice.sublist(1);
+    }
+    if (slice.isEmpty) continue;
+    var candidateHref = current.fragment == null || current.fragment!.isEmpty
+        ? '$spineHref#toc=${k + 1}'
+        : '$spineHref#${current.fragment}';
+    if (!usedHrefs.add(candidateHref)) {
+      candidateHref = '$candidateHref-${k + 1}';
+      usedHrefs.add(candidateHref);
+    }
+    result.add((
+      title: current.title,
+      href: candidateHref,
+      blocks: slice,
+      size: _estimateBlocksSize(slice),
+    ));
+  }
+  return result.length >= 2 ? result : null;
+}
+
+List<_SplitEpubChapter>? _splitBlocksByHeadings(
+  String spineHref,
+  List<EpubBlock> blocks,
+) {
+  if (blocks.length < 4) return null;
+  final buf = StringBuffer();
+  final blockStarts = <int>[];
+  final blockEnds = <int>[];
+  for (final block in blocks) {
+    final start = buf.length;
+    final line = block.kind == EpubBlockKind.text
+        ? (block.text ?? '').replaceAll('\n', ' ')
+        : '图片内容';
+    buf.write(line);
+    final end = buf.length;
+    buf.write('\n');
+    blockStarts.add(start);
+    blockEnds.add(end);
+  }
+  final split = splitLocalChapters(buf.toString());
+  final realHeadings = split
+      .where((c) => c.title != '前言' && c.title != '正文')
+      .length;
+  if (split.length < 2 || realHeadings < 2) return null;
+
+  final result = <_SplitEpubChapter>[];
+  var searchFrom = 0;
+  for (final c in split) {
+    final endOffset = c.offset + c.length;
+    var startBi = searchFrom;
+    while (startBi < blocks.length && blockEnds[startBi] <= c.offset) {
+      startBi++;
+    }
+    if (startBi >= blocks.length) continue;
+    var endBi = startBi + 1;
+    while (endBi < blocks.length && blockStarts[endBi] < endOffset) {
+      endBi++;
+    }
+    searchFrom = endBi;
+    final slice = blocks.sublist(startBi, endBi);
+    if (slice.isEmpty) continue;
+    result.add((
+      title: c.title,
+      href: '$spineHref#ch=${result.length + 1}',
+      blocks: slice,
+      size: _estimateBlocksSize(slice),
+    ));
+  }
+  return result.length >= 2 ? result : null;
 }
 
 /// 标题回退：<title> 文本，再回退首个 <h1>，保留 CDATA 字面文本。
@@ -927,6 +1232,13 @@ String? _fallbackTitle(String source) {
   return heading;
 }
 
+void _recordElementAnchors(XmlElement element, _BlockCollector c) {
+  c.markAnchor(_idAttribute(element));
+  if (element.name.local.toLowerCase() == 'a') {
+    c.markAnchor(element.getAttribute('name'));
+  }
+}
+
 void _walk(
   XmlNode node,
   _BlockCollector c,
@@ -945,19 +1257,24 @@ void _walk(
     final name = child.name.local.toLowerCase();
     if (_skipTags.contains(name)) continue;
     if (name == 'img') {
+      _recordElementAnchors(child, c);
       c.addImage(resolveImage(child.getAttribute('src')));
     } else if (name == 'br') {
       c.flush();
+      _recordElementAnchors(child, c);
     } else if (name == 'svg') {
       c.flush();
+      _recordElementAnchors(child, c);
       for (final image in _elements(child, 'image')) {
         c.addImage(resolveImage(_hrefAttribute(image)));
       }
     } else if (_blockTags.contains(name)) {
       c.flush();
+      _recordElementAnchors(child, c);
       _walk(child, c, resolveImage);
       c.flush();
     } else {
+      _recordElementAnchors(child, c);
       _walk(child, c, resolveImage);
     }
   }
@@ -1006,12 +1323,13 @@ bool _isClosingTag(String tag) => RegExp(r'^<\s*/').hasMatch(tag);
 
 bool _isSelfClosingTag(String tag) => RegExp(r'/\s*>$').hasMatch(tag);
 
-/// XML 解析失败时的降级：按标签出现顺序抽取文本与图片。
-List<EpubBlock> _blocksFromRegex(
+/// XML 解析失败时的降级：按标签出现顺序抽取文本、图片与锚点。
+({List<EpubBlock> blocks, Map<String, int> anchors}) _blocksFromRegex(
   String source,
   String? Function(String?) resolveImage,
 ) {
   var text = _withoutComments(source);
+  final collector = _BlockCollector();
   int? bodyStart;
   int? bodyEnd;
   for (final token in _markupTokens.allMatches(text)) {
@@ -1021,11 +1339,13 @@ List<EpubBlock> _blocksFromRegex(
       bodyEnd = token.start;
       break;
     }
-    bodyStart ??= token.end;
+    if (bodyStart == null) {
+      bodyStart = token.end;
+      collector.markAnchor(_tagAttribute(tag, 'id', anyPrefix: true));
+    }
   }
   text = text.substring(bodyStart ?? 0, bodyEnd ?? text.length);
 
-  final collector = _BlockCollector();
   final skipped = <String>[];
   var previousEnd = 0;
   var svgDepth = 0;
@@ -1055,6 +1375,15 @@ List<EpubBlock> _blocksFromRegex(
       continue;
     }
     if (skipped.isNotEmpty) continue;
+    if (!closing && (name == 'br' || _blockTags.contains(name))) {
+      collector.flush();
+    }
+    if (!closing) {
+      collector.markAnchor(_tagAttribute(tag, 'id', anyPrefix: true));
+      if (name == 'a') {
+        collector.markAnchor(_tagAttribute(tag, 'name'));
+      }
+    }
     if (name == 'svg') {
       collector.flush();
       if (closing) {
@@ -1078,5 +1407,5 @@ List<EpubBlock> _blocksFromRegex(
     collector.addText(_decodeEntities(text.substring(previousEnd)));
   }
   collector.flush();
-  return collector.blocks;
+  return (blocks: collector.blocks, anchors: collector.anchors);
 }

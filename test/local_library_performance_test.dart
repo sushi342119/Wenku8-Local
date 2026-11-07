@@ -356,7 +356,7 @@ void main() {
       final book = store.books.single;
       expect(book.chapters, hasLength(2));
       expect(book.wordCount, 14);
-      expect(book.chapterSplitVersion, 3);
+      expect(book.chapterSplitVersion, 4);
       final text = await store.chapterContent(
         book.id,
         (await store.chapters(book.id)).first,
@@ -409,7 +409,7 @@ void main() {
       expect(store.books.first.id, localNovelIdBase + 50);
       expect(
         store.books.every(
-          (b) => b.wordCount != null && b.chapterSplitVersion == 3,
+          (b) => b.wordCount != null && b.chapterSplitVersion == 4,
         ),
         isTrue,
       );
@@ -498,7 +498,7 @@ void main() {
       expect(prefs.getString(_queueKey), isNull);
       final retry = await store.scan();
       expect(retry.chapterRemaps, hasLength(3));
-      expect(store.books.every((b) => b.chapterSplitVersion == 3), isTrue);
+      expect(store.books.every((b) => b.chapterSplitVersion == 4), isTrue);
     },
   );
 
@@ -531,7 +531,7 @@ void main() {
       final store = await load();
       final result = await store.scan();
       expect(result.backfilled, 1);
-      expect(store.bookFor(localNovelIdBase)!.chapterSplitVersion, 3);
+      expect(store.bookFor(localNovelIdBase)!.chapterSplitVersion, 4);
       expect(store.bookFor(localNovelIdBase + 1)!.chapterSplitVersion, 0);
       // If the already successful book is read again, it now fails too.
       await File(
@@ -542,7 +542,7 @@ void main() {
       await store.scan();
       expect(prepares, 1);
       expect(hashes, 1);
-      expect(store.bookFor(localNovelIdBase)!.chapterSplitVersion, 3);
+      expect(store.bookFor(localNovelIdBase)!.chapterSplitVersion, 4);
     },
   );
 
@@ -857,7 +857,7 @@ void main() {
       addTearDown(state.dispose);
       state.bindLocalChapters(store);
       final chapters = await store.chapters(localNovelIdBase);
-      expect(store.books.single.chapterSplitVersion, 3);
+      expect(store.books.single.chapterSplitVersion, 4);
       expect(
         await store.chapterContent(localNovelIdBase, chapters[1]),
         '甲😀乙。',

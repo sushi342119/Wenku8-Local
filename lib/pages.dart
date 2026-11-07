@@ -5795,17 +5795,10 @@ class _ReaderPageState extends State<ReaderPage>
 
   /// 拖动结束：跳转到当前章节目标位置。
   Future<void> _jumpToProgress(double progress) async {
-    _suspendListeningFollow();
     final target = _progressToTarget(progress);
     if (!mounted) return;
-    if (_paginated) {
-      _paged.seek(target.ratio);
-    } else if (_scroll.hasClients && _scroll.position.hasContentDimensions) {
-      final max = _scroll.position.maxScrollExtent;
-      if (max > 0) {
-        _scroll.jumpTo((target.ratio * max).clamp(0.0, max));
-      }
-    }
+    await _seekProgress(target.ratio);
+    if (!mounted) return;
     _updateProgressFromScroll();
   }
 

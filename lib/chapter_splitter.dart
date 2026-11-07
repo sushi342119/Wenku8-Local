@@ -51,17 +51,19 @@ bool validChapterRanges(List<LocalChapterIndex> chapters, int textLength) {
   return true;
 }
 
-const _number = r'[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟]+';
+const _number =
+    r'[0-9０-９一二三四五六七八九十百千萬万零〇两兩壹贰貳叁參肆伍陆陸柒捌玖拾佰仟廿卅卌]+';
+const _numberSpan = '$_number(?:[ \\t　]*[-~～—–、][ \\t　]*$_number)?';
 final _numbered = RegExp(
-  '(?:第[ \\t　]*$_number[ \\t　]*|$_number)[章节節回话話幕折卷部集篇]',
+  '(?:第[ \\t　]*$_numberSpan[ \\t　]*[章节節回囘话話幕折卷捲部集篇季期更]|$_number[章节節回囘话話幕折卷捲部集篇])',
 );
-final _volumeNumber = RegExp('卷[ \\t　]*$_number');
+final _volumeNumber = RegExp('卷[ \\t　]*$_numberSpan');
 final _english = RegExp(
   r'chapter\s*(?:[0-9０-９]+|[ivxlcdm]+)(?![a-z0-9０-９])',
   caseSensitive: false,
 );
 final _bare = RegExp(
-  '^(?:[（(]($_number)[）)]|($_number)[.．、:：]|($_number)[ \\t　]+|($_number)\$)',
+  '^(?:[（(]($_numberSpan)[）)]|[【\\[［〖〔]($_numberSpan)[】\\]］〗〕]|($_number)[.．、:：]|($_number)[ \\t　]+|($_number)\$)',
 );
 final _special = RegExp(
   r'^(?:序章|序曲|序言|序幕|楔子|终章|終章|终曲|番外(?:篇)?(?:[ \t]*[0-9０-９一二三四五六七八九十]+)?|后记|後記|后日谈|前言|引子|尾声|外篇|外传|外傳|[上中下]篇)',
@@ -71,13 +73,14 @@ final _decoration = RegExp(
   unicode: true,
 );
 final _endMarker = RegExp(
-  r'^[\s【\[（(]*第?[^\n]{0,16}[卷部集篇][\s】\]）)]*(?:完|结束|終|终|END)',
+  r'^[\s【\[（(]*第?[^\n]{0,16}[卷捲部集篇][\s】\]）)]*(?:完|结束|終|终|END)',
   caseSensitive: false,
 );
 final _proseSuffix = RegExp(
-  r'^(?:回[来去到头答想忆合事家顾]|节[课约省日]|部[分队门署]|集[合中体]|篇[文章幅])',
+  r'^(?:回[来去到头答想忆合事家顾]|节[课约省日]|部[分队门署]|集[合中体]|篇[文章幅]|季[节能度]|期[间待限望刊末]|更[加新换改多好快是])',
 );
 final _punctuation = RegExp(r'[。！？!?；;]');
+final _weakPunctuation = RegExp(r'[。；;，,]');
 
 class _Heading {
   _Heading(
@@ -195,61 +198,138 @@ class ChapterTextIndex {
   _Heading? _parse(String raw, int next, int nextBytes) {
     if (raw.isEmpty) return null;
     var line = raw.replaceFirst(_decoration, '');
-    final displayLine = line;
     var skipped = raw.length - line.length;
     if (_endMarker.hasMatch(line)) return null;
     // Enclosing book names are meaningful display prefixes. Only syntactic
     // opening brackets around a heading are removed for matching.
-    final opening = RegExp(
-      r'^[【\[（(](?=第|chapter|序|番外|外篇|外传|[上中下]篇)',
-      caseSensitive: false,
-    ).firstMatch(line);
+    var opening = RegExp(r'^[【\[［〖〔《「『（(]').firstMatch(line);
     if (opening != null) {
-      skipped++;
-      line = line.substring(1);
+      final afterOpening = line.substring(1);
+      final startsWithHeading =
+          _numbered.matchAsPrefix(afterOpening) != null ||
+          _volumeNumber.matchAsPrefix(afterOpening) != null ||
+          _english.matchAsPrefix(afterOpening) != null ||
+          _special.matchAsPrefix(afterOpening) != null;
+      if (startsWithHeading) {
+        skipped++;
+        line = afterOpening;
+      } else {
+        opening = null;
+      }
     }
     RegExpMatch? m =
         _numbered.firstMatch(line) ??
         _volumeNumber.firstMatch(line) ??
         _english.firstMatch(line);
+    if (m != null &&
+        (RegExp(r'[卷捲部集篇]$').hasMatch(m.group(0)!) ||
+            m.group(0)!.startsWith('卷'))) {
+      final rest = line.substring(m.end);
+      final sub = _numbered.firstMatch(rest) ?? _english.firstMatch(rest);
+      if (sub != null && sub.start <= 36) {
+        final subToken = sub.group(0)!;
+        final subSuffix = rest.substring(sub.end);
+        if (!RegExp(r'[卷捲部集篇]$').hasMatch(subToken) &&
+            !_proseSuffix.hasMatch(
+              '${subToken[subToken.length - 1]}$subSuffix',
+            )) {
+          m =
+              _numbered.allMatches(line, m.end).firstOrNull ??
+              _english.allMatches(line, m.end).firstOrNull ??
+              m;
+        }
+      }
+    }
     var weak = false;
     String family = '';
+    var strippedPrefix = '';
     if (m != null && m.start > 0) {
       final prefix = line.substring(0, m.start);
       // Prefixes are titles/正文, never a sentence or a reference in prose.
       if (prefix.length > 48 ||
-          RegExp(r'[。！？!?，,；;：:“”「」]').hasMatch(prefix) ||
+          RegExp(r'[。！？!?，,；;“”]').hasMatch(prefix) ||
           !(prefix.endsWith(' ') ||
+              prefix.endsWith('\t') ||
               prefix.endsWith('　') ||
               prefix.endsWith('】') ||
+              prefix.endsWith(']') ||
+              prefix.endsWith('］') ||
               prefix.endsWith('》') ||
+              prefix.endsWith('」') ||
+              prefix.endsWith('』') ||
+              prefix.endsWith('〗') ||
+              prefix.endsWith('〕') ||
               prefix.endsWith('）') ||
               prefix.endsWith(')') ||
+              prefix.endsWith('-') ||
+              prefix.endsWith('—') ||
+              prefix.endsWith('–') ||
+              prefix.endsWith('·') ||
+              prefix.endsWith('・') ||
+              prefix.endsWith('_') ||
+              prefix.endsWith(':') ||
+              prefix.endsWith('：') ||
+              prefix.endsWith('/') ||
+              RegExp(r'[卷捲部集篇]$').hasMatch(prefix) ||
               prefix == '正文')) {
         return null;
       }
     }
     if (m == null) {
-      // 【书名】（13） and repeated book-title prefixes before bare numbers.
+      // 【01】、[01]、【书名】（13）、《书名》（01）、书名（1）等。
       var base = 0;
-      final bracket = RegExp(r'^【[^】\n]{1,48}】\s*').firstMatch(line);
-      if (bracket != null) base = bracket.end;
-      final candidate = line.substring(base);
+      var candidate = line;
       m = _bare.firstMatch(candidate);
+      if (m == null) {
+        final bracket = RegExp(
+          r'^(?:【[^】\n]{1,48}】|《[^》\n]{1,48}》|\[[^\]\n]{1,48}\]|［[^］\n]{1,48}］|「[^」\n]{1,48}」|『[^』\n]{1,48}』|〖[^〗\n]{1,48}〗|〔[^〕\n]{1,48}〕)\s*',
+        ).firstMatch(line);
+        if (bracket != null) {
+          base = bracket.end;
+          candidate = line.substring(base);
+          m = _bare.firstMatch(candidate);
+        }
+      }
+      if (m == null) {
+        final titled = RegExp(
+          '^([^\\n。！？!?，,；;：:“”‘’""\'\'「」『』【】\\[\\]［］〖〗〔〕《》（）()]{1,40}?)[ \\t　]*(?=[（(](?:$_numberSpan)[）)]|[【\\[［〖〔](?:$_numberSpan)[】\\]］〗〕])',
+        ).firstMatch(line);
+        if (titled != null) {
+          final afterPrefix = line.substring(titled.end);
+          final bareMatch = _bare.firstMatch(afterPrefix);
+          if (bareMatch != null) {
+            final trailing = afterPrefix.substring(bareMatch.end);
+            if (trailing.isEmpty ||
+                (RegExp(r'^[\s:：、.．\-—]').hasMatch(trailing) &&
+                    trailing.length <= 24 &&
+                    !_punctuation.hasMatch(trailing) &&
+                    !_weakPunctuation.hasMatch(trailing))) {
+              base = titled.end;
+              candidate = afterPrefix;
+              m = bareMatch;
+            }
+          }
+        }
+      }
       if (m != null) {
-        family = candidate.startsWith('（') || candidate.startsWith('(')
+        family = RegExp(r'^[（(【\[［〖〔]').hasMatch(candidate)
             ? 'parenthesized'
             : 'bare';
         weak = true;
-        skipped += base;
-        line = candidate;
+        if (base > 0) {
+          strippedPrefix = line.substring(0, base);
+          skipped += base;
+          line = candidate;
+        }
       } else {
         m = _special.firstMatch(line);
         if (m == null) return null;
         family = 'special';
         final tail = line.substring(m.end);
         if (tail.isNotEmpty &&
-            !RegExp(r'^[\s\d０-９:：、.．【\[（(】\]）)\-—]').hasMatch(tail)) {
+            !RegExp(
+              r'^[\s\d０-９:：、.．【\[［〖〔《「『（(】\]］〗〕》」』）)\-—]',
+            ).hasMatch(tail)) {
           return null;
         }
         if (_punctuation.hasMatch(tail) && tail.length > 12) return null;
@@ -257,13 +337,13 @@ class ChapterTextIndex {
     }
     final token = m.group(0)!;
     if (RegExp(
-      r'^[【\[].*[卷部集篇].*(?:完|结束|END)[）)】\]]*$',
+      r'^[【\[].*[卷捲部集篇].*(?:完|结束|END)[）)】\]]*$',
       caseSensitive: false,
     ).hasMatch(raw)) {
       return null;
     }
     final isVolume =
-        RegExp(r'[卷部集篇]$').hasMatch(token) && family != 'special' ||
+        RegExp(r'[卷捲部集篇]$').hasMatch(token) && family != 'special' ||
         RegExp(r'^[上中下]篇').hasMatch(token);
     final suffix = line.substring(m.end);
     if (family.isEmpty &&
@@ -282,7 +362,10 @@ class ChapterTextIndex {
           : token[token.length - 1];
     }
     // In-body numbered lists need repeated evidence and never accept sentences.
-    if (weak && (_punctuation.hasMatch(suffix) || suffix.length > 120)) {
+    if (weak &&
+        (_weakPunctuation.hasMatch(suffix) ||
+            suffix.length > 120 ||
+            (_punctuation.hasMatch(suffix) && suffix.length > 24))) {
       return null;
     }
     final forum = RegExp(
@@ -307,9 +390,9 @@ class ChapterTextIndex {
     var title = line.substring(0, titleEnd).trim();
     if (opening != null) title = '${opening.group(0)}$title';
     if (title.isEmpty) return null;
-    // Restore a book-name prefix stripped solely to parse a bracketed number.
-    if (weak && skipped > 0 && raw.contains('】')) {
-      title = '${displayLine.substring(0, displayLine.indexOf('】') + 1)}$title';
+    // Restore a book-name prefix stripped solely to parse a bracketed/parenthesized number.
+    if (weak && strippedPrefix.isNotEmpty) {
+      title = '$strippedPrefix$title';
     }
     final wordsAfter = glued
         ? _words +
